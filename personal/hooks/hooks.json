@@ -1,0 +1,16 @@
+{
+  "description": "Auto-commit work in progress at Stop, in cloud sessions only",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/auto-commit.sh\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
