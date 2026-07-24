@@ -30,6 +30,20 @@ case "$branch" in
   main|master|HEAD|'') exit 0 ;;
 esac
 
+# --- Persist memories back into the repo -----------------------------------
+# Anything the session learned lives in ~/.claude/projects/<key>/memory/, which
+# dies with the VM. Copy it into the repo BEFORE committing, so the commit below
+# carries it to GitHub and a later `git pull` puts it on the developer's machine.
+#
+# Without this, memory is one-way: a cloud session can read what the project
+# knows but can never add to it, and every session relearns the same things.
+key="$(printf '%s' "$PWD" | tr '/' '-')"
+memsrc="$HOME/.claude/projects/$key/memory"
+if [ -d "$memsrc" ] && [ -n "$(find "$memsrc" -maxdepth 1 -name '*.md' 2>/dev/null)" ]; then
+  mkdir -p "$PWD/.claude/memory" 2>/dev/null \
+    && cp -a "$memsrc/." "$PWD/.claude/memory/" 2>/dev/null || true
+fi
+
 # Nothing staged, modified, or untracked -> nothing to do.
 [ -n "$(git status --porcelain 2>/dev/null)" ] || exit 0
 
