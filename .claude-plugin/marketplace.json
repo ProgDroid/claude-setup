@@ -9,8 +9,8 @@
     {
       "name": "personal",
       "source": "./personal",
-      "description": "Personal agents and cross-project working style",
-      "version": "0.7.1",
+      "description": "Personal agents, working style, and hard-won Claude Code behaviour",
+      "version": "0.8.0",
       "author": {
         "name": "ProgDroid"
       }

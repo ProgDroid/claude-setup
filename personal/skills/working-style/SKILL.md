@@ -41,6 +41,30 @@ neighbouring identifiers, or open the file. When only one method has been tried,
 The same applies to partitioning: verify a set is covered by computing the complement, never by summing
 the parts. Summing proves internal consistency, not coverage.
 
+## Verify the effect, not the action
+
+"The command succeeded" and "the thing you wanted happened" are different claims, and a component
+reporting success has only ever established the first. Check the observable that actually matters:
+not "files were copied" but "the session can see them"; not "the commit was created" but
+`git ls-files` shows them tracked; not "the plugin is declared" but `plugin list` shows it installed.
+
+Tests written from an implementation inherit its assumptions. If a test asserts the same thing the
+code already believes, it confirms nothing. Assert on the channel the consumer actually reads.
+
+This matters most for silent failures — a wrong path, an ignored directory, a hook that runs too
+late. None of them produce an error; they produce a confident success message and no effect.
+
+## Check the destination before writing across repositories
+
+Before any operation that touches multiple repositories, enumerate the targets and check where each
+one actually points — `git remote get-url origin` on every one, before touching any. Content
+scanning and destination scanning are separate questions: a file can be entirely safe and still be
+about to land somewhere it should not.
+
+The same applies to publishing. Enumerate the *parties* whose information might be present — you,
+your employer, clients, third parties in examples — and scan per party. Grepping for credentials and
+your own name feels thorough and covers exactly one of them.
+
 ## Do not fabricate from unread sources
 
 If a source has not actually been read, watched, or run, do not write as though it has. Say what is
