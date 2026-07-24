@@ -29,6 +29,20 @@ got="$(memory_key "/g/My Docs/proj")"
   && ok "msys with a space in the path" \
   || bad "msys-with-space gave '$got'"
 
+# Underscores are normalised to '-'. Verified against a real repo:
+# /g/flutterDev/dynamic_day_planner keeps its memories under
+# G--flutterDev-dynamic-day-planner. Getting this wrong writes to a directory
+# nothing reads, silently -- hence a dedicated test on both platforms.
+got="$(memory_key /g/flutterDev/dynamic_day_planner)"
+[ "$got" = "G--flutterDev-dynamic-day-planner" ] \
+  && ok "msys: underscores normalise to hyphens" \
+  || bad "msys underscore gave '$got'"
+
+got="$(memory_key /home/user/my_repo)"
+[ "$got" = "-home-user-my-repo" ] \
+  && ok "linux: underscores normalise to hyphens" \
+  || bad "linux underscore gave '$got'"
+
 echo "== sync-memory.sh =="
 
 setup() {

@@ -12,9 +12,16 @@
 #                      (verified 2026-07-24 against a live cloud session)
 #
 #   Windows via MSYS   /g/rustDev/aba         -> G--rustDev-aba
-#                      (drive letter uppercased, then '/' and ' ' -> '-')
+#                      (drive letter uppercased, then separators -> '-')
 #
-# Getting this wrong is silent: the hook writes to a directory nothing reads.
+# UNDERSCORES ARE NORMALISED TO '-'. Verified 2026-07-25: the repo at
+# /g/flutterDev/dynamic_day_planner has its memories under
+# G--flutterDev-dynamic-day-planner, and no project directory anywhere on this
+# machine contains an underscore. Missing this cost nothing only because it was
+# caught before shipping -- the hook would have written to a directory nothing
+# reads, with no error and no output.
+#
+# Getting this wrong is silent, which is why it has direct test coverage.
 memory_key() {
   _p="${1:-}"
   [ -n "$_p" ] || return 1
@@ -24,11 +31,11 @@ memory_key() {
   if [ -n "$_drive" ]; then
     _rel="$(printf '%s' "$_p" | sed -n 's:^/[a-zA-Z]/::p')"
     [ -n "$_rel" ] || return 1
-    printf '%s--%s' "$_drive" "$(printf '%s' "$_rel" | tr '/ ' '--')"
+    printf '%s--%s' "$_drive" "$(printf '%s' "$_rel" | tr '/ _' '---')"
     return 0
   fi
 
-  printf '%s' "$_p" | tr '/' '-'
+  printf '%s' "$_p" | tr '/_' '--'
 }
 
 # sync_memory_to_repo <repo-root>
