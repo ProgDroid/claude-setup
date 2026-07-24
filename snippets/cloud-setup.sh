@@ -39,16 +39,33 @@ log "HOME=$HOME"
 
 # ---------------------------------------------------------------------------
 # 1. Register marketplaces. Must precede installs.
-#    Both are public: a cloud session's GitHub proxy is scoped to the session's
-#    own repo, so a private marketplace here would likely fail to clone.
+#
+#    All are public: a cloud session's GitHub proxy is scoped to the session's
+#    own repo, so a private marketplace would likely fail to clone.
+#
+#    claude-plugins-official is included even though it is registered by
+#    default. Verified 2026-07-24: a run that added only the two custom
+#    marketplaces installed both of their plugins and NONE of the eight from
+#    claude-plugins-official. At setup-script time -- before Claude Code
+#    launches -- the built-in catalog appears not to be fetched yet, so
+#    installs from it resolve to nothing. Adding and updating it explicitly
+#    costs one clone and removes the ordering dependency.
 # ---------------------------------------------------------------------------
-for m in "obra/superpowers" "ProgDroid/claude-setup"; do
+for m in "anthropics/claude-plugins-official" "obra/superpowers" "ProgDroid/claude-setup"; do
   if claude plugin marketplace add "$m" >/tmp/mp.log 2>&1; then
-    log "marketplace OK: $m"
+    log "marketplace added: $m"
   else
-    log "marketplace FAILED: $m -- $(tail -2 /tmp/mp.log | tr '\n' ' ')"
+    # Already-registered is the expected outcome for the official marketplace.
+    log "marketplace add returned non-zero for $m (often 'already exists') -- $(tail -1 /tmp/mp.log)"
   fi
 done
+
+# Refresh every catalog so plugin lookups resolve against current listings.
+if claude plugin marketplace update >/tmp/mu.log 2>&1; then
+  log "marketplace catalogs updated"
+else
+  log "marketplace update failed -- $(tail -2 /tmp/mu.log | tr '\n' ' ')"
+fi
 
 log "registered marketplaces:"
 claude plugin marketplace list 2>&1 | sed 's/^/[setup]   /' || true
