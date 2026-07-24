@@ -1,0 +1,15 @@
+# This repo is consumed inside Linux cloud-session VMs.
+#
+# A bash script stored with CRLF fails there with "bad interpreter: No such
+# file or directory" — the kernel reads the shebang as `#!/usr/bin/env bash\r`
+# and looks for an interpreter named `bash\r`. The error names bash, not line
+# endings, so it is slow to diagnose.
+#
+# core.autocrlf is on for this machine (correct for Windows generally), so
+# these rules pin what actually lands in the object store.
+
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
