@@ -87,5 +87,33 @@ else
   ok "repo memory overrides a plugin memory of the same name"
 fi
 
+# 7. The index is PRINTED, not merely copied. This is the regression that
+#    matters most: a cloud session reported "Loaded 13 memories" and had none
+#    of them in context, because copying files is invisible to a session whose
+#    memory index was already read.
+setup
+out="$(HOME="$fakehome" CLAUDE_CLOUD_SESSION=1 bash "$HOOK" 2>/dev/null)"
+if printf '%s' "$out" | grep -q 'a hook'; then
+  ok "prints the repo memory index to stdout (session context)"
+else
+  bad "prints the repo memory index to stdout (session context)"
+fi
+
+# 8. Bodies are NOT printed - index only, so startup cost stays bounded
+setup
+printf -- '---\nname: big\n---\nUNIQUEBODYMARKER\n' > "$repo/.claude/memory/big.md"
+out="$(HOME="$fakehome" CLAUDE_CLOUD_SESSION=1 bash "$HOOK" 2>/dev/null)"
+if printf '%s' "$out" | grep -q 'UNIQUEBODYMARKER'; then
+  bad "must print the index only, never memory bodies"
+else
+  ok "prints the index only, never memory bodies"
+fi
+
+# 9. Silent when the gate is unset (no stray output in local sessions)
+setup
+out="$(HOME="$fakehome" bash "$HOOK" 2>/dev/null)"
+[ -z "$out" ] && ok "prints nothing when the gate is unset" \
+              || bad "printed output with the gate unset: $out"
+
 echo "-- $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

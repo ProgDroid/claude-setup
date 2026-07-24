@@ -54,7 +54,34 @@ if [ -d "$src" ]; then
   cp -a "$src/." "$dst/" 2>/dev/null || true
 fi
 
-count="$(find "$dst" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
-[ "${count:-0}" -gt 0 ] 2>/dev/null && echo "Loaded $count memories (plugin + repository)."
+# --- Emit the index into the session ---------------------------------------
+# Copying the files is NOT sufficient, and this was verified the hard way on
+# 2026-07-24: a cloud session reported "Loaded 13 memories" and then had none of
+# their content, because the memory subsystem reads its index at session start
+# and a SessionStart hook runs too late to be picked up. Locally that is
+# survivable -- the next session sees them. A cloud VM has no next session.
+#
+# A SessionStart hook's stdout IS injected into the session as context, so the
+# hook must print what the session needs rather than rely on a re-read.
+#
+# Print the index only, never the bodies. That mirrors how the memory subsystem
+# works normally -- index in context, individual files read on demand -- and
+# keeps startup cost bounded regardless of how large the corpus grows.
+
+emitted=0
+for idx in "${CLAUDE_PLUGIN_ROOT:-/nonexistent}/memory/MEMORY.md" "$PWD/.claude/memory/MEMORY.md"; do
+  [ -f "$idx" ] || continue
+  if [ "$emitted" -eq 0 ]; then
+    echo "## Project memory"
+    echo
+    echo "Committed memories for this repository, loaded because a cloud session"
+    echo "starts with no user-scope memory. Read the full text of any entry below"
+    echo "from \`.claude/memory/<name>.md\` when it is relevant to the task."
+    echo
+    emitted=1
+  fi
+  cat "$idx"
+  echo
+done
 
 exit 0

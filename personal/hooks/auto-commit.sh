@@ -37,11 +37,13 @@ esac
 #
 # Without this, memory is one-way: a cloud session can read what the project
 # knows but can never add to it, and every session relearns the same things.
-key="$(printf '%s' "$PWD" | tr '/' '-')"
-memsrc="$HOME/.claude/projects/$key/memory"
-if [ -d "$memsrc" ] && [ -n "$(find "$memsrc" -maxdepth 1 -name '*.md' 2>/dev/null)" ]; then
-  mkdir -p "$PWD/.claude/memory" 2>/dev/null \
-    && cp -a "$memsrc/." "$PWD/.claude/memory/" 2>/dev/null || true
+#
+# Shares its key derivation with hydrate-memory.sh and sync-memory.sh via
+# lib-memory.sh -- deriving the key differently in two places would send writes
+# to a directory nothing reads, silently.
+if . "$(dirname "$0")/lib-memory.sh" 2>/dev/null; then
+  root="$(git rev-parse --show-toplevel 2>/dev/null)"
+  [ -n "${root:-}" ] && sync_memory_to_repo "$root"
 fi
 
 # Nothing staged, modified, or untracked -> nothing to do.
