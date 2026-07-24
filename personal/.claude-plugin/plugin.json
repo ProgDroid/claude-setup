@@ -1,0 +1,8 @@
+{
+  "name": "personal",
+  "description": "Personal agents, commands, and cross-project working style",
+  "version": "0.1.0",
+  "author": {
+    "name": "ProgDroid"
+  }
+}

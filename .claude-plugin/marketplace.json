@@ -1,0 +1,19 @@
+{
+  "name": "progdroid",
+  "owner": {
+    "name": "ProgDroid",
+    "url": "https://github.com/ProgDroid"
+  },
+  "description": "Personal Claude Code setup, published so cloud sessions can reach it",
+  "plugins": [
+    {
+      "name": "personal",
+      "source": "./personal",
+      "description": "Personal agents, commands, and cross-project working style",
+      "version": "0.1.0",
+      "author": {
+        "name": "ProgDroid"
+      }
+    }
+  ]
+}
