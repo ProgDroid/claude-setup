@@ -2,36 +2,53 @@
 
 ## `project-settings.json`
 
-Merge into a repo's `.claude/settings.json`, preserving any keys already there. **Commit and push** —
-cloud sessions clone the pushed repo, not your working tree, so an uncommitted settings file has no
-effect remotely.
+Merge into a repo's `.claude/settings.json`, preserving keys already there. **Commit and push** — cloud
+sessions clone the pushed repo, not your working tree.
 
 `claude-plugins-official` needs no `extraKnownMarketplaces` entry; it is registered by default.
 
-### What is included, and why
+⚠️ **Declaring is not installing.** Verified against a live cloud session on 2026-07-24: a repo declaring
+two marketplaces and nine plugins produced `No plugins installed` and only the built-in marketplace
+registered. See the root `README.md`. Pair this snippet with an environment setup script that runs
+`claude plugin marketplace add` and `claude plugin install` explicitly.
+
+### Included, and why
 
 | Plugin | Reason |
 |---|---|
 | `superpowers` | brainstorming / writing-plans / TDD workflow — the core process toolkit |
 | `personal` | own agents, commands, working-style skill |
-| `context7` | live library docs. **Note:** locally this works via a user-scope MCP server in `~/.claude.json`, which does *not* reach cloud sessions. The plugin form is the one that travels — enable it in user settings too, so local and cloud use one mechanism rather than two |
+| `context7` | live library docs |
+| `serena` | semantic code navigation and editing |
 | `frontend-design`, `code-simplifier`, `commit-commands`, `claude-md-management`, `skill-creator`, `security-guidance` | general-purpose, cheap to carry |
 
-### Deliberately excluded
+### On `context7` and `serena` specifically
 
-Add these per-repo only where they earn their place — every plugin's skill descriptions load into
-context each session for trigger matching, so a universal include list is a standing tax.
+Both are `false` under `enabledPlugins` in user settings, and **both are actively used**. They are
+registered as user-scope MCP servers in `~/.claude.json` instead, which is why the plugin flag is off.
+
+That route does not reach cloud sessions — `claude mcp add` writes to user config, not the repo. The
+plugin form is the one that travels, so both are enabled here. Enable them in user settings too, so
+local and cloud use one mechanism rather than two.
+
+**Do not read a `false` plugin flag as evidence a capability is unused.** Check `~/.claude.json`
+alongside `settings.json` before concluding anything is unused; this exact inference was made wrongly
+twice while assembling this list.
+
+### Excluded
+
+Add these per-repo only where they earn their place. Every plugin's skill descriptions load into context
+each session for trigger matching, so a universal include list is a standing cost.
 
 | Excluded | Reason |
 |---|---|
 | `qmd`, `obsidian` | Vault-only. The `qmd` binary and its index do not exist in a cloud VM |
-| `starship-claude` | Statusline; meaningless in a cloud session |
+| `starship-claude` | Statusline — meaningless in a cloud session with no TUI. Its config is backed up separately as `starship/starship.toml`; the plugin payload is deliberately gitignored because it is refetchable from `martinemde/starship-claude` |
 | `typescript-lsp`, `gopls-lsp`, `rust-analyzer-lsp` | Add only to repos in that language |
 | `playwright`, `semgrep` | Heavy installs; add where actually used |
-| `serena` | Currently disabled in user settings |
 
 ### Secrets
 
-Nothing credential-shaped goes in this repo or in a project's `.claude/settings.json`. Cloud
-environment variables are visible to anyone who can edit the environment, and there is no secrets
-store. If a plugin needs a key, it goes in the environment config with that visibility understood.
+Nothing credential-shaped goes in this repo or in a project's `.claude/settings.json`. Cloud environment
+variables are visible to anyone who can edit the environment, and there is no secrets store. If a plugin
+needs a key, it goes in the environment config with that visibility understood.
