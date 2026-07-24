@@ -9,8 +9,36 @@ sessions clone the pushed repo, not your working tree.
 
 ⚠️ **Declaring is not installing.** Verified against a live cloud session on 2026-07-24: a repo declaring
 two marketplaces and nine plugins produced `No plugins installed` and only the built-in marketplace
-registered. See the root `README.md`. Pair this snippet with an environment setup script that runs
-`claude plugin marketplace add` and `claude plugin install` explicitly.
+registered. See the root `README.md`. Pair this snippet with `cloud-setup.sh`.
+
+## `cloud-setup.sh`
+
+The script that actually installs what `project-settings.json` declares.
+
+**It is not read from this repo.** Paste its contents into the **Setup script** field of a Claude Code
+cloud environment: open the environment selector, hover an environment, click the settings icon. This
+copy exists for version control and review.
+
+Both CLI commands it relies on are verified non-interactive, defaulting to `user` scope — which is
+`/root/.claude/` in a cloud VM:
+
+- `claude plugin marketplace add <source>` — `--scope` defaults to `user`
+- `claude plugin install <plugin@marketplace>` — `--scope` defaults to `user`
+
+Design notes:
+
+- **No `set -e`.** A non-zero exit makes the session fail to start, so every step is tolerant and the
+  script always exits 0. A failed plugin install must degrade the session, not prevent it.
+- **Everything is logged with a `[setup]` prefix.** On first run the build log is the only place the
+  outcome is visible without spending another session asking.
+- **Marketplaces must be public.** A cloud session's GitHub proxy is scoped to the session's own repo,
+  so a private marketplace would likely fail to clone. This is why `ProgDroid/claude-setup` is public.
+- **Cached.** Anthropic snapshots the filesystem after the script completes, so this cost is per
+  environment, not per session. It re-runs when the script changes, when allowed network hosts change,
+  or after roughly seven days.
+
+Possible optimisation, untried: `claude plugin marketplace add --sparse .claude-plugin plugins` limits
+the checkout via git sparse-checkout, which would cut clone time on large marketplace repos.
 
 ### Included, and why
 
