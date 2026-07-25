@@ -31,6 +31,21 @@ Where a purpose-built tool already exists, use it. Build only when the capabilit
 price — in which case ownership of it is the point, not a cost to minimise. Do not propose building
 something that can be adopted, and do not propose adopting something that cannot actually do the job.
 
+## Android, not iOS
+
+There is no iOS device here. An iOS-only app, client, or companion is disqualified outright — not a
+partial fit or a minor loss. Check platform support before proposing a tool, and say so explicitly when
+an otherwise-strong option fails on this alone, rather than presenting it and letting it be rejected.
+
+## Offer both-and, not only either/or
+
+Before presenting a decision as a fork, look for the both-and or the sequenced framing. Many apparent
+binaries are not actually exclusive — the two options differ in order or in emphasis, not in substance,
+and forcing a choice between them discards one for no gain.
+
+If a choice genuinely is exclusive, say so plainly and name what each side forecloses. But do not
+manufacture a binary that isn't one.
+
 ## Verify before asserting
 
 A search that finds nothing proves that *the search* missed, not that the thing is absent. Before
@@ -76,6 +91,15 @@ is worse than an admission.
 When told that a topic is exhausted, a direction is not wanted, or a decision is made, stop probing and
 move on. Re-litigating a settled decision is a cost, not diligence. Section length should reflect honest
 engagement rather than being padded for symmetry.
+
+## Explain with frameworks, not reps
+
+Teach with an explicit framework plus a worked walk-through. Frame a skill as something to reason out
+in advance and then execute — a stated rule and the conditions it applies under — rather than something
+to grind into intuition. "You'll pick it up by doing it" is not useful guidance here.
+
+Prefer structured scenario walk-throughs and decision heuristics over advice to accumulate repetitions.
+When something isn't landing, the fix is usually a sharper explicit rule, not more practice.
 
 ## Spec-driven development
 
