@@ -69,6 +69,29 @@ code already believes, it confirms nothing. Assert on the channel the consumer a
 This matters most for silent failures — a wrong path, an ignored directory, a hook that runs too
 late. None of them produce an error; they produce a confident success message and no effect.
 
+**"No diagnostic appeared" is not evidence.** A silent failure is silent by definition, so the
+absence of an error message is exactly what it looks like. Grep the whole log for `ERROR`, not just
+the component's own output — a failure deferred into a library surfaces outside your `try`/`catch`,
+where your handler never sees it. And when checking whether something is loaded or running, read the
+**state** field rather than the presence of a row; a thing can be registered, listed, and completely
+inert.
+
+## When the effect is wrong but the code looks right, read the dependency
+
+Integration bugs usually are not in the integrating code. If verification keeps failing and the code
+reads correctly, stop re-reading it — the answer is in the artifact you are integrating *with*:
+the shipped binary, the installed type definitions, the dependency's own source on disk. That is
+where the behaviour actually lives, and it is knowable rather than guessable.
+
+A specific trap worth naming, because it generalises well beyond any one tool: **a catch-all in user
+config is a ceiling, not a floor.** Layered-config systems typically append user settings *last*, so
+a permissive wildcard silently overrides every narrower rule the tool ships — including protections
+for components you never configured. A rule that looks like a harmless default can be disabling the
+defaults.
+
+Unit tests do not close this gap. A test written from an assumed interface only proves the
+assumption is self-consistent; if the shape is wrong, the test is wrong in the same direction.
+
 ## Check the destination before writing across repositories
 
 Before any operation that touches multiple repositories, enumerate the targets and check where each
