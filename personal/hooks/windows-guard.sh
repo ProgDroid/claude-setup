@@ -1,0 +1,126 @@
+#!/bin/bash
+# windows-guard -- PreToolUse guard for Bash / PowerShell on Windows.
+#
+# Every rule here corresponds to a dated, verified incident in the user's global CLAUDE.md.
+# These are failures where the rule was loaded in context and violated anyway, because prose
+# loaded at session start does not intervene at the moment a command is composed. This does.
+#
+# PLATFORM GATE: exits silently off Windows. Several rules (notably the python one) describe
+# MSYS/winpty behaviour and would produce false denials in a Linux cloud session.
+
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) ;;
+    *) exit 0 ;;
+esac
+
+json_input=$(cat)
+
+if command -v jq >/dev/null 2>&1; then
+    tool=$(echo "$json_input" | jq -r '.tool_name // empty')
+    cmd=$(echo "$json_input" | jq -r '.tool_input.command // empty')
+else
+    tool=$(echo "$json_input" | grep -o '"tool_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+        | sed 's/.*:[[:space:]]*"\([^"]*\)".*/\1/')
+    cmd=$(echo "$json_input" | sed -n 's/.*"command"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p')
+fi
+
+[[ -z "$cmd" ]] && exit 0
+case "$tool" in Bash|PowerShell) ;; *) exit 0 ;; esac
+
+deny=""   # set to a reason string to block
+
+# ---------- DENY rules ----------
+
+# 1. python/node under the Bash tool -> winpty: exits non-zero with 'stdin is not a tty',
+#    prints nothing, and reads like a script that ran and did nothing.
+if [[ "$tool" == "Bash" ]] \
+   && echo "$cmd" | grep -qE '(^|[;&|]|&&|\|\||[[:space:]]\$\()[[:space:]]*(python3?|node)[[:space:]]'; then
+    deny="Bash tool cannot run python/node on this machine -- winpty makes it exit non-zero with 'stdin is not a tty' while printing nothing, so the step looks like it ran and did nothing. Write the script to a file and run: powershell.exe -NoProfile -Command \"python <script.py>\" -- or use py."
+fi
+
+# 2. sed touching a Windows drive path -> backslash escapes are live in the REPLACEMENT half.
+#    \r becomes a literal CR, \f a form-feed; exits 0, corrupts quietly, and then blocks Edit
+#    because the on-disk text contains bytes you never typed.
+if [[ -z "$deny" ]] && echo "$cmd" | grep -qE '(^|[[:space:]/|])sed([[:space:]]|$)' \
+   && echo "$cmd" | grep -qE '[A-Za-z]:\\'; then
+    deny="Never sed a Windows path -- backslashes are live escapes in the replacement half (\\r -> CR, \\f -> form-feed), it exits 0, and only od -c reveals the corruption. Use the Edit/Write tool, or write the path with forward slashes (G:/...) which Python, Git Bash and Win32 all accept."
+fi
+
+# 3. git commit -m containing a backtick or $( -> bash command substitution silently
+#    rewrites the commit message.
+if [[ -z "$deny" ]] && echo "$cmd" | grep -qE 'git[[:space:]]+commit' \
+   && echo "$cmd" | grep -qE '\-m' \
+   && echo "$cmd" | grep -qE '`|\$\('; then
+    deny="git commit -m with a backtick or \$( triggers command substitution and mangles the message silently. Use: git commit -F - with a single-quoted heredoc (<<'EOF' ... EOF)."
+fi
+
+# 4. PowerShell (Get-Content -Raw) -replace ... | Set-Content -> BOM-less UTF-8 is read as ANSI
+#    and every multibyte char is double-encoded to mojibake.
+if [[ -z "$deny" ]] && echo "$cmd" | grep -q 'Get-Content' \
+   && echo "$cmd" | grep -q '\-replace' \
+   && echo "$cmd" | grep -q 'Set-Content'; then
+    deny="Never bulk-edit source via (Get-Content -Raw) -replace | Set-Content -- BOM-less UTF-8 is read as ANSI and every emoji/em-dash is double-encoded to mojibake. Use the Edit tool with replace_all. If already run: git checkout -- <file>."
+fi
+
+# 5. Driving WSL with an argument-form script -> a quoting layer is lost in the
+#    Bash->wsl->sh chain; loop vars expand to empty and sed silently no-ops, both exiting 0.
+if [[ -z "$deny" ]] && echo "$cmd" | grep -qE '(^|[[:space:]/])wsl(\.exe)?([[:space:]]|$)' \
+   && echo "$cmd" | grep -qE 'sh[[:space:]]+-[a-z]*c'; then
+    deny="Do not pass a WSL script as an argument (sh -lc '...') -- a quoting layer is lost in the Bash->wsl->sh chain: loop variables expand to empty and sed expressions fail to apply while still exiting 0. Pass it on stdin instead: wsl.exe -d <distro> -- sh -s <<'EOF' ... EOF"
+fi
+
+# 6. claude mcp add from Bash -> MSYS path conversion rewrites a bare /c to C:/ before the
+#    CLI sees it, silently storing a broken launcher in ~/.claude.json.
+if [[ -z "$deny" ]] && [[ "$tool" == "Bash" ]] \
+   && echo "$cmd" | grep -qE 'claude[[:space:]]+mcp[[:space:]]+add'; then
+    deny="Run 'claude mcp add' from PowerShell, not Bash -- MSYS path conversion rewrites a bare /c argument to C:/ before the CLI sees it, silently storing a broken launcher (args: [\"C:/\", \"npx\", ...]) in ~/.claude.json."
+fi
+
+if [[ -n "$deny" ]]; then
+    if command -v jq >/dev/null 2>&1; then
+        jq -n --arg r "$deny" \
+          '{hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"deny", permissionDecisionReason:$r}}'
+    else
+        printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' \
+          "$(printf '%s' "$deny" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/')"
+    fi
+    exit 0
+fi
+
+# ---------- WARN rules (advisory; command still runs) ----------
+
+warn=""
+
+# a. cmd && echo FOUND || echo MISSING is only valid for grep, which exits 1 on no match.
+#    git ls-files / find / jq exit 0 and print nothing, so the && branch fires on an EMPTY result.
+if echo "$cmd" | grep -qE '&&[[:space:]]*echo' && echo "$cmd" | grep -qE '\|\|[[:space:]]*echo' \
+   && ! echo "$cmd" | grep -qE '(^|[[:space:]/|])(grep|rg)([[:space:]]|$)'; then
+    warn="This is the grep-only idiom. Non-grep query tools (git ls-files, git log, find, jq) exit 0 and print nothing on no result, so the && branch fires on an EMPTY result and reports the opposite of the truth. Capture into a variable and test emptiness instead."
+fi
+
+# b. a chain or pipe ending in tail/head reports the WRAPPER's exit code, not the real one.
+if [[ -z "$warn" ]] && echo "$cmd" | grep -qE '(\||;)[[:space:]]*(tail|head)([[:space:]]|$)'; then
+    warn="Exit code here belongs to tail/head, not to the command you care about -- this is how a FAILED build gets reported as passing. Write the real status into the artifact: cmd >> LOG 2>&1; echo \"REAL_EXIT=\$?\" >> LOG, then grep the log. A missing REAL_EXIT line means UNKNOWN, not success."
+fi
+
+# c. a very large heredoc through the Bash tool can die with a bogus 'unexpected EOF'.
+#    The quoting hypotheses were all tested and ruled out; size/transport is the variable.
+if [[ -z "$warn" ]] && echo "$cmd" | grep -q '<<' \
+   && [[ $(echo "$cmd" | wc -l) -gt 60 ]]; then
+    warn="Large heredocs through the Bash tool can fail with a bogus 'unexpected EOF while looking for matching' error and write nothing. Quoting is NOT the cause -- do not re-test that. Use the Write tool for file content over ~50 lines."
+fi
+
+# d. PowerShell Set-Content/Add-Content default to the system ANSI codepage.
+if [[ -z "$warn" ]] && echo "$cmd" | grep -qE '(Set|Add)-Content' \
+   && ! echo "$cmd" | grep -q '\-Encoding'; then
+    warn="Set-Content/Add-Content default to the system ANSI codepage in PS 5.1. Pass -Encoding utf8 explicitly when other tools will read the file."
+fi
+
+if [[ -n "$warn" ]]; then
+    if command -v jq >/dev/null 2>&1; then
+        jq -n --arg w "$warn" \
+          '{systemMessage:("windows-guard: " + $w), hookSpecificOutput:{hookEventName:"PreToolUse", additionalContext:("WINDOWS GUARD WARNING -- " + $w)}}'
+    fi
+fi
+
+exit 0

@@ -1,5 +1,5 @@
 {
-  "description": "Cloud-session memory: load committed memories at start, persist and commit them at stop",
+  "description": "Cloud-session memory, the superpowers red-team gate, and a Windows command guard",
   "hooks": {
     "SessionStart": [
       {
@@ -24,6 +24,30 @@
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/sync-memory.sh\"",
             "timeout": 20
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/redteam-gate.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/windows-guard.sh\"",
+            "timeout": 10
           }
         ]
       }
