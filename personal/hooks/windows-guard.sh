@@ -99,7 +99,19 @@ if echo "$cmd" | grep -qE '&&[[:space:]]*echo' && echo "$cmd" | grep -qE '\|\|[[
 fi
 
 # b. a chain or pipe ending in tail/head reports the WRAPPER's exit code, not the real one.
-if [[ -z "$warn" ]] && echo "$cmd" | grep -qE '(\||;)[[:space:]]*(tail|head)([[:space:]]|$)'; then
+#
+#    NARROWED 2026-08-29. Previously this fired on ANY pipe to tail/head, which meant ~15 firings
+#    in a single session -- almost all on read-only inspection (ls / grep / cat / wc / sed -n)
+#    where the exit code was never going to be consumed. That is expensive twice over: each firing
+#    rides along in conversation history for the rest of the session, and a warning that is
+#    usually wrong trains the model to skim it, which costs the one time it is right.
+#
+#    Now fires only when the exit code plausibly MATTERS: a build/test/deploy verb is in the
+#    command, or the command itself consumes a status ($? / REAL_EXIT). Both historical incidents
+#    this rule exists for are still caught -- `flutter test ... | tail -150` (2026-05-09) and the
+#    backgrounded Gradle chain ending in `tail` (2026-08-18).
+if [[ -z "$warn" ]] && echo "$cmd" | grep -qE '(\||;)[[:space:]]*(tail|head)([[:space:]]|$)' \
+   && echo "$cmd" | grep -qE '(^|[[:space:];&|(])(npm|yarn|pnpm|bun|cargo|pytest|tox|go|make|ninja|cmake|bazel|gradle|gradlew|\./gradlew|flutter|dotnet|mvn|jest|vitest|ctest|docker|terraform|ansible)([[:space:]]|$)|\$\?|REAL_EXIT'; then
     warn="Exit code here belongs to tail/head, not to the command you care about -- this is how a FAILED build gets reported as passing. Write the real status into the artifact: cmd >> LOG 2>&1; echo \"REAL_EXIT=\$?\" >> LOG, then grep the log. A missing REAL_EXIT line means UNKNOWN, not success."
 fi
 

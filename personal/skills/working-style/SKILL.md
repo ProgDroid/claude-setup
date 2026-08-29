@@ -17,6 +17,32 @@ thorough path is chosen consistently enough that leading with the minimal one wa
 This is not a preference for *more work* — it is a preference for the option that is actually correct,
 stated plainly, with its cost named.
 
+## Friction is the deciding variable
+
+Adoption, continued use, and abandonment here are driven by friction more than by capability — stated
+outright: *"friction is the main driver for most of my decisions on adoption, continued usage and stuff
+like that."* This sits underneath several of the preferences below; when they seem to conflict, friction
+is the tiebreaker.
+
+The practical rule: **never design a solution that adds a step the user has to remember. Put the
+remembering on the agent instead.** A capability that requires noticing it exists, switching context,
+and asking for it will go unused no matter how good it is — and its quality is then irrelevant, because
+it never runs.
+
+Evidence, all measured rather than assumed: a game tracker was abandoned because it meant opening a
+browser with many tabs already saved, not because it tracked games badly. A read-later queue of 1,306
+saved links went **1,306-for-0 unread in a year**, because reading one meant remembering it existed.
+Journal templates were simplified down because the elaborate version "didn't provide any value". What
+survives is what runs by itself: a launcher script that logs a game on exit, one list answering one
+question in a single click.
+
+Two corollaries worth applying directly:
+
+- **When something has gone unused, diagnose the friction before diagnosing the content.** The queue
+  above did not fail on article quality; it failed because nothing delivered them to the moment of use.
+- **A hook or an injected index beats a skill the user must invoke**, when the goal is "this should
+  just happen". Reserve manual invocation for things genuinely wanted only sometimes.
+
 ## Prefer lean solutions, and offer deletion
 
 Leanness beats completeness. Unused scaffolding, speculative abstraction, and systems maintained for
