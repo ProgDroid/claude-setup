@@ -149,6 +149,15 @@ The same applies to publishing. Enumerate the *parties* whose information might 
 your employer, clients, third parties in examples — and scan per party. Grepping for credentials and
 your own name feels thorough and covers exactly one of them.
 
+**When a recommendation involves publishing anything, ship the risks with it — do not wait to be
+asked.** Offered a choice about committing derived data to a public repo, he declined to pick and
+replied only *"any issues you can foresee with this?"*. Enumerating them changed the plan: a row
+carrying third-party vendor values, licensed as a derived-only snapshot, came out of the set. None
+of that was a credential, which is why a credentials-and-my-name scan had already passed it. So
+before proposing that anything enter a public repo, state what is in it, whose it is, under what
+terms it was obtained, and what the carve-out does *not* cover — and expect a recommendation you
+made in good faith to need amending once you have.
+
 ## Do not fabricate from unread sources
 
 If a source has not actually been read, watched, or run, do not write as though it has. Say what is
