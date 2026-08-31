@@ -70,6 +70,12 @@ file asserting what its author runs at home is a statement about a person.
 `.agents/` and `.serena/` appear mid-session and get swept into a commit by a blanket add. One
 was 208 files and 2.1 MB of vendored upstream docs.
 
+**Both are expected byproducts, not anomalies — do not go hunting.** `.agents/` is written by
+`<tool> skills install` (Modal ships one, and other vendors are adopting the same convention);
+`.serena/` is created by Serena whenever a Claude Code session starts inside the repo. They are
+tooling state that happens to live in the working tree, so the correct response is to ignore and
+untrack them, not to investigate where they came from.
+
 ```bash
 printf '\n# Local tool state\n.agents/\n.serena/\n' >> .gitignore
 git rm -r --cached .agents .serena 2>/dev/null
