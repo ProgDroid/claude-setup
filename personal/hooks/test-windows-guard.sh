@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# Tests for windows-guard.sh, rule 1 (python/node under the Bash tool).
+#
+# Run:  bash personal/hooks/test-windows-guard.sh
+#
+# ---------------------------------------------------------------------------
+# ⚠️  KNOWN BUG, FOUND 2026-08-31 — one test below is EXPECTED TO FAIL until the
+#     rule is fixed. It is written as a failing test on purpose, so the bug
+#     cannot be forgotten and the fix has an objective finish line.
+#
+# THE BUG: rule 1 is QUOTE-BLIND. It scans the raw Bash command string for
+# separators with
+#
+#     (^|[;&|]|&&|\|\||[[:space:]]\$\()[[:space:]]*(python3?|node)[[:space:]]
+#
+# and has no notion of quoting, so a ';' INSIDE a quoted argument to
+# `powershell.exe -Command "..."` is misread as a Bash command separator.
+#
+# Consequence: the single-command form the deny message itself prescribes is
+# correctly ALLOWED, but chaining two calls inside the same PowerShell string
+# is DENIED, even though nothing runs under winpty in either case. The rule's
+# whole rationale ("python under the Bash tool hits winpty and prints nothing")
+# does not apply once the command dispatches to powershell.exe.
+#
+# Hit live on 2026-08-31 in G:\overleaf while pulling two compiled PDFs:
+#   powershell.exe -NoProfile -Command "python tools/pull_pdf.py A B; python tools/pull_pdf.py C D"
+# The workaround was to move the whole invocation into a .ps1 and call it with
+# -File, so the word never appears in the Bash string at all.
+#
+# SUGGESTED FIX (pick one, in preference order):
+#   1. Skip rule 1 entirely when powershell.exe/pwsh is the LEADING command.
+#      The winpty rationale cannot apply, and it keeps a genuine
+#      `python x.py && powershell.exe ...` still denied because python leads.
+#   2. Strip `-Command "..."` / `-c "..."` payloads from $cmd before matching.
+#   3. Make the matcher quote-aware. Most correct, most work, easiest to get
+#      subtly wrong in bash.
+#
+# Whichever is chosen, keep the positive controls below passing: a genuine bare
+# `python x.py`, and a genuine `echo hi; python x.py`, MUST still be denied.
+# A fix that silences the false positive by weakening those is worse than the bug.
+#
+# NOTE: the same quote-blind separator alternation is reused by other rules in
+# this hook. Check whether they need the same treatment while you are in here.
+# ---------------------------------------------------------------------------
+
+set -uo pipefail
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+HOOK="$DIR/windows-guard.sh"
+pass=0; fail=0; known=0
+ok()    { echo "  PASS: $1"; pass=$((pass + 1)); }
+bad()   { echo "  FAIL: $1"; fail=$((fail + 1)); }
+xfail() { echo "  KNOWN-FAIL (quote-blind bug): $1"; known=$((known + 1)); }
+
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) ;;
+    *) echo "windows-guard exits silently off Windows; nothing to test here."; exit 0 ;;
+esac
+
+command -v jq >/dev/null 2>&1 || { echo "jq required"; exit 1; }
+
+# Assembled at runtime so this file's own test strings do not trip the guard
+# when an agent greps or composes commands around it.
+PY=$(printf 'p\x79thon')
+
+# verdict <command> -> prints DENY or ALLOW
+verdict() {
+  local out
+  out=$(jq -n --arg c "$1" '{tool_name:"Bash",tool_input:{command:$c}}' | bash "$HOOK" 2>&1)
+  if echo "$out" | grep -q 'cannot run'; then echo DENY; else echo ALLOW; fi
+}
+
+echo "== rule 1: genuine bash invocations MUST be denied (positive controls) =="
+
+[ "$(verdict "$PY x.py")" = DENY ] \
+  && ok "bare '$PY x.py' denied" \
+  || bad "bare '$PY x.py' was ALLOWED - rule 1 is not firing at all"
+
+[ "$(verdict "echo hi; $PY x.py")" = DENY ] \
+  && ok "'echo hi; $PY x.py' denied" \
+  || bad "semicolon-chained bash call was ALLOWED"
+
+[ "$(verdict "node x.js")" = DENY ] \
+  && ok "'node x.js' denied" \
+  || bad "'node x.js' was ALLOWED"
+
+echo "== rule 1: unrelated commands MUST be allowed (negative controls) =="
+
+[ "$(verdict "git status --short")" = ALLOW ] \
+  && ok "'git status --short' allowed" \
+  || bad "'git status --short' was DENIED - rule 1 is over-matching badly"
+
+[ "$(verdict "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"run.ps1\" -Arg 'x'")" = ALLOW ] \
+  && ok "powershell -File wrapper allowed (the current workaround)" \
+  || bad "the -File workaround is now DENIED - nothing is left that works"
+
+echo "== rule 1: dispatching to PowerShell =="
+
+[ "$(verdict "powershell.exe -NoProfile -Command \"$PY tools/x.py\"")" = ALLOW ] \
+  && ok "single -Command form allowed (this is what the deny message prescribes)" \
+  || bad "the prescribed single -Command form is DENIED - the message is unreachable"
+
+# ---- the known bug ----
+if [ "$(verdict "powershell.exe -NoProfile -Command \"$PY a.py; $PY b.py\"")" = ALLOW ]; then
+  ok "two -Command calls separated by ';' allowed  <-- BUG IS FIXED, promote this to a real assertion and drop the xfail branch"
+else
+  xfail "two -Command calls separated by ';' are DENIED; the ';' inside the quoted PowerShell argument is read as a Bash separator"
+fi
+
+echo
+echo "passed: $pass   failed: $fail   known-fail: $known"
+[ "$fail" -eq 0 ] || exit 1
+exit 0
