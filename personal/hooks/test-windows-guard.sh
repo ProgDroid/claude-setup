@@ -9,11 +9,18 @@
 #    Its test is a real assertion now, with a companion asserting that
 #    `python x.py && powershell.exe ...` is STILL denied.
 #
-# ⚠️  BUG #2 (found live 2026-09-01) is open, and is the same quote-blind matcher
-#     seen from another angle: `^` anchors at every LINE, so a python line inside
-#     a HEREDOC BODY is matched as though it were a command. Written as a
-#     KNOWN-FAIL below, same convention as bug #1. See the note beside it for why
-#     the obvious fix is not safe.
+# ✅ BUG #2 (found live 2026-09-01) is FIXED as of 2026-09-01. The hook now builds
+#    a heredoc-stripped copy of the command ($scan) and every rule matches THAT,
+#    while rule c -- which is about heredocs -- keeps reading the raw $cmd.
+#
+#    The note below warned that the obvious fix was unsafe, and it was right: a
+#    body fed to a SHELL (`bash <<EOF ... EOF`) really is executed, so stripping
+#    unconditionally would have allowed a genuine winpty case. Note also that
+#    quoting is NOT the discriminator -- <<'EOF' suppresses expansion, not
+#    execution, so `bash <<'EOF'` still runs its body. The hook therefore keys on
+#    the OPENING LINE's command: a shell (bash/sh/zsh/dash/ksh) or wsl keeps the
+#    body in scope; anything else (cat, tee, py, docker) has its body stripped.
+#    Positive controls for both directions are asserted below.
 #
 # THE ORIGINAL BUG (#1, kept for the record): rule 1 was QUOTE-BLIND. It scans
 # the raw Bash command string for separators with
@@ -69,6 +76,25 @@ command -v jq >/dev/null 2>&1 || { echo "jq required"; exit 1; }
 # Assembled at runtime so this file's own test strings do not trip the guard
 # when an agent greps or composes commands around it.
 PY=$(printf 'p\x79thon')
+# A literal backslash, assembled the same way: writing it inline meant the
+# assertion below tested a string with no backslash in it and 'failed' against
+# a hook that was working correctly.
+BS=$(printf '\134')
+
+# verdict_any <command> -> DENY if ANY rule denied (rule 1 has its own matcher below)
+#
+# Parsed with jq, NOT grepped for a literal '"permissionDecision":"deny"': the hook
+# emits jq's PRETTY-printed JSON, which puts a space after the colon, so the compact
+# spelling never matches and every command comes back ALLOW. That made the negative
+# assertions here pass vacuously -- a probe that cannot return DENY proves nothing.
+verdict_any() {
+  local out
+  out=$(jq -n --arg c "$1" '{tool_name:"Bash",tool_input:{command:$c}}' | bash "$HOOK" 2>&1)
+  case "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)" in
+    deny) echo DENY ;;
+    *)    echo ALLOW ;;
+  esac
+}
 
 # verdict <command> -> prints DENY or ALLOW
 verdict() {
@@ -115,29 +141,53 @@ echo "== rule 1: dispatching to PowerShell =="
   && ok "'$PY x.py && powershell.exe ...' still denied ($PY leads, so winpty still applies)" \
   || bad "the leading-command check is too broad - a genuine bash $PY call followed by powershell was ALLOWED"
 
-echo "== rule 1: heredoc bodies =="
+echo "== rule 1: heredoc bodies (bug #2, fixed 2026-09-01) =="
 
-# ---- known bug #2, found live 2026-09-01 ----
-# Writing a .ps1 with a heredoc is DENIED because grep anchors '^' at every LINE, so a
-# $PY line inside the heredoc BODY matches as if it were a command. The body is data being
-# written to a file, not something bash executes.
-#
-# Hit while writing a PowerShell runner from the Bash tool:
-#   cat > run.ps1 <<'EOF'
-#   $PY -m pytest tests/
-#   EOF
-# Workaround used: write the .ps1 with the Write tool instead, which is not guarded.
-#
-# NOT fixed here because the safe fix is not obvious: stripping heredoc bodies before matching
-# would also allow `bash <<EOF ... $PY x.py ... EOF`, which genuinely does run under winpty.
-# A body is only inert when the heredoc's own command is not an interpreter. Left as a
-# KNOWN-FAIL so it cannot be forgotten, same as bug #1 was.
+# An INERT body: cat writes a file, so the body is data, not commands.
 HEREDOC=$(printf 'cat > run.ps1 <<%sEOF%s\n%s -m pytest tests/\nEOF' "'" "'" "$PY")
-if [ "$(verdict "$HEREDOC")" = ALLOW ]; then
-  ok "$PY inside a heredoc BODY allowed  <-- BUG IS FIXED, promote this to a real assertion and drop the xfail branch"
-else
-  xfail "$PY inside a heredoc body is DENIED; '^' anchors at every line, so body text is matched as a command"
-fi
+[ "$(verdict "$HEREDOC")" = ALLOW ] \
+  && ok "$PY inside a 'cat > file' heredoc body allowed (body is data)" \
+  || bad "bug #2 is BACK - heredoc body text is being matched as a command"
+
+# The real 2026-09-01 case: a Dockerfile RUN line written through a heredoc.
+DOCKERDOC=$(printf 'cat > x.Dockerfile <<%sEOF%s\nRUN apt-get update \\\n    && %s -c "import x" \\\n    && rm -rf /var/lib/apt/lists/*\nEOF' "'" "'" "$PY")
+[ "$(verdict "$DOCKERDOC")" = ALLOW ] \
+  && ok "Dockerfile RUN line calling $PY, written via heredoc, allowed" \
+  || bad "writing a Dockerfile that mentions $PY is DENIED - the live false positive is back"
+
+# A NON-inert body: bash EXECUTES it, so winpty genuinely applies and it must stay denied.
+# This is the case the old note correctly warned the naive fix would break.
+SHELLDOC=$(printf 'bash <<%sEOF%s\n%s x.py\nEOF' "'" "'" "$PY")
+[ "$(verdict "$SHELLDOC")" = DENY ] \
+  && ok "'bash <<EOF ... $PY x.py ... EOF' still denied (body IS shell source)" \
+  || bad "heredoc stripping is too broad - a body fed to bash was ALLOWED, and that really does hit winpty"
+
+SHDOC=$(printf 'sh -s <<%sEOF%s\n%s x.py\nEOF' "'" "'" "$PY")
+[ "$(verdict "$SHDOC")" = DENY ] \
+  && ok "'sh -s <<EOF ... $PY x.py ... EOF' still denied" \
+  || bad "'sh -s' heredoc body was stripped - that body is executed"
+
+# Quoting is not the discriminator: an UNQUOTED delimiter fed to cat is still data.
+UNQUOTED=$(printf 'cat > notes.txt <<EOF\n%s -m pytest\nEOF' "$PY")
+[ "$(verdict "$UNQUOTED")" = ALLOW ] \
+  && ok "unquoted heredoc delimiter fed to cat allowed (still data)" \
+  || bad "unquoted-delimiter heredoc fed to cat was DENIED"
+
+# A herestring must not be mistaken for a heredoc opener.
+[ "$(verdict "grep -q x <<<\"$PY x.py\"")" = ALLOW ] \
+  && ok "herestring body not treated as a command" \
+  || bad "herestring '<<<' was parsed as a heredoc opener"
+
+echo "== other rules also read the stripped copy =="
+
+SEDDOC=$(printf 'cat > notes.md <<%sEOF%s\nExample: sed -i s/a/b/ C:%stmp%sx.txt\nEOF' "'" "'" "$BS" "$BS")
+[ "$(verdict_any "$SEDDOC")" = ALLOW ] \
+  && ok "a sed-on-Windows-path EXAMPLE inside a heredoc body is allowed" \
+  || bad "rule 2 fired on heredoc body text"
+
+[ "$(verdict_any "sed -i s/a/b/ C:${BS}tmp${BS}x.txt")" = DENY ] \
+  && ok "a real sed on a Windows path is still denied" \
+  || bad "rule 2 no longer fires on a genuine command"
 
 echo
 echo "passed: $pass   failed: $fail   known-fail: $known"
