@@ -33,7 +33,19 @@ deny=""   # set to a reason string to block
 
 # 1. python/node under the Bash tool -> winpty: exits non-zero with 'stdin is not a tty',
 #    prints nothing, and reads like a script that ran and did nothing.
-if [[ "$tool" == "Bash" ]] \
+#
+#    FIXED 2026-09-01. The matcher is quote-blind: it scans the raw Bash string with no notion
+#    of quoting, so a ';' INSIDE `powershell.exe -Command "..."` was read as a Bash separator
+#    and the two-call form was denied even though nothing runs under winpty. The rationale for
+#    this rule cannot apply once the command dispatches to PowerShell, so skip it when
+#    powershell/pwsh is the LEADING command. `python x.py && powershell.exe ...` stays denied,
+#    because there python leads. Regression test: personal/hooks/test-windows-guard.sh.
+leads_with_powershell=0
+if printf '%s' "$cmd" | grep -qE '^[[:space:]]*(powershell(\.exe)?|pwsh(\.exe)?)([[:space:]]|$)'; then
+    leads_with_powershell=1
+fi
+
+if [[ "$tool" == "Bash" ]] && [[ "$leads_with_powershell" -eq 0 ]] \
    && echo "$cmd" | grep -qE '(^|[;&|]|&&|\|\||[[:space:]]\$\()[[:space:]]*(python3?|node)[[:space:]]'; then
     deny="Bash tool cannot run python/node on this machine -- winpty makes it exit non-zero with 'stdin is not a tty' while printing nothing, so the step looks like it ran and did nothing. Write the script to a file and run: powershell.exe -NoProfile -Command \"python <script.py>\" -- or use py."
 fi

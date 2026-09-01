@@ -4,12 +4,19 @@
 # Run:  bash personal/hooks/test-windows-guard.sh
 #
 # ---------------------------------------------------------------------------
-# ⚠️  KNOWN BUG, FOUND 2026-08-31 — one test below is EXPECTED TO FAIL until the
-#     rule is fixed. It is written as a failing test on purpose, so the bug
-#     cannot be forgotten and the fix has an objective finish line.
+# ✅ BUG #1 (found 2026-08-31) is FIXED as of 2026-09-01, by suggested fix 1
+#    below: rule 1 now skips when powershell.exe/pwsh is the LEADING command.
+#    Its test is a real assertion now, with a companion asserting that
+#    `python x.py && powershell.exe ...` is STILL denied.
 #
-# THE BUG: rule 1 is QUOTE-BLIND. It scans the raw Bash command string for
-# separators with
+# ⚠️  BUG #2 (found live 2026-09-01) is open, and is the same quote-blind matcher
+#     seen from another angle: `^` anchors at every LINE, so a python line inside
+#     a HEREDOC BODY is matched as though it were a command. Written as a
+#     KNOWN-FAIL below, same convention as bug #1. See the note beside it for why
+#     the obvious fix is not safe.
+#
+# THE ORIGINAL BUG (#1, kept for the record): rule 1 was QUOTE-BLIND. It scans
+# the raw Bash command string for separators with
 #
 #     (^|[;&|]|&&|\|\||[[:space:]]\$\()[[:space:]]*(python3?|node)[[:space:]]
 #
@@ -100,11 +107,36 @@ echo "== rule 1: dispatching to PowerShell =="
   && ok "single -Command form allowed (this is what the deny message prescribes)" \
   || bad "the prescribed single -Command form is DENIED - the message is unreachable"
 
-# ---- the known bug ----
-if [ "$(verdict "powershell.exe -NoProfile -Command \"$PY a.py; $PY b.py\"")" = ALLOW ]; then
-  ok "two -Command calls separated by ';' allowed  <-- BUG IS FIXED, promote this to a real assertion and drop the xfail branch"
+[ "$(verdict "powershell.exe -NoProfile -Command \"$PY a.py; $PY b.py\"")" = ALLOW ] \
+  && ok "two -Command calls separated by ';' allowed (the 2026-08-31 quote-blind bug, fixed 2026-09-01)" \
+  || bad "the quote-blind bug is BACK - a ';' inside the quoted PowerShell argument is being read as a Bash separator"
+
+[ "$(verdict "$PY x.py && powershell.exe -NoProfile -File run.ps1")" = DENY ] \
+  && ok "'$PY x.py && powershell.exe ...' still denied ($PY leads, so winpty still applies)" \
+  || bad "the leading-command check is too broad - a genuine bash $PY call followed by powershell was ALLOWED"
+
+echo "== rule 1: heredoc bodies =="
+
+# ---- known bug #2, found live 2026-09-01 ----
+# Writing a .ps1 with a heredoc is DENIED because grep anchors '^' at every LINE, so a
+# $PY line inside the heredoc BODY matches as if it were a command. The body is data being
+# written to a file, not something bash executes.
+#
+# Hit while writing a PowerShell runner from the Bash tool:
+#   cat > run.ps1 <<'EOF'
+#   $PY -m pytest tests/
+#   EOF
+# Workaround used: write the .ps1 with the Write tool instead, which is not guarded.
+#
+# NOT fixed here because the safe fix is not obvious: stripping heredoc bodies before matching
+# would also allow `bash <<EOF ... $PY x.py ... EOF`, which genuinely does run under winpty.
+# A body is only inert when the heredoc's own command is not an interpreter. Left as a
+# KNOWN-FAIL so it cannot be forgotten, same as bug #1 was.
+HEREDOC=$(printf 'cat > run.ps1 <<%sEOF%s\n%s -m pytest tests/\nEOF' "'" "'" "$PY")
+if [ "$(verdict "$HEREDOC")" = ALLOW ]; then
+  ok "$PY inside a heredoc BODY allowed  <-- BUG IS FIXED, promote this to a real assertion and drop the xfail branch"
 else
-  xfail "two -Command calls separated by ';' are DENIED; the ';' inside the quoted PowerShell argument is read as a Bash separator"
+  xfail "$PY inside a heredoc body is DENIED; '^' anchors at every line, so body text is matched as a command"
 fi
 
 echo
