@@ -73,6 +73,19 @@ else
     fi
 fi
 
+# Reporting contract, appended to BOTH gates.
+#
+# Added 2026-09-06. The prompt asked for three objections and set no size budget at
+# all, so the subagent wrote an essay, the report came back truncated, and getting
+# the tail cost a second round trip every time. Adding the gstack lens made it worse
+# by construction, since that folds more findings into the same reply.
+#
+# Filing the review removes the budget from the transport entirely rather than asking
+# a verbose reviewer to please be shorter, and leaves an artifact worth revisiting.
+# reviews/ deliberately matches neither trigger pattern above, so writing the review
+# cannot start another review -- pinned by a test.
+msg="${msg} REPORTING CONTRACT: the subagent must WRITE its complete review to docs/superpowers/reviews/ -- same date and topic as the artifact under review, with a -redteam.md suffix -- and RETURN only its three objections as one line each plus that path, nothing more. A long report does not survive the trip back: it arrives truncated, and recovering the tail costs another round trip."
+
 if command -v jq >/dev/null 2>&1; then
     jq -n --arg sm "$short" --arg ctx "$msg" \
         '{systemMessage:$sm, hookSpecificOutput:{hookEventName:"PostToolUse", additionalContext:$ctx}}'

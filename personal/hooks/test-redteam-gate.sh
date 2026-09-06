@@ -110,6 +110,47 @@ has "what breaks in 6 months" "$p_gs" \
   && ok "eng-review is added to the inline prompt, not swapped for it" \
   || bad "eng-review replaced the inline prompt instead of extending it"
 
+echo "== reporting contract =="
+
+# The subagent used to be given no size budget at all, so it wrote an essay, the
+# transport clipped it, and recovering the tail cost a second round trip. The full
+# review now goes to a file and only three lines come back.
+for label in spec plan; do
+  case "$label" in
+    spec) body="$s_no" ;;
+    plan) body="$p_gs" ;;
+  esac
+
+  has "docs/superpowers/reviews/" "$body" \
+    && ok "$label names the reviews directory for the full write-up" \
+    || bad "$label does not tell the subagent where to write the review"
+
+  has "RETURN only" "$body" \
+    && ok "$label bounds what comes back" \
+    || bad "$label does not bound the returned report"
+
+  has "redteam.md" "$body" \
+    && ok "$label names the review filename suffix" \
+    || bad "$label does not name the review file suffix"
+done
+
+# Safety: the review file must not itself trip the gate, or writing a review starts
+# another review, which writes a review...
+#
+# The directory is READ OUT OF THE MESSAGE rather than hardcoded here. Hardcoding
+# reviews/ would keep passing if someone repointed the instruction at plans/ -- the
+# gate would loop and the test would not notice, because it would still be probing
+# the safe path. This asserts the predicate the subagent will actually act on.
+review_dir="$(printf '%s' "$p_gs" | sed -E 's/.*WRITE its complete review to ([^ ]+).*/\1/')"
+[ -n "$review_dir" ] && [ "$review_dir" != "$p_gs" ] \
+  && ok "the review directory can be read out of the message ($review_dir)" \
+  || bad "could not extract the review directory from the message"
+
+out="$(raw "/repo/${review_dir}2026-09-06-thing-redteam.md" "$GS")"
+[ -z "$out" ] \
+  && ok "writing a review to the instructed path does not re-trigger the gate" \
+  || bad "the instructed review path re-triggers the gate - infinite loop"
+
 echo "== shape =="
 
 raw "$SPEC" "$NO" | jq -e . >/dev/null 2>&1 \
