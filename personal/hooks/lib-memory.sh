@@ -26,6 +26,20 @@ memory_key() {
   _p="${1:-}"
   [ -n "$_p" ] || return 1
 
+  # Normalise a Windows-form path to the MSYS form FIRST.
+  #
+  # Both production callers (sync-memory.sh, auto-commit.sh) derive the root
+  # from `git rev-parse --show-toplevel`, and on Git Bash that returns
+  # G:/pythonDev/news-brief -- a Windows path with a drive colon, NOT the MSYS
+  # /g/pythonDev/news-brief the matcher below was written for. So every real
+  # call fell through to the generic branch and produced a key containing a
+  # colon ('G:-pythonDev-news-brief'). No such directory can exist, both hooks
+  # hit their `[ -d "$_src" ] || return 0` guard, and the whole mechanism
+  # no-opped in complete silence for days. Found 2026-09-05.
+  #
+  # Backslashes are folded too, since some Windows tools emit G:\a\b.
+  _p="$(printf '%s' "$_p" | sed -e 's|\\|/|g' -e 's|^\([a-zA-Z]\):/|/\1/|')"
+
   # Single-letter first segment means an MSYS drive mount.
   _drive="$(printf '%s' "$_p" | sed -n 's:^/\([a-zA-Z]\)/.*:\1:p' | tr 'a-z' 'A-Z')"
   if [ -n "$_drive" ]; then
