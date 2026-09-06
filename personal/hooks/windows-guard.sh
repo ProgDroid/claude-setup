@@ -161,8 +161,15 @@ warn=""
 
 # a. cmd && echo FOUND || echo MISSING is only valid for grep, which exits 1 on no match.
 #    git ls-files / find / jq exit 0 and print nothing, so the && branch fires on an EMPTY result.
+#
+#    NARROWED 2026-09-06. The exclusion was grep|rg only, so the rule fired on every
+#    `[ -d "$x" ] && echo YES || echo NO` -- twice in one measured session, wrong both
+#    times. A test builtin's exit code is precisely what the idiom wants, and the rule's
+#    own rationale ("query tools that exit 0 and print nothing on no result") does not
+#    describe it at all. The exclusion now covers everything whose exit status IS the
+#    answer: test builtins, command -v, and the comparison tools.
 if echo "$scan" | grep -qE '&&[[:space:]]*echo' && echo "$scan" | grep -qE '\|\|[[:space:]]*echo' \
-   && ! echo "$scan" | grep -qE '(^|[[:space:]/|])(grep|rg)([[:space:]]|$)'; then
+   && ! echo "$scan" | grep -qE '(^|[[:space:]/|(])(grep|rg|test|\[|\[\[|diff|cmp)([[:space:]]|$)|command[[:space:]]+-v'; then
     warn="This is the grep-only idiom. Non-grep query tools (git ls-files, git log, find, jq) exit 0 and print nothing on no result, so the && branch fires on an EMPTY result and reports the opposite of the truth. Capture into a variable and test emptiness instead."
 fi
 
@@ -178,9 +185,45 @@ fi
 #    command, or the command itself consumes a status ($? / REAL_EXIT). Both historical incidents
 #    this rule exists for are still caught -- `flutter test ... | tail -150` (2026-05-09) and the
 #    backgrounded Gradle chain ending in `tail` (2026-08-18).
-if [[ -z "$warn" ]] && echo "$scan" | grep -qE '(\||;)[[:space:]]*(tail|head)([[:space:]]|$)' \
-   && echo "$scan" | grep -qE '(^|[[:space:];&|(])(npm|yarn|pnpm|bun|cargo|pytest|tox|go|make|ninja|cmake|bazel|gradle|gradlew|\./gradlew|flutter|dotnet|mvn|jest|vitest|ctest|docker|terraform|ansible)([[:space:]]|$)|\$\?|REAL_EXIT'; then
-    warn="Exit code here belongs to tail/head, not to the command you care about -- this is how a FAILED build gets reported as passing. Write the real status into the artifact: cmd >> LOG 2>&1; echo \"REAL_EXIT=\$?\" >> LOG, then grep the log. A missing REAL_EXIT line means UNKNOWN, not success."
+#
+#    NARROWED AGAIN 2026-09-06, from measurement rather than impression: across one long
+#    session it fired 7 times and was right ONCE. Two changes, both from that data.
+#
+#    First, `$?` anywhere in the command was enough to trigger. But every false positive
+#    had the SAME shape -- the status was captured BEFORE the pipe, and the tail/head was
+#    on something else entirely (a log file, a listing, a byte dump). A flat regex over the
+#    whole string cannot see which pipeline a `$?` belongs to, so position is now checked:
+#    a `$?` AFTER the last tail/head is reading the wrapper's status and is worth warning
+#    about; one before it is reading something else and is not. The single true positive
+#    (`... | head -20; echo "rc=$?"`) is exactly the after case, and is still caught.
+#
+#    Second, REAL_EXIT was in the trigger list -- so writing `REAL_EXIT=$?`, which is
+#    verbatim what the message tells you to do, produced the message telling you to do it.
+#    A rule that fires on its own remedy teaches you to skim it, which is what it costs:
+#    in that same session the one true positive WAS skimmed past.
+if [[ -z "$warn" ]] && echo "$scan" | grep -qE '(\||;)[[:space:]]*(tail|head)([[:space:]]|$)'; then
+    # Flattened for the positional check: newlines are irrelevant to which side of the
+    # last tail/head a `$?` falls on, and sed is line-oriented.
+    _flat=$(printf '%s' "$scan" | tr '\n' ' ')
+    # Greedy .* strips up to and including the LAST tail/head, leaving what follows it.
+    _after=$(printf '%s' "$_flat" | sed -E 's/.*(\||;)[[:space:]]*(tail|head)[[:space:]]*//')
+
+    _status_after_pipe=0
+    if printf '%s' "$_after" | grep -q '\$?'; then _status_after_pipe=1; fi
+
+    _build_verb=0
+    if printf '%s' "$_flat" | grep -qE '(^|[[:space:];&|(])(npm|yarn|pnpm|bun|cargo|pytest|tox|go|make|ninja|cmake|bazel|gradle|gradlew|\./gradlew|flutter|dotnet|mvn|jest|vitest|ctest|docker|terraform|ansible)([[:space:]]|$)'; then
+        _build_verb=1
+    fi
+
+    # The remedy is already applied. Saying it again is pure noise.
+    _remedy_applied=0
+    if printf '%s' "$_flat" | grep -q 'REAL_EXIT='; then _remedy_applied=1; fi
+
+    if [[ "$_remedy_applied" -eq 0 ]] \
+       && { [[ "$_status_after_pipe" -eq 1 ]] || [[ "$_build_verb" -eq 1 ]]; }; then
+        warn="Exit code here belongs to tail/head, not to the command you care about -- this is how a FAILED build gets reported as passing. Write the real status into the artifact: cmd >> LOG 2>&1; echo \"REAL_EXIT=\$?\" >> LOG, then grep the log. A missing REAL_EXIT line means UNKNOWN, not success."
+    fi
 fi
 
 # c. a very large heredoc through the Bash tool can die with a bogus 'unexpected EOF'.

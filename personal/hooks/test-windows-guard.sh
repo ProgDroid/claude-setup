@@ -189,6 +189,123 @@ SEDDOC=$(printf 'cat > notes.md <<%sEOF%s\nExample: sed -i s/a/b/ C:%stmp%sx.txt
   && ok "a real sed on a Windows path is still denied" \
   || bad "rule 2 no longer fires on a genuine command"
 
+# ---------------------------------------------------------------------------
+# WARN rules.
+#
+# Added 2026-09-06 after MEASURING them. Across one long session rule b fired 7
+# times and was right ONCE (14% precision). Rule a fired twice, wrong both times.
+# A warning that is usually wrong trains the reader to skim it, which costs you
+# the one time it is right -- and in that session the true positive was in fact
+# skimmed past.
+#
+# Both narrowings are pinned here in BOTH directions: the genuine incident each
+# rule exists for must still warn, and each measured false positive must not.
+# ---------------------------------------------------------------------------
+
+# warn_kind <command> -> NONE | GREP_IDIOM | EXIT_CODE | HEREDOC | ENCODING
+warn_kind() {
+  local out ctx
+  out=$(jq -n --arg c "$1" '{tool_name:"Bash",tool_input:{command:$c}}' | bash "$HOOK" 2>&1)
+  ctx=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // ""' 2>/dev/null)
+  case "$ctx" in
+    *"grep-only idiom"*)               echo GREP_IDIOM ;;
+    *"belongs to tail/head"*)          echo EXIT_CODE ;;
+    *"Large heredocs"*)                echo HEREDOC ;;
+    *"system ANSI codepage"*)          echo ENCODING ;;
+    *)                                 echo NONE ;;
+  esac
+}
+
+echo "== rule a: the grep-only idiom (positive controls first) =="
+
+[ "$(warn_kind 'git ls-files x && echo FOUND || echo MISSING')" = GREP_IDIOM ] \
+  && ok "git ls-files with the grep idiom warns" \
+  || bad "rule a no longer fires on the case it exists for"
+
+[ "$(warn_kind 'find . -name x && echo FOUND || echo MISSING')" = GREP_IDIOM ] \
+  && ok "find with the grep idiom warns" \
+  || bad "rule a did not fire on find"
+
+echo "== rule a: exit-code-bearing tests MUST NOT warn =="
+
+# Measured false positives, twice in one session. A test builtin's exit code is
+# exactly what the idiom wants; the rule's own rationale (query tools that exit 0
+# on no result) does not describe it at all.
+[ "$(warn_kind '[ -d "$x" ] && echo YES || echo NO')" = NONE ] \
+  && ok "[ -d ] test builtin does not warn" \
+  || bad "rule a still fires on a test builtin"
+
+[ "$(warn_kind 'test -f "$x" && echo YES || echo NO')" = NONE ] \
+  && ok "test -f does not warn" \
+  || bad "rule a still fires on test -f"
+
+[ "$(warn_kind 'command -v jq && echo FOUND || echo MISSING')" = NONE ] \
+  && ok "command -v does not warn" \
+  || bad "rule a still fires on command -v"
+
+[ "$(warn_kind 'diff a b && echo SAME || echo DIFFERENT')" = NONE ] \
+  && ok "diff does not warn" \
+  || bad "rule a still fires on diff"
+
+[ "$(warn_kind 'grep -q x f && echo FOUND || echo MISSING')" = NONE ] \
+  && ok "grep itself still does not warn" \
+  || bad "rule a regressed on its original exclusion"
+
+echo "== rule b: the real incidents MUST still warn =="
+
+# flutter test ... | tail -150 (2026-05-09) and the Gradle chain (2026-08-18).
+[ "$(warn_kind 'pytest -q | tail -20')" = EXIT_CODE ] \
+  && ok "a build verb piped to tail still warns" \
+  || bad "rule b no longer catches a build piped to tail"
+
+[ "$(warn_kind 'flutter test --coverage | tail -150')" = EXIT_CODE ] \
+  && ok "flutter test piped to tail still warns" \
+  || bad "rule b lost the 2026-05-09 incident"
+
+# The one TRUE positive of the seven. Status is read AFTER the pipe, so the $?
+# really does belong to head. This must survive the narrowing.
+[ "$(warn_kind 'serena-hooks activate | head -20; echo "rc=$?"')" = EXIT_CODE ] \
+  && ok "a status read AFTER the pipe still warns" \
+  || bad "rule b lost its one true positive - the narrowing went too far"
+
+echo "== rule b: the measured false positives MUST NOT warn =="
+
+# Firing 4: the remedy the message itself prescribes. REAL_EXIT was in the
+# trigger list, so applying the fix produced the warning telling you to apply it.
+[ "$(warn_kind 'cmd > log 2>&1; echo "REAL_EXIT=$?"; tail -12 log')" = NONE ] \
+  && ok "the prescribed remedy does not trigger its own warning" \
+  || bad "rule b still fires on REAL_EXIT, its own fix"
+
+# Firing 1: $? belongs to find; the pipe to head is a different command entirely.
+[ "$(warn_kind 'find . -name x; echo "exit:$?"; grep -rl y . | head -20')" = NONE ] \
+  && ok "a status captured before an unrelated pipe does not warn" \
+  || bad "rule b still fires when \$? precedes the pipe"
+
+# Firing 6: rc captured per iteration, tail only formats a log grep afterwards.
+[ "$(warn_kind 'bash t.sh > log 2>&1; rc=$?; grep -E passed log | tail -1')" = NONE ] \
+  && ok "a pre-pipe status with a later formatting tail does not warn" \
+  || bad "rule b still fires on a pre-pipe status capture"
+
+# Firing 7: same shape, with a build verb absent and od as the tail target.
+[ "$(warn_kind 'git commit -F -; echo "COMMIT_EXIT=$?"; git log -1 | head -2')" = NONE ] \
+  && ok "a commit status read before a display pipe does not warn" \
+  || bad "rule b still fires on a display pipe after a status capture"
+
+# Unchanged behaviour: plain read-only inspection was already quiet.
+[ "$(warn_kind 'ls -la | head -40')" = NONE ] \
+  && ok "plain read-only inspection stays quiet" \
+  || bad "rule b fires on a bare ls"
+
+# The case that distinguishes the remedy check from the positional check. Both
+# suppress a bare pre-pipe `$?`, so without a BUILD VERB present the two are
+# indistinguishable and disabling either one fails nothing. Here _build_verb is 1,
+# so only the REAL_EXIT suppression can keep this quiet -- and this is also the
+# most realistic command the rule will ever see, since it is the remedy applied
+# to exactly the kind of build the rule exists to protect.
+[ "$(warn_kind 'pytest -q > log 2>&1; echo "REAL_EXIT=$?"; tail -20 log')" = NONE ] \
+  && ok "a build with the remedy applied does not warn" \
+  || bad "rule b fires on a build that already writes REAL_EXIT"
+
 echo
 echo "passed: $pass   failed: $fail   known-fail: $known"
 [ "$fail" -eq 0 ] || exit 1
