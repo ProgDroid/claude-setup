@@ -138,6 +138,31 @@ defaults.
 Unit tests do not close this gap. A test written from an assumed interface only proves the
 assumption is self-consistent; if the shape is wrong, the test is wrong in the same direction.
 
+## CLAUDE.md holds standing rules, never status
+
+He has corrected this twice (2026-09-06). An always-loaded file is the wrong place for anything
+whose truth expires:
+
+- **No status or progress registers.** An "In flight" section listing what is adopted, trialled or
+  parked reads as current and quietly rots. When he wants a project pointed at something, he says
+  so at session start for that project.
+- **No duplicating what the harness already injects.** The harness lists available skills and
+  commands every session. A "Custom commands" section documenting them went stale without anyone
+  noticing: of four workflows it described, three named commands that no longer existed
+  (`/cr`, `/cr-fx`, `/cs:*`, `/explore`, `/deep-research`). The section's own opening line said not
+  to duplicate the harness list, and then did.
+- **No pointers to per-project setup.** "See X in project Y" belongs in project Y.
+
+The cost is not bytes, it is misdirection: a dead pointer in a file loaded every turn sends you
+hunting tools that are not installed, and a stale adoption note argues for a tool nobody uses. Both
+happened here.
+
+**How to apply:** before adding anything to a CLAUDE.md, ask whether it will still be true in three
+months without someone maintaining it. If it needs maintenance, it belongs in a memory file, a
+skill, or the project it concerns. When auditing one, resolve every pointer it contains — commands,
+file paths, includes — rather than reading it for sense; each section stays internally coherent
+while pointing at nothing.
+
 ## Check the destination before writing across repositories
 
 Before any operation that touches multiple repositories, enumerate the targets and check where each
