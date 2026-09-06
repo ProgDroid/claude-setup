@@ -201,15 +201,31 @@ fi
 #    verbatim what the message tells you to do, produced the message telling you to do it.
 #    A rule that fires on its own remedy teaches you to skim it, which is what it costs:
 #    in that same session the one true positive WAS skimmed past.
-if [[ -z "$warn" ]] && echo "$scan" | grep -qE '(\||;)[[:space:]]*(tail|head)([[:space:]]|$)'; then
-    # Flattened for the positional check: newlines are irrelevant to which side of the
-    # last tail/head a `$?` falls on, and sed is line-oriented.
-    _flat=$(printf '%s' "$scan" | tr '\n' ' ')
-    # Greedy .* strips up to and including the LAST tail/head, leaving what follows it.
-    _after=$(printf '%s' "$_flat" | sed -E 's/.*(\||;)[[:space:]]*(tail|head)[[:space:]]*//')
+#    NARROWED A THIRD TIME 2026-09-06, from a firing measured after the second pass:
+#    `... | head` on one line, then `echo x; diff -rq a b; echo "DIFF_EXIT=$?"` on the
+#    next. That `$?` belongs to diff, two commands downstream. Asking whether a `$?`
+#    appears ANYWHERE after the last tail/head cannot see intervening commands that
+#    reset the status, so only the command IMMEDIATELY after tail/head is considered
+#    now -- nothing later can be reading its status.
+#
+#    The same pass fixed a FALSE NEGATIVE in the opposite direction, found by the
+#    presence-sibling test written to prove the narrowing had not gone too far:
+#    the trailing class was ([[:space:]]|$), so `| head;` matched neither branch and
+#    never fired at all. Only `| head -20;` was ever caught, because the space before
+#    the flag satisfied it.
+if [[ -z "$warn" ]] && echo "$scan" | grep -qE '(\||;)[[:space:]]*(tail|head)([[:space:]]|[;&|]|$)'; then
+    # Newlines become ';', NOT spaces. A newline is a command separator, and
+    # flattening it to a space merged `| head` with the next line's command, erasing
+    # the boundary the check below depends on.
+    _flat=$(printf '%s' "$scan" | tr '\n' ';')
+    # Greedy .* strips up to and including the LAST tail/head, leaving what follows.
+    _after=$(printf '%s' "$_flat" | sed -E 's/.*(\||;)[[:space:]]*(tail|head)//')
+
+    # Drop tail/head's own arguments, drop the separator, keep exactly one command.
+    _next=$(printf '%s' "$_after" | sed -E 's/^[^;&|]*//; s/^[;&|]+[[:space:]]*//; s/[;&|].*//')
 
     _status_after_pipe=0
-    if printf '%s' "$_after" | grep -q '\$?'; then _status_after_pipe=1; fi
+    if printf '%s' "$_next" | grep -q '\$?'; then _status_after_pipe=1; fi
 
     _build_verb=0
     if printf '%s' "$_flat" | grep -qE '(^|[[:space:];&|(])(npm|yarn|pnpm|bun|cargo|pytest|tox|go|make|ninja|cmake|bazel|gradle|gradlew|\./gradlew|flutter|dotnet|mvn|jest|vitest|ctest|docker|terraform|ansible)([[:space:]]|$)'; then

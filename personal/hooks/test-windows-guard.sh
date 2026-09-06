@@ -296,6 +296,43 @@ echo "== rule b: the measured false positives MUST NOT warn =="
   && ok "plain read-only inspection stays quiet" \
   || bad "rule b fires on a bare ls"
 
+# --- measured 2026-09-06, AFTER the first narrowing ------------------------------
+# The positional check asked whether a `$?` appears ANYWHERE after the last
+# tail/head. It cannot see intervening commands that reset the status, so this
+# fired on a status belonging to `diff`, two commands downstream. The narrowing
+# reduced the false-positive class; it did not eliminate it.
+#
+# Only the segment IMMEDIATELY following the tail/head command can be reading its
+# status. Anything later is reading something else.
+MULTI=$(printf 'bash s.sh; echo "SYNC_EXIT=$?"; git status --short | head\necho "x"; diff -rq a b; echo "DIFF_EXIT=$?"')
+[ "$(warn_kind "$MULTI")" = NONE ] \
+  && ok "a status two commands past the pipe does not warn" \
+  || bad "rule b still fires on a status that belongs to a later command"
+
+[ "$(warn_kind 'grep -rn x . | head -5; echo done; echo "rc=$?"')" = NONE ] \
+  && ok "a status one command past the pipe does not warn" \
+  || bad "rule b fires on a status separated from the pipe"
+
+# The status here belongs to grep, not head.
+[ "$(warn_kind 'cat f | head -5 | grep x; echo "rc=$?"')" = NONE ] \
+  && ok "a status belonging to a later stage of the pipeline does not warn" \
+  || bad "rule b claims a downstream stage's status"
+
+# Presence sibling: the immediate case must still fire, or the three checks above
+# would pass simply because rule b stopped working.
+[ "$(warn_kind 'cmd --all | head; echo "rc=$?"')" = EXIT_CODE ] \
+  && ok "a status read IMMEDIATELY after the pipe still warns" \
+  || bad "rule b lost the immediate-status case - the narrowing went too far"
+
+# A NEWLINE is a command separator too. Flattening it to a space made this read as
+# `head echo "rc=$?"` -- the status absorbed into head's own arguments, leaving the
+# next-command slot empty and the guard silent. Found by a mutation that failed zero
+# tests, which is what said the newline handling was untested.
+NEWLINE_STATUS=$(printf 'cmd --all | head\necho "rc=$?"')
+[ "$(warn_kind "$NEWLINE_STATUS")" = EXIT_CODE ] \
+  && ok "a status read on the NEXT LINE still warns" \
+  || bad "a newline before the status read was absorbed as head's arguments"
+
 # The case that distinguishes the remedy check from the positional check. Both
 # suppress a bare pre-pipe `$?`, so without a BUILD VERB present the two are
 # indistinguishable and disabling either one fails nothing. Here _build_verb is 1,
