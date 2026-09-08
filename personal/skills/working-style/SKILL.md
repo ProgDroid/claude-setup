@@ -212,3 +212,24 @@ pick it up from the file alone without the conversation that produced it.
 
 Quality bar is expected to rise over time; concrete suggestions for raising it are welcome and should be
 offered proactively rather than waiting to be asked.
+
+
+## Show, don't describe, when the question is visual
+
+For any decision whose answer is a layout, a density, a spacing, or a piece of copy in place, build a
+rendered mockup and hand it over. A written list of options describing a layout is not a substitute, and
+he will say so: on one UI session he asked to "visualise" at four separate decision points and rejected
+two written option sets outright before any mockup existed. Once a render was on screen, each decision
+came back in a single line.
+
+His sharpest contributions come off the render rather than the prose. The same session produced
+"chaotic lines with different spacing" about a chip block, and "what does 'these are set for you' mean?"
+about a caption -- neither of which any amount of description had surfaced.
+
+**Build the mockup with the FIRST option set, not after a rejected round.** Keep text questions -- scope,
+sequencing, which behaviour to pick -- in the terminal; take layout and copy to a render.
+
+Two conditions on this, both learned the hard way. He will act on **measurements** taken from the mockup,
+so the mockup must reproduce the real component rather than a simplified silhouette; omitting a small
+element once produced a confident, wrong recommendation that he then chose. And check the render against
+the real code before drawing conclusions from it -- render the worst case, not the default one.
