@@ -28,6 +28,22 @@ catalog is not fetched at setup-script time, so installs from it silently resolv
 a run that added only custom marketplaces installed both of their plugins and none of the eight
 official ones.
 
+## Editing a plugin does not change the running session
+
+Plugins load from `~/.claude/plugins/cache/<owner>/<plugin>/<version>/`, keyed by the `version` in
+`plugin.json`. **The cache is what runs. The repo working copy is not.**
+
+Verified 2026-09-15: a skill edited in `personal/skills/` was invoked in the same session minutes
+later and served the *old* text, from `.../progdroid/personal/0.11.7/`, while the repo had already
+moved to 0.11.8.
+
+- **A fix is not live until the version is bumped.** Bump `plugin.json` and `marketplace.json`
+  together — a fix committed under an unchanged version sits behind a cache directory that no
+  longer matches its source, and a later session loads the stale copy.
+- **Never confirm plugin behaviour by reading the repo.** Read the cached path, or check which
+  version the session actually loaded. They disagree exactly when you are mid-edit, which is
+  exactly when you are looking.
+
 ## A SessionStart hook cannot deliver files to its own session
 
 The memory subsystem reads its index when the session starts. A `SessionStart` hook runs after
@@ -55,6 +71,20 @@ underscores** all replaced by `-`.
 Cloud cwd is always `/home/user/repo`. Deriving the key wrongly fails **silently** — the write
 lands in a directory nothing reads, with no error. Underscore normalisation was missed twice, in
 two separate files, and both times the symptom was nothing happening.
+
+## `CLAUDE_CLOUD_SESSION=1` is exported into every process
+
+The gate the memory hooks read is a real environment variable in the cloud environment, so
+everything launched inside a session inherits it — including the test scripts for those hooks.
+
+Verified 2026-09-15: `test-sync-memory.sh`, `test-auto-commit.sh` and `test-hydrate-memory.sh`
+showed 5 failures between them in a cloud session and 0 on the same commit with the variable
+unset. Every one was a case asserting *"does nothing when the gate is unset"*, failing against a
+hook that was behaving correctly.
+
+**A test for gated behaviour must `unset` the gate at the top and let each case set it.** The
+failure mode is worse than a red suite: it points the investigation at the hook, which is fine,
+and at a bug that is not there, which is not.
 
 ## Only what is in the clone is guaranteed
 
