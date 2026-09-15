@@ -5,6 +5,13 @@
 
 set -uo pipefail
 
+# Each case supplies its own gate; the ambient environment must never supply
+# it. This script is itself run inside cloud sessions, where the environment
+# exports CLAUDE_CLOUD_SESSION=1 -- inheriting it makes sync-memory.sh exit at
+# its first line and fails cases that have nothing to do with the gate, which
+# reads as a broken hook rather than a leaky test. (2026-09-15)
+unset CLAUDE_CLOUD_SESSION
+
 DIR="$(cd "$(dirname "$0")" && pwd)"
 HOOK="$DIR/sync-memory.sh"
 pass=0; fail=0
@@ -140,7 +147,43 @@ CLAUDE_CLOUD_SESSION=1 HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
   && bad "must defer to auto-commit.sh when the cloud gate is set" \
   || ok "defers to auto-commit.sh when the cloud gate is set"
 
-# 5. Outside a git repo -> exit 0
+# 5. A repo file NEWER than its local counterpart is NOT overwritten.
+#
+# WHY: this copy is one-way and used to be unconditional, which made the local
+# memory dir the sole authority -- anything written straight into a repo's
+# .claude/memory/ was destroyed at the next Stop. Observed 2026-09-15 in
+# ProgDroid/constellation: a session had restored
+# .claude/memory/constellation-status.md in the repo while the local copy was
+# 25 stale lines written early in the session. Every Stop copied the stale file
+# back over the good one and auto-commit.sh committed the rollback -- three
+# times (29373ab, f90dca7, 2be8145), each reverting a restore the session had
+# just pushed. No error, no output; a whole-branch review caught it.
+setup
+mkdir -p "$repo/.claude/memory"
+printf -- '---\nname: learned\n---\nfresh repo edit\n' \
+  > "$repo/.claude/memory/learned.md"
+# Age the local copy so "the repo file is newer" holds regardless of filesystem
+# timestamp granularity -- both files are otherwise written within one second.
+touch -t 202001010000 "$fakehome/.claude/projects/$key/memory/learned.md"
+HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
+grep -q 'fresh repo edit' "$repo/.claude/memory/learned.md" \
+  && ok "leaves a repo file newer than its local counterpart alone" \
+  || bad "clobbered a newer repo file with a stale local memory"
+
+# 6. The guard above must not disable the mechanism it guards: a local memory
+# newer than the repo's copy still syncs out. Without this, "never overwrite"
+# would pass case 6 and quietly turn the hook into a no-op.
+setup
+mkdir -p "$repo/.claude/memory"
+printf -- '---\nname: learned\n---\nstale repo copy\n' \
+  > "$repo/.claude/memory/learned.md"
+touch -t 202001010000 "$repo/.claude/memory/learned.md"
+HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
+grep -q '^body$' "$repo/.claude/memory/learned.md" \
+  && ok "syncs a local memory that is newer than the repo's copy" \
+  || bad "failed to sync a local memory newer than the repo's copy"
+
+# 7. Outside a git repo -> exit 0
 d="$(mktemp -d)"; cd "$d" || exit 1
 HOME="$(mktemp -d)" bash "$HOOK" >/dev/null 2>&1
 [ $? -eq 0 ] && ok "exits 0 outside a git repo" || bad "non-zero outside a git repo"

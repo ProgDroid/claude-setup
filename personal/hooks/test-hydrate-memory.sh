@@ -6,6 +6,12 @@
 
 set -uo pipefail
 
+# Each case supplies its own gate; the ambient environment must never supply
+# it. This script is itself run inside cloud sessions, where the environment
+# exports CLAUDE_CLOUD_SESSION=1 -- inheriting it makes the gate-unset cases
+# fail against a hook that is behaving correctly. (2026-09-15)
+unset CLAUDE_CLOUD_SESSION
+
 HOOK="$(cd "$(dirname "$0")" && pwd)/hydrate-memory.sh"
 pass=0
 fail=0

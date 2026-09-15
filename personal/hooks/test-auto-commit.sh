@@ -6,7 +6,19 @@
 
 set -uo pipefail
 
-HOOK="$(cd "$(dirname "$0")" && pwd)/auto-commit.sh"
+# Each case supplies its own gate; the ambient environment must never supply
+# it. This script is itself run inside cloud sessions, where the environment
+# exports CLAUDE_CLOUD_SESSION=1 -- inheriting it makes case 2 (gate unset ->
+# must not commit) fail against a hook that is behaving correctly.
+# (2026-09-15)
+unset CLAUDE_CLOUD_SESSION
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+HOOK="$DIR/auto-commit.sh"
+# Resolve paths and source the helper HERE, while the cwd is still this
+# repo: every case below cds into a fresh mktemp repo, so a relative "$0"
+# no longer resolves by the time a case runs.
+. "$DIR/lib-memory.sh"
 pass=0
 fail=0
 
@@ -83,6 +95,40 @@ git checkout -qb feature/w
 echo new > untracked.txt
 CLAUDE_CLOUD_SESSION=1 bash "$HOOK" >/dev/null 2>&1
 check "commits untracked files too" clean
+
+# 7. End-to-end: the memory sync must not commit a ROLLBACK of a repo file.
+#
+# This hook syncs before it commits, so an overwrite here is not merely lost in
+# the worktree -- it is committed and pushed. That is exactly what happened in
+# ProgDroid/constellation on 2026-09-15 (29373ab, f90dca7, 2be8145): a stale
+# local memory kept being copied over a repo file the session had just
+# restored, and each Stop pushed the revert. Main was spared only because the
+# branch guard above returns first.
+newrepo
+git checkout -qb feature/mem
+fakehome="$(mktemp -d)"
+key="$(memory_key "$(git rev-parse --show-toplevel)")"
+# An empty or unusable key would build the fixture somewhere the hook never
+# looks, the sync would no-op, and this case would PASS for the wrong reason --
+# the failure mode it exists to catch. Fail loudly instead.
+case "$key" in
+  ''|*[:/\\]*)
+    echo "  FAIL: derived an unusable project key: '$key'"
+    fail=$((fail + 1)) ;;
+esac
+mkdir -p "$fakehome/.claude/projects/$key/memory"
+printf 'stale local copy\n' > "$fakehome/.claude/projects/$key/memory/notes.md"
+touch -t 202001010000 "$fakehome/.claude/projects/$key/memory/notes.md"
+mkdir -p .claude/memory
+printf 'fresh repo edit\n' > .claude/memory/notes.md
+CLAUDE_CLOUD_SESSION=1 HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
+if git show HEAD:.claude/memory/notes.md 2>/dev/null | grep -q 'fresh repo edit'; then
+  echo "  PASS: commits the repo's newer memory file, not a stale local rollback"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: committed a rollback of a repo memory file"
+  fail=$((fail + 1))
+fi
 
 echo "-- $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

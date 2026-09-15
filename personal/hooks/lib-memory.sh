@@ -69,6 +69,23 @@ sync_memory_to_repo() {
   [ -d "$_src" ] || return 0
   [ -n "$(find "$_src" -maxdepth 1 -name '*.md' 2>/dev/null)" ] || return 0
 
-  cp -a "$_src/." "$_root/.claude/memory/" 2>/dev/null || return 0
+  # -u: copy a file only when the source is NEWER than the destination.
+  #
+  # WHY: without it this is an unconditional overwrite that treats the local
+  # memory dir as the sole authority, so anything written straight into a
+  # repo's .claude/memory/ is destroyed at the next Stop -- and in a cloud
+  # session auto-commit.sh then commits and pushes the rollback. Observed
+  # 2026-09-15 in ProgDroid/constellation: a session restored
+  # constellation-status.md in the repo, the local copy was 25 stale lines from
+  # early in the session, and three consecutive Stops (29373ab, f90dca7,
+  # 2be8145) each reverted the restore the session had just pushed. Silent;
+  # only a whole-branch review caught it before it reached main.
+  #
+  # -a already preserves source mtimes, so the three cases fall out cleanly:
+  # a file synced earlier compares equal and is not re-copied; a memory this
+  # session actually wrote has a fresh mtime and still syncs out; and a repo
+  # file edited or checked out this session is newer than a stale local copy
+  # and survives.
+  cp -a -u "$_src/." "$_root/.claude/memory/" 2>/dev/null || return 0
   return 0
 }
