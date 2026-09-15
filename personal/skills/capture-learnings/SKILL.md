@@ -56,6 +56,11 @@ Two consequences worth stating explicitly:
   copies the repo's `.claude/memory/` into `~/.claude/projects/<key>/memory/` at SessionStart, and at
   Stop `sync-memory.sh` (local) or `auto-commit.sh` (cloud) copies it back out and commits it. Write
   normally and let the sync carry it.
+- **That loop is opt-in per repo, and silent when it is off.** Both hooks do nothing unless
+  `<repo>/.claude/memory/` already exists, so in a repo that has not opted in a memory written
+  during a cloud session dies with the VM exactly as the old advice warned. **Check for the
+  directory before writing.** If it is missing: create it, commit it, and then write the memory —
+  or, when the learning is cross-project anyway, route it to a plugin skill instead.
 - **Never edit a repo's `.claude/memory/` files directly.** The sync is one-way — local overwrites
   repo — so a direct edit is reverted the moment it is older than the local copy, and in a cloud
   session auto-commit.sh commits the revert. Route the change through the local memory dir instead.
