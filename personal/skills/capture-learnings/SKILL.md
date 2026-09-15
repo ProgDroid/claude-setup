@@ -51,9 +51,16 @@ Two consequences worth stating explicitly:
 
 - **A learning routed to the plugin is invisible until pushed.** Say so, and commit it — an
   uncommitted working-style change reaches no cloud session and no other machine.
-- **Memories written inside a cloud session are ephemeral.** The VM is reclaimed after a period of
-  inactivity, so `~/.claude/projects/.../memory/` there does not survive. In a cloud session, route
-  anything worth keeping to the repo instead, where the branch push preserves it.
+- **In a cloud session, write memories to the local memory dir exactly as you would locally.**
+  The VM is reclaimed, but the `personal` plugin's hooks already close that loop: `hydrate-memory.sh`
+  copies the repo's `.claude/memory/` into `~/.claude/projects/<key>/memory/` at SessionStart, and at
+  Stop `sync-memory.sh` (local) or `auto-commit.sh` (cloud) copies it back out and commits it. Write
+  normally and let the sync carry it.
+- **Never edit a repo's `.claude/memory/` files directly.** The sync is one-way — local overwrites
+  repo — so a direct edit is reverted the moment it is older than the local copy, and in a cloud
+  session auto-commit.sh commits the revert. Route the change through the local memory dir instead.
+  (This entry used to say the opposite, and following it is what exposed the overwrite bug fixed in
+  `lib-memory.sh` on 2026-09-15.)
 
 ## The audit pass
 
