@@ -103,6 +103,38 @@ plugins enabled only in user settings, and MCP servers added with `claude mcp ad
 flag under `enabledPlugins` does **not** mean the capability is unused — it often means it is
 registered as a user-scope MCP server instead, which is exactly the form that does not travel.
 
+## A cloud session cannot write `.github/workflows/`
+
+Verified 2026-09-17. Creating or updating anything under `.github/workflows/` needs the GitHub
+`workflow` token scope, and a cloud session has neither route:
+
+```
+! [remote rejected] branch -> branch (refusing to allow an OAuth App to create
+  or update workflow `.github/workflows/ci.yml` without `workflow` scope)
+```
+
+The GitHub MCP server is **not** a way around it. `mcp__github__push_files` fails the same way —
+`Insufficient scope: required "workflow"` — so the App carries no broader right than the git
+remote here. Do not spend a round discovering this twice.
+
+The rejection covers "create **or update**", so an existing workflow cannot be edited either; a
+one-line version bump is as blocked as a new file.
+
+**Plan for it before committing.** A commit that touches a workflow file poisons the whole push,
+including the unrelated commits behind it. Either keep workflow changes out of the branch
+entirely, or park them somewhere pushable (`docs/ci/`) with the `git mv` commands in a README, and
+let the human install them from a local checkout.
+
+### It compounds with the Stop hook
+
+`stop-hook-git-check.sh` reports unpushed commits, and the work-in-progress auto-commit will
+happily commit untracked files — including `.github/workflows/` left in the tree. That produces a
+commit that *cannot* be pushed and a hook that asks for it to be pushed on every turn.
+
+Breaking the loop means dropping the commit, not satisfying the hook. Verify the content is
+preserved elsewhere first (`git show <sha>:<path> | sha256sum` against the parked copy), then
+reset to the remote tip.
+
 ## Committing `.claude/` when it is gitignored
 
 `.claude/` + `!.claude/memory/` does **not** work. Git does not descend into a fully-ignored
