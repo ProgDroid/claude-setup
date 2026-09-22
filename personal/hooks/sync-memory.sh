@@ -34,4 +34,20 @@ root="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 
 sync_memory_to_repo "$root"
 
+# Report anything the sync refused to overwrite.
+#
+# A divergence means the repo copy has a history this machine did not write, so
+# the two are different documents rather than two drafts of one. Only a human
+# can merge that, and staying silent is how the old unconditional copy did its
+# damage unnoticed -- so it must be said out loud.
+#
+# A Stop hook's plain stdout only reaches the transcript view (ctrl-O), where
+# nobody looks. `systemMessage` is what actually surfaces in the UI. Printed
+# only when there is something to say: a hook that speaks every turn is a hook
+# that gets switched off.
+if [ -n "${MEMORY_SYNC_DIVERGED:-}" ]; then
+  printf '{"systemMessage":"memory sync: kept the repo copy of %s -- it differs from your local memory and was not written by this sync, so neither version was discarded. Reconcile by hand, then the next sync resumes normally."}\n' \
+    "$(printf '%s' "$MEMORY_SYNC_DIVERGED" | sed 's/"/\\"/g')"
+fi
+
 exit 0

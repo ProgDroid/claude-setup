@@ -26,7 +26,27 @@ set -uo pipefail
 
 [ "${CLAUDE_CLOUD_SESSION:-}" = "1" ] || exit 0
 
-key="$(printf '%s' "$PWD" | tr '/' '-')"
+# Derive the key through lib-memory.sh rather than inline. This used to be
+# `tr '/' '-'`, which agrees with memory_key on a plain cloud path but NOT on
+# one containing an underscore -- memory_key folds '_' to '-' and this did not.
+# A repo like dynamic_day_planner would hydrate into one directory and sync out
+# of another, silently. The manifest seeded below makes that agreement
+# load-bearing, so the two must share a single derivation.
+if . "$(dirname "$0")/lib-memory.sh" 2>/dev/null; then
+  # Derive from the SAME source sync-memory.sh and auto-commit.sh use -- git's
+  # toplevel -- not from $PWD. On Linux the two agree, which is why this was
+  # invisible; on Windows they are wildly different ($PWD is /tmp/tmp.X, git
+  # returns C:/Users/.../Temp/tmp.X), so the two hooks would key the same repo
+  # to two different directories. Harmless while hydration only wrote files,
+  # but the manifest below makes agreement load-bearing: seeded under one key
+  # and read under another, it would never be found and every session edit
+  # would look like a divergence.
+  _root="$(git rev-parse --show-toplevel 2>/dev/null)" || _root=""
+  [ -n "$_root" ] || _root="$PWD"
+  key="$(memory_key "$_root")" || key=""
+else
+  key="$(printf '%s' "$PWD" | tr '/' '-')"
+fi
 [ -n "$key" ] || exit 0
 
 dst="$HOME/.claude/projects/$key/memory"
@@ -52,6 +72,17 @@ fi
 src="$PWD/.claude/memory"
 if [ -d "$src" ]; then
   cp -a "$src/." "$dst/" 2>/dev/null || true
+fi
+
+# Record what we just loaded as the sync baseline, while local and repo are
+# still identical. sync_memory_to_repo overwrites a repo file only when it is
+# byte-identical to this record -- proof the file is our own prior output. With
+# no baseline, every memory this session edits looks like an independent
+# divergence at Stop and is refused, which would silently disable cloud memory
+# write-back entirely. Seeding is therefore required for correctness here, not
+# a nicety.
+if command -v seed_memory_manifest >/dev/null 2>&1 || type seed_memory_manifest >/dev/null 2>&1; then
+  seed_memory_manifest "$dst" "$HOME/.claude/projects/$key/.memory-sync-manifest" || true
 fi
 
 # --- Emit the index into the session ---------------------------------------

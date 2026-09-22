@@ -170,18 +170,115 @@ grep -q 'fresh repo edit' "$repo/.claude/memory/learned.md" \
   && ok "leaves a repo file newer than its local counterpart alone" \
   || bad "clobbered a newer repo file with a stale local memory"
 
-# 6. The guard above must not disable the mechanism it guards: a local memory
-# newer than the repo's copy still syncs out. Without this, "never overwrite"
-# would pass case 6 and quietly turn the hook into a no-op.
+# 6. The guard must not disable the mechanism it guards: a local edit still
+# syncs out.
+#
+# REWRITTEN 2026-09-22. It used to assert "the local file is newer than the
+# repo copy, therefore overwrite" -- which is the buggy rule itself, see case 8.
+# The intent was always "never let the guard turn the hook into a no-op", and
+# that intent is unchanged; only the thing asserted moved, from a timestamp
+# comparison to lineage. Sync once to establish lineage, edit locally, sync
+# again.
 setup
 mkdir -p "$repo/.claude/memory"
-printf -- '---\nname: learned\n---\nstale repo copy\n' \
+HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
+printf -- '---\nname: learned\n---\nsecond draft\n' \
+  > "$fakehome/.claude/projects/$key/memory/learned.md"
+HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
+grep -q 'second draft' "$repo/.claude/memory/learned.md" \
+  && ok "syncs a later local edit over a copy this sync itself wrote" \
+  || bad "failed to sync a later local edit over its own prior output"
+
+# 8. THE INCIDENT. A repo file with an independent history is not overwritten,
+# even when the local file is unambiguously newer.
+#
+# Measured 2026-09-22 in ProgDroid/aegyptvault-notes: a cloud session created
+# .claude/memory/ with its own MEMORY.md -- a 15-line index of 2 notes. Locally
+# a 97-line MEMORY.md indexed 100 notes under the same project key. Two
+# DIFFERENT documents sharing one filename. The local one was newer, so `cp -u`
+# overwrote the repo's at every Stop, destroying edits made to it minutes
+# earlier; in a cloud session auto-commit.sh commits that loss.
+#
+# Case 5 is the same rule seen from the other side and mtime could express that
+# one, which is exactly why it was mistaken for the whole fix. Here the
+# aggressor IS newer, so no timestamp rule can help.
+setup
+mkdir -p "$repo/.claude/memory"
+printf -- '---\nname: learned\n---\nindependent cloud history\n' \
+  > "$repo/.claude/memory/learned.md"
+touch -t 202001010000 "$repo/.claude/memory/learned.md"   # repo copy is OLDER
+HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
+grep -q 'independent cloud history' "$repo/.claude/memory/learned.md" \
+  && ok "keeps an older repo file that this sync never wrote" \
+  || bad "clobbered an independent repo file because the local one was newer"
+
+# 9. ...and says so. Silence is how the old copy did its damage unnoticed, and
+# a Stop hook's plain stdout only reaches the transcript view -- so the report
+# has to be a systemMessage to be seen at all.
+setup
+mkdir -p "$repo/.claude/memory"
+printf -- '---\nname: learned\n---\nindependent cloud history\n' \
   > "$repo/.claude/memory/learned.md"
 touch -t 202001010000 "$repo/.claude/memory/learned.md"
+out="$(HOME="$fakehome" bash "$HOOK" 2>/dev/null)"
+case "$out" in
+  *'"systemMessage"'*learned.md*) ok "reports the divergence as a systemMessage" ;;
+  *) bad "divergence went unreported (got: ${out:-<empty>})" ;;
+esac
+
+# 10. A clean sync stays silent. A hook that speaks every turn is a hook that
+# gets switched off, so the report must be exceptional.
+setup
+mkdir -p "$repo/.claude/memory"
+out="$(HOME="$fakehome" bash "$HOOK" 2>/dev/null)"
+[ -z "$out" ] \
+  && ok "says nothing when there is nothing to report" \
+  || bad "spoke on a clean sync (got: $out)"
+
+# 11. A divergence on one file must not block unrelated new memories. The
+# failure mode to avoid is a single stuck file freezing the whole mechanism.
+setup
+mkdir -p "$repo/.claude/memory"
+printf -- '---\nname: learned\n---\nindependent cloud history\n' \
+  > "$repo/.claude/memory/learned.md"
+printf -- '---\nname: fresh\n---\nbrand new\n' \
+  > "$fakehome/.claude/projects/$key/memory/fresh.md"
 HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
-grep -q '^body$' "$repo/.claude/memory/learned.md" \
-  && ok "syncs a local memory that is newer than the repo's copy" \
-  || bad "failed to sync a local memory newer than the repo's copy"
+if [ -f "$repo/.claude/memory/fresh.md" ] \
+   && grep -q 'independent cloud history' "$repo/.claude/memory/learned.md"; then
+  ok "copies unrelated new memories while one file is diverged"
+else
+  bad "a diverged file blocked an unrelated new memory"
+fi
+
+# 12. Once a human reconciles the divergence, the sync resumes on its own --
+# no reset step to remember. Making the two sides identical re-establishes
+# lineage, and the next local edit flows again.
+setup
+mkdir -p "$repo/.claude/memory"
+printf -- '---\nname: learned\n---\nindependent cloud history\n' \
+  > "$repo/.claude/memory/learned.md"
+HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1          # refuses, records the repo copy
+cp "$repo/.claude/memory/learned.md" \
+   "$fakehome/.claude/projects/$key/memory/learned.md"  # human reconciles
+printf -- '---\nname: learned\n---\nafter reconciliation\n' \
+  > "$fakehome/.claude/projects/$key/memory/learned.md"
+HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
+grep -q 'after reconciliation' "$repo/.claude/memory/learned.md" \
+  && ok "resumes syncing once the divergence is reconciled by hand" \
+  || bad "stayed stuck after the divergence was reconciled"
+
+# 13. A file present in the repo but absent locally is left alone -- the sync
+# adds and updates, it never prunes. A cloud session's memory must survive a
+# local Stop that has never seen it.
+setup
+mkdir -p "$repo/.claude/memory"
+printf -- '---\nname: cloud-only\n---\nwritten in the cloud\n' \
+  > "$repo/.claude/memory/cloud-only.md"
+HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
+[ -f "$repo/.claude/memory/cloud-only.md" ] \
+  && ok "never deletes a repo memory that does not exist locally" \
+  || bad "removed a repo-only memory"
 
 # 7. Outside a git repo -> exit 0
 d="$(mktemp -d)"; cd "$d" || exit 1

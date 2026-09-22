@@ -121,5 +121,46 @@ out="$(HOME="$fakehome" bash "$HOOK" 2>/dev/null)"
 [ -z "$out" ] && ok "prints nothing when the gate is unset" \
               || bad "printed output with the gate unset: $out"
 
+# 10. Hydration records a sync baseline for what it loaded.
+#
+# sync_memory_to_repo overwrites a repo file only when that file is still
+# byte-identical to something the sync itself previously wrote. A cloud VM
+# starts with no such record, so without seeding here EVERY memory a session
+# edits looks like an independent divergence at Stop and is refused --
+# silently disabling cloud memory write-back, the whole reason these hooks
+# exist. Nearly shipped that way on 2026-09-22.
+setup
+HOME="$fakehome" CLAUDE_CLOUD_SESSION=1 bash "$HOOK" >/dev/null 2>&1
+mf="$fakehome/.claude/projects/$key/.memory-sync-manifest"
+if [ -s "$mf" ] && grep -q 'thing\.md' "$mf"; then
+  ok "records a sync baseline for the memories it loaded"
+else
+  bad "no sync baseline written (manifest=$mf)"
+fi
+
+# 11. THE ROUND TRIP, end to end: hydrate -> the session edits a memory ->
+# sync writes it back. This is the capability case 10 protects, asserted
+# against both hooks together rather than inferred from a manifest existing.
+#
+# The repo is initialised BEFORE hydration, as it is in reality -- a cloud
+# session always starts from a clone. That ordering matters: both hooks key the
+# project off `git rev-parse --show-toplevel`, and on Windows that is a
+# different string from $PWD entirely (C:/Users/.../Temp/x vs /tmp/x). Running
+# hydrate outside a repo and sync inside one keys the same project two ways,
+# which is precisely how the first draft of this test failed.
+setup
+( cd "$repo" && git init -q -b main 2>/dev/null \
+  && git config user.email t@e.com && git config user.name T )
+. "$(dirname "$HOOK")/lib-memory.sh" 2>/dev/null
+gkey="$(cd "$repo" && memory_key "$(git rev-parse --show-toplevel 2>/dev/null)")"
+gdest="$fakehome/.claude/projects/$gkey/memory"
+( cd "$repo" && HOME="$fakehome" CLAUDE_CLOUD_SESSION=1 bash "$HOOK" >/dev/null 2>&1 )
+printf -- '---\nname: thing\n---\nlearned during the session\n' \
+  > "$gdest/thing.md"
+( cd "$repo" && HOME="$fakehome" bash "$(dirname "$HOOK")/sync-memory.sh" >/dev/null 2>&1 )
+grep -q 'learned during the session' "$repo/.claude/memory/thing.md" \
+  && ok "round trip: a memory edited after hydration syncs back to the repo" \
+  || bad "round trip broken -- the session's edit never reached the repo"
+
 echo "-- $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
