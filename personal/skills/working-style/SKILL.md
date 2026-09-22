@@ -82,6 +82,36 @@ Do this before evaluating the options, not after. A forced choice that survives 
 and worth deciding; one that does not was a framing error, and picking either side of it discards
 something for no reason.
 
+## Check whether the constraint is real before offering options against it
+
+A decision framed as "which vendor / tier / platform" usually rests on a number, and the number is
+frequently **a property of our own code, not of the thing being chosen**. Establish that first.
+Options priced against a self-imposed limit are priced wrong.
+
+Measured 2026-09-22, anime-calendar. Two platform decisions had been stalled for twelve days:
+
+- **Redis.** The sizing input was "3 fixed + 2 per calendar + 1 per viewer ≈ 43 connections",
+  against a free tier's cap of 30. That budget was not a property of the app — `redis_pubsub.rs`
+  opened a fresh TCP connection *per channel*, where Redis pub/sub lets one connection subscribe
+  to many. Multiplexing collapses it to ~4 flat, and the cap stops binding.
+- **Postgres.** Sizing assumed fifteen independent pools at sqlx's default of 10 connections, so
+  150 per instance — too many for the cheapest tier. Fifteen pools was a choice made in an
+  afternoon; one shared pool makes the budget a single configurable number that fits.
+
+Both "constraints" came from our own source. Neither belonged in a vendor comparison, and the
+comparison could not be settled while they were in it.
+
+He does this himself, which is the signal to do it first: asked to confirm a Redis choice, he
+replied *"is the production version not allowing a higher ceiling? do we need those connections
+in the first place?"* — interrogating the constraint rather than picking a side. Meet him there.
+
+**And when he says "I'm not 100% sure" and gives a reason, the reason is the real question.**
+"The cost is concerning since I have no idea what the user base will be like" was not a statement
+about Cloud SQL versus Neon; it was an unresolved question about whether the environment is a
+bounded pre-launch campaign or permanent infrastructure. Restating the options in more detail does
+nothing. Name the premise his reason depends on and put *that* to him — including the option
+neither of you listed, which here was "do not build a second environment at all".
+
 ## Treat pushback on a recommendation as evidence, not hesitancy
 
 A challenge to a proposal here is a stress test, and is usually said to be one outright. The right

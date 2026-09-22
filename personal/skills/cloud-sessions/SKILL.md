@@ -103,6 +103,43 @@ plugins enabled only in user settings, and MCP servers added with `claude mcp ad
 flag under `enabledPlugins` does **not** mean the capability is unused — it often means it is
 registered as a user-scope MCP server instead, which is exactly the form that does not travel.
 
+## Unpushed DECISIONS are the expensive half of that, and git will not flag them
+
+The section above is about config. The costlier case is analysis: a cloud session sees the
+decisions you pushed, not the ones you made.
+
+Measured 2026-09-22, anime-calendar. A local session produced `docs/deployment-readiness.md` —
+a platform analysis that superseded the April implementation plan's choices (region, Postgres
+vendor, Redis vendor) and recorded a hard constraint the plan violated. It was never pushed.
+Cloud sessions then executed the plan, carefully and well: they corrected seven real errors in
+it, wrote tests, documented their reasoning. All of it against superseded platform choices.
+
+**Nothing detected this, and nothing could have.** Git merged the two lines of work cleanly,
+because neither side ever edited the other's file. Both documents were internally consistent.
+The conflict was *semantic* — two documents asserting different things about the same decision —
+and that is invisible to every tool in the chain.
+
+What made it recoverable rather than wasted: the code the cloud sessions wrote was
+vendor-neutral, so only the plan needed rewriting. That was luck, not design.
+
+**Before launching a cloud session:**
+
+- `git status` and `git log origin/main..HEAD`. Anything local and uncommitted, or committed and
+  unpushed, is invisible to the cloud session. Decide deliberately for each one.
+- Analysis documents and memory files are the ones you will forget, because they are not code
+  and nothing fails without them.
+
+**When picking up work a cloud session did:**
+
+- Ask what the session was working *from*, and check whether anything newer supersedes it. A plan
+  file with a date in its header is the thing to compare against your most recent analysis.
+- **The tell is a document's own header.** Here the plan's `**Architecture:**` line named vendors
+  that a newer doc had ruled out. One read of the top of the file, held against the newer
+  document, would have caught the whole thing in a minute.
+- Reconcile the documents *before* merging the code, and write the superseded choices down in a
+  table rather than silently overwriting them — otherwise the next person re-derives the old
+  answer from an older draft.
+
 ## A cloud session cannot write `.github/workflows/`
 
 Verified 2026-09-17. Creating or updating anything under `.github/workflows/` needs the GitHub
