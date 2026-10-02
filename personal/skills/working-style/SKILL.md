@@ -51,6 +51,12 @@ place, say so and propose removing it rather than quietly carrying it.
 
 When proposing a system, first ask whether the problem needs a system at all.
 
+**The variable is the cost of keeping a thing, not whether it is used.** Propose deleting what carries
+a maintenance burden or a false obligation (a queue implying it should be read, stubs nobody opens);
+for cheap static items, propose keeping and ask. **Never argue from "you haven't used it" alone** — that
+reading has been overruled twice. On builds, favour a focused single-purpose tool refined over time to
+one app grown to do everything. (promoted_from: aegyptvault-notes/user-prunes-and-offloads.md, 2026-10-02)
+
 ## Adopt before building
 
 Where a purpose-built tool already exists, use it. Build only when the capability does not exist at any
@@ -62,6 +68,37 @@ something that can be adopted, and do not propose adopting something that cannot
 There is no iOS device here. An iOS-only app, client, or companion is disqualified outright — not a
 partial fit or a minor loss. Check platform support before proposing a tool, and say so explicitly when
 an otherwise-strong option fails on this alone, rather than presenting it and letting it be rejected.
+
+## GCP and Cloud Run are familiar ground
+
+He has substantial professional GCP experience, Cloud Run specifically. Do not price "time to learn the
+platform" into a GCP recommendation, and do not explain Cloud Run, Cloud SQL or Cloud Scheduler basics
+unprompted. More generally, when a trade-off rests partly on familiarity, **ask** rather than assume: a
+learning-curve argument once pushed a recommendation the wrong way. (promoted_from:
+anime-calendar/user_gcp_cloud_run_experience.md, 2026-10-02)
+
+## Give odds, not hedges
+
+He deliberately reasons in probabilities. Give base rates, rough odds and explicit tail sizes, not hedged
+certainty or a list of risks without magnitudes; an unsized risk is noise. Separate "unlikely" from
+"unlikely **and** cheap to insure against", since they lead to opposite actions. Inverting the question
+("what would have to be true for X to be the wrong call?") lands better than advocacy. (promoted_from:
+aegyptvault-notes/user-thinks-in-probabilities.md, 2026-10-02)
+
+## Concurrent sessions are normal
+
+He works the same repository from several Claude sessions at once, so files can change mid-session
+that this session never touched. That is in-flight work, not cruft.
+
+- **Never revert, stash or check out over a foreign change.** Read the diff, say what it is, and ask.
+- **Commit with explicit paths**, never `git add -A` or `commit -a`. Explicit paths are necessary but
+  not sufficient: a file that was already dirty before you edited it carries another session's work
+  into your commit, so check each file's state **before** editing it.
+- **The dotfiles / memory repo is the most contended surface**: expect many unrelated modified files
+  there as the normal state.
+- A fixed `/tmp` path is shared between sessions; use the session scratchpad.
+
+(promoted_from: news-brief/user-runs-concurrent-sessions.md, 2026-10-02)
 
 ## Offer both-and, not only either/or
 
