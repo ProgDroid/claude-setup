@@ -68,9 +68,24 @@ underscores** all replaced by `-`.
 | Windows/MSYS | `/g/rustDev/aba` | `G--rustDev-aba` |
 | Underscores | `/g/flutterDev/dynamic_day_planner` | `G--flutterDev-dynamic-day-planner` |
 
-Cloud cwd is always `/home/user/repo`. Deriving the key wrongly fails **silently** — the write
-lands in a directory nothing reads, with no error. Underscore normalisation was missed twice, in
-two separate files, and both times the symptom was nothing happening.
+A single-repo cloud session starts in `/home/user/repo`. Deriving the key wrongly fails
+**silently** — the write lands in a directory nothing reads, with no error. Underscore
+normalisation was missed twice, in two separate files, and both times the symptom was nothing
+happening.
+
+### Multi-repo sessions start in `/home/user`, which is not a repo
+
+Verified 2026-10-03: a session with two repos (`/home/user/cue`, `/home/user/claude-setup`) started
+with cwd `/home/user`. `hydrate-memory.sh` fell back to `$PWD`, keyed `-home-user`, and hydrated
+nothing — every repo's `.claude/memory/` was invisible all session.
+
+**Fixed in personal 0.11.13:** when the cwd is not inside a repo, the hook hydrates each child git
+repo under its own key (`-home-user-<repo>`) and prints each repo's index under its own heading.
+
+**Still true at Stop:** `auto-commit.sh` and `sync-memory.sh` key from the repo root of whatever the
+cwd is when the turn ends, and auto-commit skips `main`. A memory written for repo A while the cwd
+sits in repo B, or while repo A is on `main`, is not carried back. In that case copy the local file
+into `<repo>/.claude/memory/` yourself (byte-identical, `diff -r` clean) and commit it.
 
 ## `CLAUDE_CLOUD_SESSION=1` is exported into every process
 
@@ -171,6 +186,26 @@ commit that *cannot* be pushed and a hook that asks for it to be pushed on every
 Breaking the loop means dropping the commit, not satisfying the hook. Verify the content is
 preserved elsewhere first (`git show <sha>:<path> | sha256sum` against the parked copy), then
 reset to the remote tip.
+
+## The WIP auto-commit fires while subagents are still working
+
+`auto-commit.sh` runs at the end of every **controller** turn. With background subagents (e.g.
+subagent-driven development) that means it commits **and pushes** their half-finished edits as
+`chore: auto-commit work in progress`, mid-task.
+
+Verified 2026-10-03, nine SDD tasks: seven WIP commits landed inside task ranges. One implementer
+saw them, soft-reset to squash them into its own commit, and the branch diverged from origin
+(ahead 1 / behind 2) with an identical tree. It was reconciled with a no-change merge rather than
+a force-push. Another found its work already committed and could only make an empty commit.
+
+- **Every implementer dispatch must say:** never `reset` / `rebase` / `amend` / force-push; if WIP
+  auto-commits appear, commit on top. (The hook's message used to say "Amend or squash freely",
+  which is what invited the rewrite; it now says to squash at merge time.)
+- **Build review diffs from the BASE recorded before dispatch**, never `HEAD~1`: a task's range
+  includes the WIP commits.
+- **When `stop-hook-git-check.sh` reports uncommitted changes while an implementer is running, do
+  not commit them** — they are the implementer's in-progress edits; it commits on finishing.
+- Expect to squash at merge if a readable `main` matters.
 
 ## Committing `.claude/` when it is gitignored
 

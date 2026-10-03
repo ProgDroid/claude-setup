@@ -55,7 +55,8 @@ git commit -q -F - >/dev/null 2>&1 <<'MSG' || exit 0
 chore: auto-commit work in progress
 
 Committed by the Stop hook so this session's work survives without
-another model turn. Amend or squash freely.
+another model turn. Already pushed: squash at merge time, never amend,
+reset or force-push on the branch.
 MSG
 
 # Best effort. A missing remote, no upstream, or a rejected push must not
