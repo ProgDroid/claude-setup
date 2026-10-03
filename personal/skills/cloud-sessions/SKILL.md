@@ -82,10 +82,14 @@ nothing — every repo's `.claude/memory/` was invisible all session.
 **Fixed in personal 0.11.13:** when the cwd is not inside a repo, the hook hydrates each child git
 repo under its own key (`-home-user-<repo>`) and prints each repo's index under its own heading.
 
-**Still true at Stop:** `auto-commit.sh` and `sync-memory.sh` key from the repo root of whatever the
-cwd is when the turn ends, and auto-commit skips `main`. A memory written for repo A while the cwd
-sits in repo B, or while repo A is on `main`, is not carried back. In that case copy the local file
-into `<repo>/.claude/memory/` yourself (byte-identical, `diff -r` clean) and commit it.
+**Fixed in personal 0.11.14 for the Stop side:** `auto-commit.sh` now acts on every repo of the
+session: the cwd's repo plus its sibling repos (when their parent is not itself a repo), or every
+child repo when the cwd is the plain parent. Each repo syncs memories under its own key and commits
+and pushes its own branch; repos on `main` are still left alone. A memory written for a repo that is
+on `main` is therefore still not carried back: commit it yourself on a branch.
+
+Because the hook now scans the parent of the cwd's repo, its tests create every repo inside its own
+`mktemp -d` parent. A repo created directly in `/tmp` would make every git repo in `/tmp` a sibling.
 
 ## `CLAUDE_CLOUD_SESSION=1` is exported into every process
 

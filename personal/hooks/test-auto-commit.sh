@@ -36,7 +36,11 @@ check() { # check <description> <expected: dirty|clean>
 
 newrepo() {
   local d
-  d="$(mktemp -d)"
+  # Each repo gets its OWN parent dir. The hook commits sibling repos of the
+  # cwd's repo (multi-repo sessions); a repo created directly in /tmp would make
+  # every other git repo under /tmp a "sibling" -- committed and pushed.
+  d="$(mktemp -d)/repo"
+  mkdir -p "$d"
   cd "$d" || exit 1
   git init -q -b main
   git config user.email t@example.com
@@ -128,6 +132,78 @@ if git show HEAD:.claude/memory/notes.md 2>/dev/null | grep -q 'fresh repo edit'
 else
   echo "  FAIL: committed a rollback of a repo memory file"
   fail=$((fail + 1))
+fi
+
+# --- Multi-repo sessions (verified missing 2026-10-03) ----------------------
+# A session with several repos starts in /home/user (not a repo) with each repo
+# cloned beneath it, and the cwd later drifts into whichever repo is being
+# worked on. The hook used to act only on the repo containing the cwd, so work
+# and memories in the other repos were never committed or pushed.
+
+# mkrepo <dir> <branch> : a repo with one commit, checked out on <branch>
+mkrepo() {
+  mkdir -p "$1"
+  git -C "$1" init -q -b main
+  git -C "$1" config user.email t@example.com
+  git -C "$1" config user.name Test
+  echo one > "$1/a.txt"
+  git -C "$1" add -A
+  git -C "$1" commit -qm init
+  [ "$2" = main ] || git -C "$1" checkout -qb "$2"
+}
+treestate() { [ -n "$(git -C "$1" status --porcelain)" ] && echo dirty || echo clean; }
+expect() { # expect <desc> <dir> <dirty|clean>
+  if [ "$(treestate "$2")" = "$3" ]; then echo "  PASS: $1"; pass=$((pass + 1))
+  else echo "  FAIL: $1 (wanted $3)"; fail=$((fail + 1)); fi
+}
+
+# 8. cwd is the plain parent dir: every child repo on a feature branch commits
+parent="$(mktemp -d)"
+mkrepo "$parent/alpha" feature/a; echo two > "$parent/alpha/a.txt"
+mkrepo "$parent/beta" feature/b;  echo two > "$parent/beta/a.txt"
+mkrepo "$parent/gamma" main;      echo two > "$parent/gamma/a.txt"
+mkdir -p "$parent/plain"; echo x > "$parent/plain/f.txt"
+( cd "$parent" && CLAUDE_CLOUD_SESSION=1 HOME="$(mktemp -d)" bash "$HOOK" >/dev/null 2>&1 )
+expect "multi-repo: cwd=parent commits child repo alpha" "$parent/alpha" clean
+expect "multi-repo: cwd=parent commits child repo beta" "$parent/beta" clean
+expect "multi-repo: a child repo on main is still left alone" "$parent/gamma" dirty
+
+# 9. cwd drifted INTO one repo: sibling repos are committed too
+parent="$(mktemp -d)"
+mkrepo "$parent/alpha" feature/a; echo two > "$parent/alpha/a.txt"
+mkrepo "$parent/beta" feature/b;  echo two > "$parent/beta/a.txt"
+( cd "$parent/alpha" && CLAUDE_CLOUD_SESSION=1 HOME="$(mktemp -d)" bash "$HOOK" >/dev/null 2>&1 )
+expect "multi-repo: cwd inside alpha still commits sibling beta" "$parent/beta" clean
+expect "multi-repo: cwd inside alpha commits alpha" "$parent/alpha" clean
+
+# 10. A sibling's WIP is pushed to its own remote branch
+parent="$(mktemp -d)"
+mkrepo "$parent/alpha" feature/a
+mkrepo "$parent/beta" feature/b; echo two > "$parent/beta/a.txt"
+git init -q --bare "$parent/beta-remote.git"
+git -C "$parent/beta" remote add origin "$parent/beta-remote.git"
+( cd "$parent/alpha" && CLAUDE_CLOUD_SESSION=1 HOME="$(mktemp -d)" bash "$HOOK" >/dev/null 2>&1 )
+if [ "$(git -C "$parent/beta-remote.git" rev-parse --verify -q refs/heads/feature/b)" = \
+     "$(git -C "$parent/beta" rev-parse HEAD)" ]; then
+  echo "  PASS: multi-repo: sibling WIP is pushed to its own branch"; pass=$((pass + 1))
+else
+  echo "  FAIL: multi-repo: sibling WIP was not pushed"; fail=$((fail + 1))
+fi
+
+# 11. Each repo's memories sync back under ITS OWN key, not the cwd's
+parent="$(mktemp -d)"; fh="$(mktemp -d)"
+mkrepo "$parent/alpha" feature/a
+mkrepo "$parent/beta" feature/b; mkdir -p "$parent/beta/.claude/memory"
+echo "- [b](b.md)" > "$parent/beta/.claude/memory/MEMORY.md"
+git -C "$parent/beta" add -A; git -C "$parent/beta" commit -qm mem
+bkey="$(memory_key "$(git -C "$parent/beta" rev-parse --show-toplevel)")"
+mkdir -p "$fh/.claude/projects/$bkey/memory"
+printf -- '---\nname: learned\n---\nlearned in session\n' > "$fh/.claude/projects/$bkey/memory/learned.md"
+( cd "$parent/alpha" && CLAUDE_CLOUD_SESSION=1 HOME="$fh" bash "$HOOK" >/dev/null 2>&1 )
+if git -C "$parent/beta" show HEAD:.claude/memory/learned.md 2>/dev/null | grep -q 'learned in session'; then
+  echo "  PASS: multi-repo: a sibling's session memory is synced and committed"; pass=$((pass + 1))
+else
+  echo "  FAIL: multi-repo: sibling memory not synced/committed"; fail=$((fail + 1))
 fi
 
 echo "-- $pass passed, $fail failed"
