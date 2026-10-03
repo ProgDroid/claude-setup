@@ -77,14 +77,15 @@ happening.
 
 Verified 2026-10-03: a session with two repos (`/home/user/cue`, `/home/user/claude-setup`) started
 with cwd `/home/user`. `hydrate-memory.sh` fell back to `$PWD`, keyed `-home-user`, and hydrated
-nothing — `~/.claude/projects/-home-user-cue/memory/` never existed, so the repo's
-`.claude/memory/` was invisible all session. At Stop, `auto-commit.sh` keys from the repo root of
-whatever the cwd is by then, finds no local memory dir, and no-ops; it also skips `main`.
+nothing — every repo's `.claude/memory/` was invisible all session.
 
-**Before writing a memory in a multi-repo session:** seed the local dir by hand
-(`mkdir -p ~/.claude/projects/-home-user-<repo>/memory && cp <repo>/.claude/memory/*.md` into it),
-edit the local copy, then copy it back so both are byte-identical (`diff -r` clean), and commit the
-repo copy yourself. Identical copies keep the one-way sync from reverting anything later.
+**Fixed in personal 0.11.13:** when the cwd is not inside a repo, the hook hydrates each child git
+repo under its own key (`-home-user-<repo>`) and prints each repo's index under its own heading.
+
+**Still true at Stop:** `auto-commit.sh` and `sync-memory.sh` key from the repo root of whatever the
+cwd is when the turn ends, and auto-commit skips `main`. A memory written for repo A while the cwd
+sits in repo B, or while repo A is on `main`, is not carried back. In that case copy the local file
+into `<repo>/.claude/memory/` yourself (byte-identical, `diff -r` clean) and commit it.
 
 ## `CLAUDE_CLOUD_SESSION=1` is exported into every process
 

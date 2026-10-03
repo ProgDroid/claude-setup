@@ -32,26 +32,15 @@ set -uo pipefail
 # A repo like dynamic_day_planner would hydrate into one directory and sync out
 # of another, silently. The manifest seeded below makes that agreement
 # load-bearing, so the two must share a single derivation.
-if . "$(dirname "$0")/lib-memory.sh" 2>/dev/null; then
-  # Derive from the SAME source sync-memory.sh and auto-commit.sh use -- git's
-  # toplevel -- not from $PWD. On Linux the two agree, which is why this was
-  # invisible; on Windows they are wildly different ($PWD is /tmp/tmp.X, git
-  # returns C:/Users/.../Temp/tmp.X), so the two hooks would key the same repo
-  # to two different directories. Harmless while hydration only wrote files,
-  # but the manifest below makes agreement load-bearing: seeded under one key
-  # and read under another, it would never be found and every session edit
-  # would look like a divergence.
-  _root="$(git rev-parse --show-toplevel 2>/dev/null)" || _root=""
-  [ -n "$_root" ] || _root="$PWD"
-  key="$(memory_key "$_root")" || key=""
-else
-  key="$(printf '%s' "$PWD" | tr '/' '-')"
-fi
-[ -n "$key" ] || exit 0
+lib_ok=0
+. "$(dirname "$0")/lib-memory.sh" 2>/dev/null && lib_ok=1
 
-dst="$HOME/.claude/projects/$key/memory"
-mkdir -p "$dst" 2>/dev/null || exit 0
+key_for() {
+  if [ "$lib_ok" -eq 1 ]; then memory_key "$1"; else printf '%s' "$1" | tr '/' '-'; fi
+}
 
+# hydrate_root <key-root> <repo-memory-dir>
+#
 # Two layers, applied in this order so the more specific one wins:
 #
 #   1. Plugin memories  -- cross-project knowledge that is true everywhere
@@ -64,25 +53,57 @@ mkdir -p "$dst" 2>/dev/null || exit 0
 # WARNING: the plugin repo is public. Anything placed in its memory/ directory
 # is world-readable. Cross-project memories that are personal, employer-related,
 # or otherwise private belong in local user-scope memory, not here.
-
-if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -d "$CLAUDE_PLUGIN_ROOT/memory" ]; then
-  cp -a "$CLAUDE_PLUGIN_ROOT/memory/." "$dst/" 2>/dev/null || true
-fi
-
-src="$PWD/.claude/memory"
-if [ -d "$src" ]; then
-  cp -a "$src/." "$dst/" 2>/dev/null || true
-fi
-
-# Record what we just loaded as the sync baseline, while local and repo are
+#
+# Then record what was loaded as the sync baseline, while local and repo are
 # still identical. sync_memory_to_repo overwrites a repo file only when it is
 # byte-identical to this record -- proof the file is our own prior output. With
 # no baseline, every memory this session edits looks like an independent
 # divergence at Stop and is refused, which would silently disable cloud memory
 # write-back entirely. Seeding is therefore required for correctness here, not
 # a nicety.
-if command -v seed_memory_manifest >/dev/null 2>&1 || type seed_memory_manifest >/dev/null 2>&1; then
-  seed_memory_manifest "$dst" "$HOME/.claude/projects/$key/.memory-sync-manifest" || true
+hydrate_root() {
+  _key="$(key_for "$1")" || return 0
+  [ -n "$_key" ] || return 0
+  _dst="$HOME/.claude/projects/$_key/memory"
+  mkdir -p "$_dst" 2>/dev/null || return 0
+  if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -d "$CLAUDE_PLUGIN_ROOT/memory" ]; then
+    cp -a "$CLAUDE_PLUGIN_ROOT/memory/." "$_dst/" 2>/dev/null || true
+  fi
+  if [ -d "$2" ]; then
+    cp -a "$2/." "$_dst/" 2>/dev/null || true
+  fi
+  if [ "$lib_ok" -eq 1 ]; then
+    seed_memory_manifest "$_dst" "$HOME/.claude/projects/$_key/.memory-sync-manifest" || true
+  fi
+}
+
+# Which roots to hydrate.
+#
+# Single repo (the usual cloud layout, cwd /home/user/repo): key from git's
+# toplevel -- the SAME source sync-memory.sh and auto-commit.sh use -- not from
+# $PWD. On Linux the two agree, which is why this was invisible; on Windows
+# they are wildly different ($PWD is /tmp/tmp.X, git returns C:/Users/.../Temp/
+# tmp.X), so the hooks would key the same repo to two different directories.
+#
+# Multi-repo (verified 2026-10-03): a session with several repos starts in
+# /home/user, which is NOT a repo, with each repo cloned beneath it. Keying from
+# $PWD alone hydrated '-home-user' and nothing else, so every repo's committed
+# memory was invisible all session. Hydrate each child git repo under its own
+# key -- the key the Stop hooks derive when the cwd is inside that repo -- and
+# still hydrate $PWD itself so the plugin layer lands in the session's own dir.
+top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
+repos=()
+if [ -n "$top" ]; then
+  hydrate_root "$top" "$PWD/.claude/memory"
+else
+  for d in "$PWD"/*/; do
+    d="${d%/}"
+    [ -e "$d/.git" ] && repos+=("$d")
+  done
+  hydrate_root "$PWD" "$PWD/.claude/memory"
+  for r in "${repos[@]}"; do
+    hydrate_root "$r" "$r/.claude/memory"
+  done
 fi
 
 # --- Emit the index into the session ---------------------------------------
@@ -100,18 +121,28 @@ fi
 # keeps startup cost bounded regardless of how large the corpus grows.
 
 emitted=0
+header() {
+  [ "$emitted" -eq 0 ] || return 0
+  echo "## Project memory"
+  echo
+  echo "Committed memories, loaded because a cloud session starts with no"
+  echo "user-scope memory. Read the full text of any entry below from the"
+  echo "repo's \`.claude/memory/<name>.md\` when it is relevant to the task."
+  echo
+  emitted=1
+}
 for idx in "${CLAUDE_PLUGIN_ROOT:-/nonexistent}/memory/MEMORY.md" "$PWD/.claude/memory/MEMORY.md"; do
   [ -f "$idx" ] || continue
-  if [ "$emitted" -eq 0 ]; then
-    echo "## Project memory"
-    echo
-    echo "Committed memories for this repository, loaded because a cloud session"
-    echo "starts with no user-scope memory. Read the full text of any entry below"
-    echo "from \`.claude/memory/<name>.md\` when it is relevant to the task."
-    echo
-    emitted=1
-  fi
+  header
   cat "$idx"
+  echo
+done
+for r in "${repos[@]}"; do
+  [ -f "$r/.claude/memory/MEMORY.md" ] || continue
+  header
+  echo "### ${r##*/} (\`$r/.claude/memory/\`)"
+  echo
+  cat "$r/.claude/memory/MEMORY.md"
   echo
 done
 

@@ -162,5 +162,41 @@ grep -q 'learned during the session' "$repo/.claude/memory/thing.md" \
   && ok "round trip: a memory edited after hydration syncs back to the repo" \
   || bad "round trip broken -- the session's edit never reached the repo"
 
+# 12. MULTI-REPO session: cwd is a plain parent dir (cloud: /home/user) holding
+#     several repos. Each child repo's memories must hydrate under ITS OWN key --
+#     the key auto-commit.sh/sync-memory.sh later derive from that repo's root.
+#     Verified missing 2026-10-03: only the parent's key was used, so every
+#     repo's memory was invisible all session.
+parent="$(mktemp -d)"; fakehome="$(mktemp -d)"
+for r in alpha beta_two; do
+  mkdir -p "$parent/$r/.claude/memory"
+  git -C "$parent/$r" init -q >/dev/null 2>&1
+  echo "- [$r note](note.md) - about $r" > "$parent/$r/.claude/memory/MEMORY.md"
+  printf -- '---\nname: note\n---\n%s body\n' "$r" > "$parent/$r/.claude/memory/note.md"
+done
+mkdir -p "$parent/not-a-repo/.claude/memory"
+echo "- [stray](stray.md)" > "$parent/not-a-repo/.claude/memory/MEMORY.md"
+out="$(cd "$parent" && HOME="$fakehome" CLAUDE_CLOUD_SESSION=1 bash "$HOOK" 2>/dev/null)"
+akey="$(printf '%s' "$parent/alpha" | tr '/_' '--')"
+bkey="$(printf '%s' "$parent/beta_two" | tr '/_' '--')"
+if [ -f "$fakehome/.claude/projects/$akey/memory/note.md" ] \
+   && [ -f "$fakehome/.claude/projects/$bkey/memory/note.md" ] \
+   && grep -q 'beta_two body' "$fakehome/.claude/projects/$bkey/memory/note.md"; then
+  ok "multi-repo: each child repo hydrates under its own key"
+else
+  bad "multi-repo: child repos not hydrated under their own keys"
+fi
+[ -f "$fakehome/.claude/projects/$akey/.memory-sync-manifest" ] \
+  && ok "multi-repo: each child repo gets a sync baseline" \
+  || bad "multi-repo: no sync baseline seeded for a child repo"
+if printf '%s' "$out" | grep -q 'alpha note' && printf '%s' "$out" | grep -q 'beta_two note'; then
+  ok "multi-repo: every child repo's index is printed"
+else
+  bad "multi-repo: child indexes not printed"
+fi
+printf '%s' "$out" | grep -q 'stray' \
+  && bad "multi-repo: a non-git child directory was treated as a repo" \
+  || ok "multi-repo: non-git child directories are ignored"
+
 echo "-- $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
