@@ -55,16 +55,25 @@ memory_key() {
 # _memory_hash <file> -> a content digest on stdout, non-zero if no hasher
 # exists. Content, never metadata -- the whole point is to compare what a file
 # SAYS, not when it was last touched.
+#
+# CARRIAGE RETURNS ARE STRIPPED before hashing, so LF and CRLF copies of the
+# same text digest identically. Measured 2026-10-03 in ds-job-analysis
+# (core.autocrlf=true, no .gitattributes): this sync wrote LF files, a merge
+# checkout rewrote them as CRLF, and every one then failed the lineage check and
+# was reported as "diverged" -- git's own conversion read as a stranger's edit.
+# Line endings are not something a memory SAYS. `tr -d '\r'` rather than a
+# sed `\r$` anchor because BSD sed (macOS) does not understand `\r`; a lone CR
+# mid-line is not a meaningful difference in a Markdown memory either.
 _memory_hash() {
   [ -f "$1" ] || return 1
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" 2>/dev/null | cut -d' ' -f1
+    tr -d '\r' < "$1" 2>/dev/null | sha256sum 2>/dev/null | cut -d' ' -f1
   elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1
+    tr -d '\r' < "$1" 2>/dev/null | shasum -a 256 2>/dev/null | cut -d' ' -f1
   elif command -v md5sum >/dev/null 2>&1; then
-    md5sum "$1" 2>/dev/null | cut -d' ' -f1
+    tr -d '\r' < "$1" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1
   elif command -v cksum >/dev/null 2>&1; then
-    cksum "$1" 2>/dev/null | tr -s ' ' | cut -d' ' -f1,2 | tr ' ' '-'
+    tr -d '\r' < "$1" 2>/dev/null | cksum 2>/dev/null | tr -s ' ' | cut -d' ' -f1,2 | tr ' ' '-'
   else
     return 1
   fi

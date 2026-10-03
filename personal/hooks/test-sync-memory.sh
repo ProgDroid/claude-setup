@@ -280,6 +280,49 @@ HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
   && ok "never deletes a repo memory that does not exist locally" \
   || bad "removed a repo-only memory"
 
+# 14. A line-ending-only change is not a divergence.
+#
+# Measured 2026-10-03 in ds-job-analysis (core.autocrlf=true, no
+# .gitattributes): this sync wrote LF files into .claude/memory/, a merge
+# checkout rewrote them as CRLF, and the next Stop reported every one of them as
+# "diverged" and refused to update them -- twice in one session. Same text,
+# different bytes: git's own conversion, not an independent history. Simulate
+# the checkout by rewriting the repo copy with CRLF after lineage exists.
+to_crlf() { awk '{ printf "%s\r\n", $0 }' "$1" > "$1.crlf" && mv -f "$1.crlf" "$1"; }
+setup
+mkdir -p "$repo/.claude/memory"
+HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1          # establish lineage (LF)
+to_crlf "$repo/.claude/memory/learned.md"              # git checkout -> CRLF
+out="$(HOME="$fakehome" bash "$HOOK" 2>/dev/null)"
+[ -z "$out" ] \
+  && ok "a CRLF-only rewrite of a synced file is not reported as diverged" \
+  || bad "reported a CRLF-only rewrite as a divergence (got: $out)"
+
+# 15. ...and the next real local edit still flows over the CRLF copy.
+printf -- '---\nname: learned\n---\nedit after checkout\n' \
+  > "$fakehome/.claude/projects/$key/memory/learned.md"
+out="$(HOME="$fakehome" bash "$HOOK" 2>/dev/null)"
+if grep -q 'edit after checkout' "$repo/.claude/memory/learned.md" && [ -z "$out" ]; then
+  ok "syncs a local edit over its own CRLF-converted prior output"
+else
+  bad "a CRLF checkout froze the sync (got: ${out:-<empty>})"
+fi
+
+# 16. The normalisation must not hide a REAL independent edit: a CRLF repo file
+# whose text differs is still a divergence and is still left alone.
+setup
+mkdir -p "$repo/.claude/memory"
+HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1          # establish lineage
+printf -- '---\nname: learned\n---\nindependent cloud history\n' \
+  > "$repo/.claude/memory/learned.md"
+to_crlf "$repo/.claude/memory/learned.md"
+printf -- '---\nname: learned\n---\nlocal draft\n' \
+  > "$fakehome/.claude/projects/$key/memory/learned.md"
+HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
+grep -q 'independent cloud history' "$repo/.claude/memory/learned.md" \
+  && ok "still keeps a CRLF repo file whose text was edited independently" \
+  || bad "line-ending normalisation let an independent edit be clobbered"
+
 # 7. Outside a git repo -> exit 0
 d="$(mktemp -d)"; cd "$d" || exit 1
 HOME="$(mktemp -d)" bash "$HOOK" >/dev/null 2>&1
