@@ -17,6 +17,22 @@ thorough path is chosen consistently enough that leading with the minimal one wa
 This is not a preference for *more work* — it is a preference for the option that is actually correct,
 stated plainly, with its cost named.
 
+**When he says he won't come back to it, build the end state now.** Scoping a feature into "v1 now,
+the rest out of scope", he pushed back: *"we should make the version we want this to eventually be
+now, I won't return to this much."* For a tool he will run but not revisit, a deferred phase is a
+phase that never ships. Pull the out-of-scope list back in and plan the finished version, rather than
+proposing a phased roadmap he would have to remember to resume. (ds-job-analysis, 2026-10-02)
+
+## LLM features run on agents and his subscription, not API keys
+
+When a feature needs an LLM (extraction, classification, analysis), do not build an API-key-backed
+call into the application. Deliver it as something Claude Code agents drive on his subscription: an
+MCP tool surface plus a skill or a sandboxed agent. Stated directly: *"I don't want to have to set up
+API keys and use it that way, I want to use agents via subscription."* The application stays
+deterministic (it stores, validates and counts); the model work happens in the session. Ship the
+agents and skills as a plugin in the repo so the other user gets them too. (ds-job-analysis,
+2026-10-02)
+
 ## Friction is the deciding variable
 
 Adoption, continued use, and abandonment here are driven by friction more than by capability — stated
