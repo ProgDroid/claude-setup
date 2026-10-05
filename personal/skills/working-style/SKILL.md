@@ -175,6 +175,19 @@ bounded pre-launch campaign or permanent infrastructure. Restating the options i
 nothing. Name the premise his reason depends on and put *that* to him — including the option
 neither of you listed, which here was "do not build a second environment at all".
 
+## The descriptions on a question's options are claims too
+
+He decides on the premises an option states, without seeing the code behind them. A false clause in
+an option description produces a real decision about the wrong thing. Measured 2026-09-22
+(swarm-music): an option promised a renderer would replay "exactly what you played", he picked it,
+and the code's own doc said the two only agree within a tolerance. Retracted and re-asked, the
+corrected question produced a different design.
+
+Before asking, list every factual clause in the options ("replays exactly", "costs one restart", "no
+API change") and check each against the code or a measurement. Phrase anything you cannot check in
+time as unknown. This is the sibling of a menu that cannot express the true answer: here the menu
+states a false fact.
+
 ## Treat pushback on a recommendation as evidence, not hesitancy
 
 A challenge to a proposal here is a stress test, and is usually said to be one outright. The right
@@ -306,6 +319,17 @@ pick it up from the file alone without the conversation that produced it.
 Quality bar is expected to rise over time; concrete suggestions for raising it are welcome and should be
 offered proactively rather than waiting to be asked.
 
+
+## Text that goes out under his name: no comma before "and"
+
+He never puts a comma before "and": no Oxford comma and none before an "and" that joins two
+clauses. Split a long sentence instead. A draft that has one does not sound like him.
+
+**The scope is external communication written as him**: cover letters, application answers,
+profiles, emails, messages he will send. Before showing him such a draft, grep it for `, and` and fix
+every hit, including any your own edits introduced. It does NOT apply to internal artifacts in his
+own systems — he said so outright (2026-10-05) about his Obsidian vault's wiki pages, which are
+written in his first person but never leave it.
 
 ## Show, don't describe, when the question is visual
 
