@@ -17,8 +17,9 @@
 #   Fires only when ALL of these hold:
 #     - the command looks like a SEARCH (grep/rg/find/git log -S/git grep/ls glob...)
 #     - it was not asked to be silent (-q, --quiet, >/dev/null, redirected to a file)
-#     - it did not ask for a count (-c prints 0, which is output, not absence)
-#     - the captured output is empty after trimming
+#     - the captured output is empty after trimming -- or, for a count (-c/--count),
+#       every printed count is zero (changed 2026-10-05; counts used to be exempt)
+#   The Grep and Glob TOOLS are covered too (2026-10-05): matcher Bash|Grep|Glob.
 #
 # SHAPE IS UNVERIFIED UNTIL IT FIRES
 #   The exact PostToolUse payload for Bash is not documented here, so the output is
@@ -33,6 +34,12 @@ set -uo pipefail
 
 DEBUG_LOG="${HOME}/.claude/negative-result-guard.debug"
 
+emit() {
+  local msg="NEGATIVE RESULT. That search returned nothing, which is the moment the absent/unknown distinction gets collapsed. Before treating this as evidence of absence, prove the probe can return something -- ask for a count, query the metadata, or run it against a case you KNOW exists. State the evidence (this command found nothing), never the conclusion (there is no X). Note also that only grep exits 1 on no match: find, git ls-files and jq exit 0 and print nothing."
+  jq -n --arg ctx "$msg" \
+    '{hookSpecificOutput:{hookEventName:"PostToolUse", additionalContext:$ctx}}'
+}
+
 json_input=$(cat)
 
 # Cheap pre-filter before any JSON parsing. This hook runs on EVERY Bash call, and
@@ -43,9 +50,40 @@ json_input=$(cat)
 # It can only produce false POSITIVES -- a command whose OUTPUT merely mentions grep
 # survives this and is then rejected by the real check below -- so correctness is
 # unchanged and only the fast path moves.
-printf '%s' "$json_input" | grep -qE 'grep|\brg\b|find|locate|\bag\b|\back\b|ls-files|--contains' || exit 0
+printf '%s' "$json_input" | grep -qE 'grep|\brg\b|find|locate|\bag\b|\back\b|ls-files|--contains|"tool_name" *: *"(Grep|Glob)"' || exit 0
 
 command -v jq >/dev/null 2>&1 || exit 0
+
+# ---------- the Grep and Glob TOOLS (added 2026-10-05) ----------
+# Until 2026-10-05 this guard watched Bash only, so an empty result from the Grep or
+# Glob tool -- the preferred search tools -- never reached it. Shapes MEASURED from a
+# real transcript's toolUseResult, not guessed:
+#   Grep content, empty : {mode:"content", numFiles:0, filenames:[], content:"", numLines:0}
+#   Grep count, found   : {mode:"count", numFiles:3, filenames:[], content:"path:1\n...", numMatches:6}
+#   Glob, empty         : {filenames:[], numFiles:0, totalMatches:0, truncated:false}
+# Empty means every result-bearing field is empty at once, so a mode that leaves one
+# field blank while another carries the hits (count mode keeps filenames:[]) still
+# reads as found. An object with none of these keys is an unknown shape: silent, logged.
+tool=$(printf '%s' "$json_input" | jq -r '.tool_name // empty' 2>/dev/null)
+if [ "$tool" = "Grep" ] || [ "$tool" = "Glob" ]; then
+  verdict=$(printf '%s' "$json_input" | jq -r '
+    .tool_response as $r
+    | if ($r | type) != "object" then "unknown"
+      elif (($r | has("filenames")) or ($r | has("content")) or ($r | has("numFiles"))) | not then "unknown"
+      elif ((($r.filenames // []) | length) == 0)
+           and ((($r.content // "") | gsub("\\s"; "")) == "")
+           and (($r.numMatches // 0) == 0)
+           and (($r.numFiles // 0) == 0)
+        then "empty"
+      else "found" end' 2>/dev/null)
+  case "$verdict" in
+    empty) emit ;;
+    unknown)
+      keys=$(printf '%s' "$json_input" | jq -rc '.tool_response | if type=="object" then keys else type end' 2>/dev/null)
+      printf '%s  unknown %s tool_response shape: %s\n' "$(date -u +%FT%TZ)" "$tool" "$keys" >> "$DEBUG_LOG" 2>/dev/null ;;
+  esac
+  exit 0
+fi
 
 cmd=$(printf '%s' "$json_input" | jq -r '.tool_input.command // empty' 2>/dev/null)
 [ -n "$cmd" ] || exit 0
@@ -64,8 +102,16 @@ printf '%s' "$cmd" | grep -qE '(^|[;&|(]|&&|\|\|)[[:space:]]*(grep|rg|find|locat
 # Applied globally it would read `find . -exec ...` as a -c flag, since the cluster
 # "exec" ends in c -- a suppression that would silently disable the guard for the
 # most common find form.
+#
+# COUNT MODE CHANGED 2026-10-05. -c used to exit here on the theory that a printed 0
+# is output, not absence. It is absence -- a count of zero is the same claim as an
+# empty listing -- and the exemption was where a real miss came through (two exact-
+# spelling `grep -c` probes read 0 for facts present under other wording). Now -c is
+# remembered and judged below: it fires only when EVERY printed count is zero.
+count_mode=0
 if printf '%s' "$cmd" | grep -qE '(^|[[:space:]/|(])(grep|rg)([[:space:]]|$)'; then
-    printf '%s' "$cmd" | grep -qE '(^|[[:space:]])-[a-zA-Z]*[qc]([[:space:]]|$)|--quiet|--count' && exit 0
+    printf '%s' "$cmd" | grep -qE '(^|[[:space:]])-[a-zA-Z]*q[a-zA-Z]*([[:space:]]|$)|--quiet' && exit 0
+    printf '%s' "$cmd" | grep -qE '(^|[[:space:]])-[a-zA-Z]*c[a-zA-Z]*([[:space:]]|$)|--count' && count_mode=1
 fi
 
 # A redirect means the output went to a file or the void, so "empty" here says
@@ -102,11 +148,23 @@ fi
 
 # ---------- empty? ----------
 trimmed=$(printf '%s' "$out" | tr -d '[:space:]')
+
+if [ "$count_mode" = 1 ]; then
+  # A count that printed nothing at all is not a count result; stay silent as before.
+  [ -n "$trimmed" ] || exit 0
+  # Fire only if every non-blank line is a zero count: `0`, or `path:0` per file.
+  # One non-zero line means the search found something somewhere.
+  printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | grep -qvE '(^|:)[[:space:]]*0[[:space:]]*$' && exit 0
+  emit
+  exit 0
+fi
+
 [ -z "$trimmed" ] || exit 0
 
-msg="NEGATIVE RESULT. That search returned nothing, which is the moment the absent/unknown distinction gets collapsed. Before treating this as evidence of absence, prove the probe can return something -- ask for a count, query the metadata, or run it against a case you KNOW exists. State the evidence (this command found nothing), never the conclusion (there is no X). Note also that only grep exits 1 on no match: find, git ls-files and jq exit 0 and print nothing."
-
-jq -n --arg ctx "$msg" \
-  '{hookSpecificOutput:{hookEventName:"PostToolUse", additionalContext:$ctx}}'
+# KNOWN BLIND SPOT, recorded rather than guessed at: a compound command that also
+# prints anything else (an `echo REAL_EXIT=$?`, a label, a second probe) is never
+# "empty", so an empty search inside it cannot be seen here. Attributing output to
+# segments of a shell line is not reliable enough to fire on.
+emit
 
 exit 0

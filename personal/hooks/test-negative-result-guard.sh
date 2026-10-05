@@ -3,8 +3,10 @@
 #
 # Run:  bash personal/hooks/test-negative-result-guard.sh
 #
-# The payload shape for a Bash PostToolUse is NOT verified here -- these tests cover
-# both plausible field names (stdout / output) plus the string form, and separately
+# Payload shapes were MEASURED on 2026-10-05 from a real transcript's toolUseResult:
+# Bash is {stdout, stderr, interrupted, isImage, noOutputExpected} with no exit code;
+# the Grep and Glob fixtures below are copied from real results. The older cases still
+# cover the alternative field names (output) and the string form, and separately
 # assert that an UNKNOWN shape stays silent rather than guessing. That is the whole
 # safety property: a guard that fires on a shape it does not understand is worse
 # than one that does nothing.
@@ -128,6 +130,60 @@ out=$(jq -n --arg c 'grep -rn needle .' \
 [ -s "$tmphome/.claude/negative-result-guard.debug" ] \
   && ok "an unrecognised shape is logged for diagnosis" \
   || bad "unrecognised shape was not logged"
+
+echo "== COUNT mode: a count of zero is an empty result (2026-10-05) =="
+
+[ "$(fired 'grep -c needle file' "0")" = YES ] \
+  && ok "grep -c printing 0 warns" \
+  || bad "grep -c printing 0 did not warn"
+
+[ "$(fired 'grep -c needle a.md b.md' "$(printf 'a.md:0\nb.md:0')")" = YES ] \
+  && ok "per-file counts all zero warns" \
+  || bad "all-zero per-file counts did not warn"
+
+[ "$(fired 'grep -c needle a.md b.md' "$(printf 'a.md:0\nb.md:3')")" = NO ] \
+  && ok "one non-zero count does not warn" \
+  || bad "warned although one file matched"
+
+[ "$(fired 'grep -c needle file' "12")" = NO ] \
+  && ok "a count of 12 does not warn (10, 12 are not zero)" \
+  || bad "warned on a non-zero count ending in a digit"
+
+[ "$(fired 'grep -cr needle .' "0")" = YES ] \
+  && ok "c anywhere in the cluster counts as count mode" \
+  || bad "-cr was not recognised as count mode"
+
+echo "== the Grep and Glob TOOLS (shapes measured 2026-10-05) =="
+
+# firedtool <tool> <tool_response JSON>  -> YES | NO
+firedtool() {
+  jq -n --arg t "$1" --argjson r "$2" '{tool_name:$t, tool_input:{pattern:"x"}, tool_response:$r}' \
+    | bash "$HOOK" 2>/dev/null \
+    | jq -r 'if (.hookSpecificOutput.additionalContext // "") | test("NEGATIVE RESULT") then "YES" else "NO" end' 2>/dev/null \
+    | grep -q YES && echo YES || echo NO
+}
+
+[ "$(firedtool Grep '{"mode":"content","numFiles":0,"filenames":[],"content":"","numLines":0,"totalLines":0}')" = YES ] \
+  && ok "empty Grep content mode warns" || bad "empty Grep content mode did not warn"
+[ "$(firedtool Grep '{"mode":"files_with_matches","numFiles":0,"filenames":[]}')" = YES ] \
+  && ok "empty Grep files mode warns" || bad "empty Grep files mode did not warn"
+[ "$(firedtool Grep '{"mode":"count","numFiles":0,"filenames":[],"content":"","numMatches":0}')" = YES ] \
+  && ok "empty Grep count mode warns" || bad "empty Grep count mode did not warn"
+[ "$(firedtool Grep '{"mode":"content","numFiles":0,"filenames":[],"content":"a.md:3:needle","numLines":1}')" = NO ] \
+  && ok "Grep content with a hit does not warn" || bad "warned on a Grep content hit"
+[ "$(firedtool Grep '{"mode":"count","numFiles":3,"filenames":[],"content":"a.md:1\nb.md:3","numMatches":4}')" = NO ] \
+  && ok "Grep count with hits does not warn (filenames stays empty in count mode)" || bad "warned on a Grep count hit"
+[ "$(firedtool Grep '{"mode":"files_with_matches","numFiles":1,"filenames":["a.md"]}')" = NO ] \
+  && ok "Grep files with a hit does not warn" || bad "warned on a Grep files hit"
+[ "$(firedtool Glob '{"filenames":[],"durationMs":157,"numFiles":0,"truncated":false,"totalMatches":0,"countIsComplete":true}')" = YES ] \
+  && ok "empty Glob warns" || bad "empty Glob did not warn"
+[ "$(firedtool Glob '{"filenames":["a.md"],"numFiles":1,"truncated":false}')" = NO ] \
+  && ok "Glob with a hit does not warn" || bad "warned on a Glob hit"
+
+tmphome2="$(mktemp -d)"; mkdir -p "$tmphome2/.claude"
+out=$(jq -n '{tool_name:"Grep", tool_input:{pattern:"x"}, tool_response:{someNewField:1}}' | HOME="$tmphome2" bash "$HOOK" 2>/dev/null)
+[ -z "$out" ] && ok "unknown Grep shape stays silent" || bad "fired on an unknown Grep shape"
+[ -s "$tmphome2/.claude/negative-result-guard.debug" ] && ok "unknown Grep shape is logged" || bad "unknown Grep shape was not logged"
 
 echo
 echo "passed: $pass   failed: $fail"

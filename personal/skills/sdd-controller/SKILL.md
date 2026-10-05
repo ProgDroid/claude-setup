@@ -88,6 +88,13 @@ repeatedly audited the controller too.
   in the chain comes from the implementer it measures. One controller gate closes the chain.
 - **A count moving the wrong way is the tell** — "40 tests" right after adding two, when the true
   number was 60.
+- **Before a number scores a fix, name the layer the fix lives in** — prompt, parser, merge,
+  render — and confirm the probe actually executes that layer. A well-formed, correctly computed
+  number can answer an adjacent question: a scorer that read the model's raw reply could not see
+  enforcement inside `merge_ledger`. **Verification done inside subagents is invisible from the
+  controller's transcript**, so anything that reads only that transcript measures the controller,
+  not the work — the 2026-10-05 Tier 2 read found 0 genuine unverified claims in 50 once this was
+  accounted for. Tell: a second signal from the same run that the headline cannot explain.
 - **A reviewer's suggested fix is a hypothesis.** Twice, applying one verbatim would have introduced
   a bug. The problem is the finding; the cure is a suggestion. A claim about framework behaviour
   needs the framework's source opened.

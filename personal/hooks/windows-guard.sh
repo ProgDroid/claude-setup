@@ -255,6 +255,23 @@ if [[ -z "$warn" ]] && echo "$scan" | grep -qE '(Set|Add)-Content' \
     warn="Set-Content/Add-Content default to the system ANSI codepage in PS 5.1. Pass -Encoding utf8 explicitly when other tools will read the file."
 fi
 
+# e. a FILE LIST piped into plain xargs splits on whitespace, and this machine's home
+#    path has a space in it. Added 2026-10-05 from the escalation queue (probe-failures
+#    section 12): a list containing spaces reported 0 files over 1,200 bytes when a
+#    26,633-byte file was known to be in the set -- a false negative, not an error.
+#
+#    Scoped to keep the false-positive rate down, which is what retired rules a and b's
+#    first versions: fires only when the producer is a FILENAME source (find, ls, fd,
+#    git ls-files / diff --name-only / status, grep -l, rg -l / --files), and stays
+#    silent when xargs already has a safe delimiter (-0, --null, -d, --delimiter, -I/-i,
+#    --replace). Only option-shaped tokens directly after xargs count as ITS flags, so
+#    the -i in `xargs grep -i` belongs to grep and does not silence the rule.
+if [[ -z "$warn" ]] \
+   && echo "$scan" | grep -qE '(^|[;&|(][[:space:]]*)(find|ls|fd|git[[:space:]]+(ls-files|diff[^|]*--name-only|status)|grep[^|]*[[:space:]]-[a-zA-Z]*l[a-zA-Z]*|rg[^|]*[[:space:]](-[a-zA-Z]*l[a-zA-Z]*|--files))([[:space:]][^|]*)?\|[[:space:]]*xargs([[:space:]]|$)' \
+   && ! echo "$scan" | grep -qE "xargs([[:space:]]+-[^[:space:]]*)*[[:space:]]+(-0|--null|-d|--delimiter|-I|-i|--replace)"; then
+    warn="xargs splits on whitespace, and the home path here contains a space: a file list piped into plain xargs turns one path into two arguments and silently drops matches. Use xargs -d '\\n' (or find -print0 / git ls-files -z with xargs -0), or -I{} to take one line at a time."
+fi
+
 if [[ -n "$warn" ]]; then
     if command -v jq >/dev/null 2>&1; then
         jq -n --arg w "$warn" \

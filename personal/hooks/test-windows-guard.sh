@@ -212,6 +212,7 @@ warn_kind() {
     *"belongs to tail/head"*)          echo EXIT_CODE ;;
     *"Large heredocs"*)                echo HEREDOC ;;
     *"system ANSI codepage"*)          echo ENCODING ;;
+    *"xargs splits on whitespace"*)    echo XARGS ;;
     *)                                 echo NONE ;;
   esac
 }
@@ -342,6 +343,19 @@ NEWLINE_STATUS=$(printf 'cmd --all | head\necho "rc=$?"')
 [ "$(warn_kind 'pytest -q > log 2>&1; echo "REAL_EXIT=$?"; tail -20 log')" = NONE ] \
   && ok "a build with the remedy applied does not warn" \
   || bad "rule b fires on a build that already writes REAL_EXIT"
+
+echo "== rule e: a file list into plain xargs (added 2026-10-05) =="
+
+for c in 'find . -name "*.md" | xargs grep -l needle' 'git ls-files | xargs wc -l' \
+         'grep -rl needle . | xargs wc -c' 'find . -name "*.py" | xargs grep -i todo'; do
+  [ "$(warn_kind "$c")" = XARGS ] && ok "rule e warns: $c" || bad "rule e missed: $c"
+done
+# The last one above is the discriminating case: the -i belongs to grep, not xargs.
+
+for c in 'find . -print0 | xargs -0 wc -l' "git ls-files | xargs -d '\\n' wc -l" \
+         'ls *.md | xargs -I{} cp {} out/' 'echo a b c | xargs -n1 echo'; do
+  [ "$(warn_kind "$c")" = NONE ] && ok "rule e silent: $c" || bad "rule e false positive: $c"
+done
 
 echo
 echo "passed: $pass   failed: $fail   known-fail: $known"

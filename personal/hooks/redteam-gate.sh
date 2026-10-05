@@ -84,6 +84,11 @@ fi
 # a verbose reviewer to please be shorter, and leaves an artifact worth revisiting.
 # reviews/ deliberately matches neither trigger pattern above, so writing the review
 # cannot start another review -- pinned by a test.
+# Fixed check, appended to BOTH gates. Added 2026-10-05 from the probe-failures
+# escalation queue (section 20, routed here because a spec is where it bit): two
+# verified facts in one sentence can jointly imply a third that neither establishes,
+# and per-claim review cannot see it -- the original passed three review rounds.
+msg="${msg} FIXED CHECK, separate from the three objections: find every sentence that sets two verified facts side by side -- a count next to an absence, a total next to a remainder -- and name the third claim a reader will infer from the pair. If neither fact establishes it, flag it as an unsupported implicature; a flagged one may displace the weakest of the three returned objections. Every residual (N total, M present, K missing) must be decomposed until its parts sum."
 msg="${msg} REPORTING CONTRACT: the subagent must WRITE its complete review to docs/superpowers/reviews/ -- same date and topic as the artifact under review, with a -redteam.md suffix -- and RETURN only its three objections as one line each plus that path, nothing more. A long report does not survive the trip back: it arrives truncated, and recovering the tail costs another round trip."
 
 if command -v jq >/dev/null 2>&1; then

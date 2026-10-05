@@ -84,7 +84,16 @@ Run this whenever the user invokes the skill:
 3. **Cross-check against existing memory before writing.** Read `MEMORY.md` (project memory dir is `~/.claude/projects/<project-slug>/memory/`). Prefer **updating an existing memory** over creating a new one — fragmentation makes recall harder. The auto-memory system prompt rule "do not write duplicate memories" applies here.
 4. **For each surviving candidate, route via the decision tree above** and write/update accordingly.
 5. **Update `MEMORY.md`** with one-line index entries for any new memories. Keep it under 200 lines (truncation point).
-6. **Report back** with a tight summary: what was saved, what was updated, what was considered and dropped.
+6. **Sweep the session's corrections.** List every FACTUAL correction made this session — a status that
+   changed, a claim retracted, a number revised — and for each, grep every sibling artifact (specs,
+   plans, status lines, memories, READMEs, commit-ready docs) for the OLD claim. The fix lands in the
+   file the correction named; the same sentence survives everywhere written from the same
+   understanding. Counting occurrences cannot prove a retraction (a retraction names what it
+   retracts), so read the hits. Same sweep: for any `learnings/probe-failures.md` class hit this
+   session, append today's date to that entry's `recurred:` line — the escalation queue is only as
+   good as those dates. (Added 2026-10-05: a design doc's status line said "read due 09-24" one turn
+   after the section below it recorded the read as done.)
+7. **Report back** with a tight summary: what was saved, what was updated, what was considered and dropped.
 
 ## "Silence is fine" — when to save nothing
 

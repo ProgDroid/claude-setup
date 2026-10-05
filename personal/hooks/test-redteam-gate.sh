@@ -132,6 +132,12 @@ for label in spec plan; do
   has "redteam.md" "$body" \
     && ok "$label names the review filename suffix" \
     || bad "$label does not name the review file suffix"
+
+  # Added 2026-10-05 (probe-failures section 20): the implicature check rides on
+  # BOTH gates, independent of gstack.
+  has "FIXED CHECK" "$body" && has "decomposed until its parts sum" "$body" \
+    && ok "$label carries the joint-implicature fixed check" \
+    || bad "$label is missing the joint-implicature fixed check"
 done
 
 # Safety: the review file must not itself trip the gate, or writing a review starts

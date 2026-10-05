@@ -218,6 +218,13 @@ not "files were copied" but "the session can see them"; not "the commit was crea
 Tests written from an implementation inherit its assumptions. If a test asserts the same thing the
 code already believes, it confirms nothing. Assert on the channel the consumer actually reads.
 
+**A README, a description field, a config file or a docstring states INTENT.** It is evidence of
+what someone meant, never of what works, who wrote it, or whether it is reachable. When recommending
+a repo, tool or action, ask the API for the field that decides it — `isFork`, visibility, the real
+compensation field — rather than inferring it from prose; one pass recommended two forks as his own
+work and a private repo as an installable Action. For anything he has personally run, **ask him how
+it behaved**: no artefact on disk holds that.
+
 This matters most for silent failures — a wrong path, an ignored directory, a hook that runs too
 late. None of them produce an error; they produce a confident success message and no effect.
 
