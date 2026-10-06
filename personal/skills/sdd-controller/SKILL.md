@@ -34,6 +34,12 @@ detect that its own premise is false.
   before the final review. Reviewers treat the spec as authoritative.
 - **Expect the dominant defect class to be tests that pass but cannot fail.** Running code, a
   mutation or a probe found them; reading never did.
+- **Before trusting any RED, prove the runner fails on a test file that cannot load.** GUT 9.7.1
+  logs a parse error, skips that file and still exits 0 with "All tests passed". So a RED that
+  failed with "class not defined" was a silent skip, and so was a broken test file sitting in CI.
+  Make a deliberately broken test file and confirm the suite fails. Add a guard that compares the
+  number of scripts the runner ran with the number of test files on disk. (wickilibrium,
+  2026-10-06.)
 
 ## 2. What goes in every dispatch
 

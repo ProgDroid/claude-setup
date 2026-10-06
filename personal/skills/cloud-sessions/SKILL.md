@@ -209,7 +209,28 @@ a force-push. Another found its work already committed and could only make an em
   includes the WIP commits.
 - **When `stop-hook-git-check.sh` reports uncommitted changes while an implementer is running, do
   not commit them** — they are the implementer's in-progress edits; it commits on finishing.
-- Expect to squash at merge if a readable `main` matters.
+- **Squash at merge is mandatory, not cosmetic, when implementers run mutation checks.** Verified
+  2026-10-06 (wickilibrium): a WIP auto-commit snapshotted `targeting.gd` while its cone filter was
+  mutated to `if false:`, and pushed it. HEAD was correct a minute later, but a broken commit sits
+  in the branch history. Tell implementers to keep a deliberate mutation in the tree only for the one
+  test run it needs, and tell the human to squash.
+- **Untracked scratch output is committed too.** A demo-recording run left `recordings/*.log`
+  untracked, and the next controller turn would have committed it. Gitignore every directory a
+  tool writes scratch output to *before* the first run, not after the hook catches it.
+- **A subagent cut off by an API error leaves its partial edits behind for the next WIP commit.**
+  Opus implementers died twice on HTTP 529 mid-fix, and the hook then committed the half-done fix.
+  Re-dispatch a fresh implementer (a different model avoids the overload) pointed at that commit.
+  Do not try to recover the dead agent's context.
+
+## The SDD workspace is gitignored, so its ledger dies with the container
+
+`subagent-driven-development` keeps its ledger (rulings, deferred minors, task completion lines)
+under `.superpowers/sdd/`, which is git-ignored by design. In a cloud session the container is
+reclaimed, so a plan paused at a checkpoint "to resume from the ledger" cannot resume from it. At
+any checkpoint where work stops for the human, **commit a snapshot of the ledger** (for example
+`docs/superpowers/reviews/<date>-<plan>-execution-ledger.md`). Also move any engine or tooling facts the
+dispatch context file collected into the repo's `CLAUDE.md`. (wickilibrium, 2026-10-06: caught
+during capture-learnings, after the checkpoint message had already promised the ledger would be kept.)
 
 ## Committing `.claude/` when it is gitignored
 

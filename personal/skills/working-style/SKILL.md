@@ -23,6 +23,16 @@ now, I won't return to this much."* For a tool he will run but not revisit, a de
 phase that never ships. Pull the out-of-scope list back in and plan the finished version, rather than
 proposing a phased roadmap he would have to remember to resume. (ds-job-analysis, 2026-10-02)
 
+**Passion projects are the exception: there the scope growth is the risk.** For a project he cares
+about (wickilibrium, a game, 2026-10-06), he named his own stall pattern: *"I put too much baggage
+in them and then get too stuck to finish them"*. Asked to be specific, he pointed to setup and
+architecture perfectionism, plus losing momentum after a break. So in a passion project, endorsed ideas go to a
+**parking lot**, not into the current milestone, and he agreed to that override. Milestones are
+things he can play rather than systems. The first build is deliberately throwaway, and nothing is
+abstracted until it exists twice. The tell is "passion" or "I've had this idea for a while", not
+"tool I'll run". Ask which kind of project it is when that's unclear, because the two rules point
+in opposite directions.
+
 ## LLM features run on agents and his subscription, not API keys
 
 When a feature needs an LLM (extraction, classification, analysis), do not build an API-key-backed
