@@ -104,6 +104,13 @@ repeatedly audited the controller too.
 - **A reviewer's suggested fix is a hypothesis.** Twice, applying one verbatim would have introduced
   a bug. The problem is the finding; the cure is a suggestion. A claim about framework behaviour
   needs the framework's source opened.
+- **A claim of INDEPENDENCE needs a perturbation control, not a green run.** "The suite no longer
+  reads the developer's tuning file" passed 204/204 on the file as it stood, and that run also passes
+  if the file is still read and happens to hold compatible values. The implementer listed the
+  control as not executed. The controller rewrote the file with extreme values (warp 0, buffer 0,
+  every new knob flipped), re-ran, then restored it from git: still 204/204. Only that run measured
+  the claim. Whenever a task claims "X no longer depends on Y", change Y and run it. (wickilibrium,
+  2026-10-10.)
 
 ## 5. Judge progress by artefacts, never liveness
 
@@ -126,6 +133,12 @@ finished run leaves no process.
 - **Disjoint files is not independence.** news-brief's test DB drops the schema in every fixture; two
   concurrent runs produced 1 failed + 22 errors. Overlap implementers only with READ-ONLY reviewers
   told not to run the suite. If a collision happened, both results are UNKNOWN; re-run one at a time.
+- **Agent toolchain runs share USER-level state with the human, not just the repo.** Headless Godot
+  test runs write to the same `user://logs` directory as the developer's own play session, and Godot
+  keeps five files. Within minutes the log of the developer's hang had been rotated out, and its
+  evidence was gone. When the human is playing or testing while implementers run, point agent runs
+  at their own log/cache path (Godot: `--log-file <tmp>`), and capture any crash evidence the
+  moment it is reported. (wickilibrium, 2026-10-10.)
 - **After any task touching global nav, routing or always-mounted UI, run the FULL suite.** A
   wizard's global guard regressed ~16 e2e specs that per-task runs could not see.
 
