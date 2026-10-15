@@ -124,4 +124,51 @@ bash "$RITUAL" check untracked-docs "$TMPROOT/not-a-repo" >/dev/null 2>&1 && bad
 bash "$RITUAL" check >/dev/null 2>&1 && bad "check with no args" || ok "router_check_usage_fails"
 bash "$RITUAL" preflight "$TMPROOT/not-a-repo" >/dev/null 2>&1 && bad "preflight non-repo" || ok "preflight_requires_repo"
 
+# --- MM: staged version then edited again; index must be the STAGED blob, not HEAD's
+r="$(mkrepo)"; echo staged1 >> "$r/README.md"; git -C "$r" add README.md; echo more >> "$r/README.md"
+out="$(pf "$r")"
+stg="$(git -C "$r" ls-files -s -- README.md | awk '{print $2}')"; hd="$(git -C "$r" rev-parse HEAD:README.md)"
+[ "$(jq -r '.dirty[0].xy' <<<"$out")" = MM ] && [ "$(jq -r '.index["README.md"]' <<<"$out")" = "$stg" ] \
+  && [ "$stg" != "$hd" ] && ok "preflight_mm_index_is_staged_blob" || bad "MM: $out"
+
+# --- commit-plan exact matching (no prefix / basename matching)
+jq -n '{branch:"main",dirty:[{path:"docs/a.md",xy:" M"},{path:"x/.gitignore",xy:"??"}],bytes:{},index:{}}' > "$TMPROOT/pfx.json"
+jq -n '["docs",".gitignore","docs/a.md","x/.gitignore"]' > "$TMPROOT/wx.json"
+out="$(bash "$RITUAL" commit-plan "$r" "$TMPROOT/pfx.json" "$TMPROOT/wx.json")"
+[ "$(jq -c '.commit' <<<"$out")" = '["docs",".gitignore"]' ] && [ "$(jq -c '.ask' <<<"$out")" = '["docs/a.md","x/.gitignore"]' ] \
+  && ok "commit_plan_exact_matching" || bad "exact: $out"
+
+# --- git failure is UNKNOWN, never a clean tree
+r="$(mkrepo)"; echo dirty > "$r/d.txt"
+realgit="$(command -v git)"; stubd="$TMPROOT/failgit"; mkdir -p "$stubd"
+cat > "$stubd/git" <<STUB
+#!/usr/bin/env bash
+for a in "\$@"; do [ "\$a" = status ] && { echo "fatal: simulated failure" >&2; exit 128; }; done
+exec "$realgit" "\$@"
+STUB
+chmod +x "$stubd/git"
+out="$( PATH="$stubd:$PATH"; bash "$RITUAL" preflight "$r" 2>"$TMPROOT/err")"; rc=$?
+[ $rc -ne 0 ] && [ -z "$out" ] && ok "preflight_git_status_failure_dies" || bad "status failure: rc=$rc out=$out"
+# positive control: the stub passes non-status git calls through
+out="$( PATH="$stubd:$PATH"; bash "$RITUAL" commit-plan "$r" "$TMPROOT/pfx.json" "$TMPROOT/wx.json")"
+[ -n "$out" ] && ok "stub_control_passes_through" || bad "stub control"
+
+# --- non-regular paths (nested repo dir) are NONFILE, not DELETED
+r="$(mkrepo)"; mkdir "$r/nested"; git -C "$r/nested" init -q; echo c > "$r/nested/f"
+out="$(pf "$r")"
+np="$(jq -r '.dirty[]|select(.path|startswith("nested"))|.path' <<<"$out")"
+[ -n "$np" ] && [ "$(jq -r --arg p "$np" '.bytes[$p]' <<<"$out")" = NONFILE ] && ok "preflight_nonfile_nested_repo" || bad "nonfile: $out"
+if ln -s README.md "$r/lnk" 2>/dev/null && [ -L "$r/lnk" ]; then
+  out="$(pf "$r")"; ln_b="$(jq -r '.bytes["lnk"]' <<<"$out")"
+  [ -n "$ln_b" ] && [ "$ln_b" != null ] && [ "$ln_b" != DELETED ] && ok "preflight_symlink_not_deleted" || bad "symlink: $ln_b"
+else echo "  NOTE: symlinks not creatable here; symlink case not tested"; fi
+
+# --- scale: 2000 untracked files must not take minutes
+r="$(mkrepo)"; mkdir -p "$r/node_modules/pkg"
+for i in $(seq 1 2000); do : > "$r/node_modules/pkg/f$i.js"; done
+t0=$SECONDS; out="$(pf "$r")"; rc=$?; el=$((SECONDS - t0))
+echo "  (2000-file preflight took ${el}s)"
+[ $rc -eq 0 ] && [ "$(jq '.dirty|length' <<<"$out")" = 2000 ] && [ "$(jq '.bytes|length' <<<"$out")" = 2000 ] \
+  && [ "$el" -lt 20 ] && ok "preflight_2000_files_under_20s" || bad "scale: rc=$rc n=$(jq '.dirty|length' <<<"$out") ${el}s"
+
 finish
