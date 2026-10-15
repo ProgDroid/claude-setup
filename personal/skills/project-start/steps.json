@@ -57,6 +57,11 @@
       "version": 1
     },
     {
+      "id": "parking-lot",
+      "kind": "auto",
+      "version": 1
+    },
+    {
       "id": "beads-seed",
       "kind": "ask",
       "version": 1

@@ -97,8 +97,8 @@ done
 echo "== due =="
 r4="$(mkrepo due)"
 d="$(R due "$r4")"
-[ "$(printf '%s' "$d" | jq '.offer|length')" = 17 ] && [ "$(printf '%s' "$d" | jq '.skip|length')" = 0 ] \
-  && ok "fresh repo: all 17 steps offered, none skipped" || bad "fresh due: $d"
+[ "$(printf '%s' "$d" | jq '.offer|length')" = 18 ] && [ "$(printf '%s' "$d" | jq '.skip|length')" = 0 ] \
+  && ok "fresh repo: all 18 steps offered, none skipped" || bad "fresh due: $d"
 R record-write "$r4" "$(results '{"steps":{"baseline":{"result":"declined"},"ci":{"result":"unknown"},"traps":{"result":"done"}}}')" >/dev/null
 d="$(R due "$r4")"
 [ "$(printf '%s' "$d" | jq -c '[.skip[].id]')" = '["baseline"]' ] \
@@ -107,7 +107,7 @@ d="$(R due "$r4")"
   && ok "due_skips_declined_same_version" || bad "skip: $d"
 printf '%s' "$d" | jq -e '.offer|index("ci")' >/dev/null && ok "due_offers_unknown" || bad "unknown not offered: $d"
 printf '%s' "$d" | jq -e '.offer|index("traps")' >/dev/null && ok "a done step is still offered (only declined is skipped)" || bad "done step not offered"
-[ "$(printf '%s' "$d" | jq '.offer|length')" = 16 ] && ok "offer + skip partition the steps (16 + 1)" || bad "offer count: $d"
+[ "$(printf '%s' "$d" | jq '.offer|length')" = 17 ] && ok "offer + skip partition the steps (17 + 1)" || bad "offer count: $d"
 jq '(.steps[]|select(.id=="baseline")|.version)=2 | .ritual_version=2' "$(RITUAL_STEPS_JSON= bash -c '. "$0"; steps_json' "$SKILL_DIR/lib/common.sh")" > "$TMPROOT/v2.json"
 d="$(RITUAL_STEPS_JSON="$TMPROOT/v2.json" R due "$r4")"
 printf '%s' "$d" | jq -e '.offer|index("baseline")' >/dev/null && [ "$(printf '%s' "$d" | jq '.skip|length')" = 0 ] \

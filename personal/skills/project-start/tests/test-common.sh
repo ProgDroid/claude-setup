@@ -6,11 +6,12 @@
 echo "== steps.json =="
 sj="$(steps_json)"
 [ -f "$sj" ] && ok "steps_json names an existing file" || bad "steps_json: $sj"
-exp='preflight beads stack lessons traps stack-checks oracle public-sweep secret-scan workspace untracked-docs beads-seed beads-metrics ci baseline commit record'
-[ "$(jq -r '.steps|map(.id)|join(" ")' "$sj")" = "$exp" ] && ok "17 step ids in spec order" || bad "ids: $(jq -r '.steps|map(.id)|join(" ")' "$sj")"
+exp='preflight beads stack lessons traps stack-checks oracle public-sweep secret-scan workspace untracked-docs parking-lot beads-seed beads-metrics ci baseline commit record'
+[ "$(jq -r '.steps|map(.id)|join(" ")' "$sj")" = "$exp" ] && ok "18 step ids in spec order" || bad "ids: $(jq -r '.steps|map(.id)|join(" ")' "$sj")"
 [ "$(jq -c '[.steps[].version]|unique' "$sj")" = '[1]' ] && [ "$(jq .ritual_version "$sj")" = 1 ] && ok "all versions 1, ritual_version 1" || bad "versions"
 [ "$(jq -r '.steps[]|select(.id=="stack-checks")|.kind' "$sj")" = ask ] && [ "$(jq -r '.steps[]|select(.id=="preflight")|.kind' "$sj")" = check ] \
   && [ "$(jq -r '.steps[]|select(.id=="oracle")|.kind' "$sj")" = auto ] && ok "kinds follow the spec table" || bad "kinds"
+[ "$(jq -c '.steps|map(select(.id=="parking-lot"))|.[0]|[.kind,.version]' "$sj")" = '["auto",1]' ] && ok "parking-lot is kind auto, version 1" || bad "parking-lot kind/version"
 [ "$(RITUAL_STEPS_JSON=/x/y steps_json)" = /x/y ] && ok "RITUAL_STEPS_JSON overrides" || bad "override ignored"
 
 echo "== emit =="
