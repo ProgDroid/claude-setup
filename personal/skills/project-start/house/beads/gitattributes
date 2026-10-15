@@ -1,0 +1,5 @@
+# Beads: the hook shims are POSIX sh, and issues.jsonl is compared byte-for-byte
+# against `bd export` output (LF), so neither may be CRLF-converted on checkout.
+.beads/hooks/* text eol=lf
+.beads/*.sh text eol=lf
+.beads/issues.jsonl -text
