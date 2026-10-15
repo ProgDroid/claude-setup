@@ -36,11 +36,10 @@ check_traps() {
 }
 
 fix_traps() {
-  local repo="$1" miss line w mod_before mod_after newmod n detail
+  local repo="$1" miss line w newmod n detail
   local wrote=()
   miss="$(_traps_missing "$repo")"
   [ -n "$miss" ] || { emit traps already "nothing to add"; return 0; }
-  mod_before="$(git -C "$repo" diff --name-only 2>/dev/null | tr -d '\r' | sort)"
   while IFS= read -r line; do
     if [ "$line" = attr ]; then append_line "$repo/.gitattributes" "$_TRAP_ATTR"; w=.gitattributes
     else append_line "$repo/.gitignore" "$line"; w=.gitignore; fi
@@ -53,8 +52,13 @@ fix_traps() {
   fi
   detail="appended missing lines"
   # The new eol rule can make committed CRLF files show as modified. Report it; never renormalise.
-  mod_after="$(git -C "$repo" diff --name-only 2>/dev/null | tr -d '\r' | sort)"
-  newmod="$(comm -13 <(printf '%s\n' "$mod_before") <(printf '%s\n' "$mod_after") | grep -v '^$')"
+  # git's own `status` is stat-cached and can miss a changed attribute, so ask the index directly:
+  # committed files whose index copy is CRLF/mixed and that the eol=lf rule now covers.
+  newmod=""
+  if [[ " ${wrote[*]} " == *" .gitattributes "* ]]; then
+    newmod="$(git -C "$repo" ls-files --eol 2>/dev/null | tr -d '\r' \
+      | awk -F'\t' '$1 ~ /^i\/(crlf|mixed)/ && $1 ~ /eol=lf/ { print $2 }')"
+  fi
   if [ -n "$newmod" ]; then
     n="$(printf '%s\n' "$newmod" | wc -l | tr -d ' ')"
     detail="$detail; $n committed file(s) now show modified (line-ending rule; not renormalised): $(printf '%s\n' "$newmod" | head -n 10 | paste -sd, - | sed 's/,/, /g')"
