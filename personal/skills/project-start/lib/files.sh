@@ -36,10 +36,11 @@ check_traps() {
 }
 
 fix_traps() {
-  local repo="$1" miss line w
+  local repo="$1" miss line w mod_before mod_after newmod n detail
   local wrote=()
   miss="$(_traps_missing "$repo")"
   [ -n "$miss" ] || { emit traps already "nothing to add"; return 0; }
+  mod_before="$(git -C "$repo" diff --name-only 2>/dev/null | tr -d '\r' | sort)"
   while IFS= read -r line; do
     if [ "$line" = attr ]; then append_line "$repo/.gitattributes" "$_TRAP_ATTR"; w=.gitattributes
     else append_line "$repo/.gitignore" "$line"; w=.gitignore; fi
@@ -50,7 +51,16 @@ fix_traps() {
     emit traps failed "still not in effect after append: $(printf '%s' "$miss" | paste -sd' ' -)" "${wrote[@]}"
     return 0
   fi
-  emit traps fixed "appended missing lines" "${wrote[@]}"
+  detail="appended missing lines"
+  # The new eol rule can make committed CRLF files show as modified. Report it; never renormalise.
+  mod_after="$(git -C "$repo" diff --name-only 2>/dev/null | tr -d '\r' | sort)"
+  newmod="$(comm -13 <(printf '%s\n' "$mod_before") <(printf '%s\n' "$mod_after") | grep -v '^$')"
+  if [ -n "$newmod" ]; then
+    n="$(printf '%s\n' "$newmod" | wc -l | tr -d ' ')"
+    detail="$detail; $n committed file(s) now show modified (line-ending rule; not renormalised): $(printf '%s\n' "$newmod" | head -n 10 | paste -sd, - | sed 's/,/, /g')"
+    [ "$n" -le 10 ] || detail="$detail, and $((n - 10)) more"
+  fi
+  emit traps fixed "$detail" "${wrote[@]}"
 }
 
 # ---------------- stack-checks ----------------
@@ -65,6 +75,28 @@ _cargo_has_clippy() {
        END { exit found ? 0 : 1 }' "$1"
 }
 _cargo_has() { grep -Eq "^[[:space:]]*\\[$2\\]" "$1"; }
+
+# _ws_list <Cargo.toml> <key> -> the quoted strings of `key = [ ... ]` (possibly multi-line)
+_ws_list() {
+  tr -d '\r' < "$1" | awk -v key="$2" '
+    !on && $0 ~ "^[[:space:]]*" key "[[:space:]]*=[[:space:]]*[[]" { on = 1 }
+    on { s = $0
+         while (match(s, /"[^"]*"/)) { print substr(s, RSTART + 1, RLENGTH - 2); s = substr(s, RSTART + RLENGTH) }
+         if ($0 ~ /\]/) on = 0 }'
+}
+
+# _ws_member <repo> <dir>: true if the ROOT Cargo.toml is a workspace and <dir> is one of its
+# members (members globs minus exclude). The root itself is not a "member" here.
+_ws_member() {
+  local root="$1/Cargo.toml" dir="${2#./}" g
+  [ "$2" != . ] && [ -f "$root" ] && _cargo_has "$root" workspace || return 1
+  while IFS= read -r g; do
+    g="${g#./}"; g="${g%/}"
+    # shellcheck disable=SC2053
+    [[ "$dir" == $g ]] && { _ws_list "$root" exclude | grep -qxF -- "$dir" && return 1; return 0; }
+  done < <(_ws_list "$root" members)
+  return 1
+}
 
 # Canonical table from the include (RITUAL_RUST_INCLUDE overrides the path, for tests): from
 # "[lints.clippy]" up to the next blank line or next "[" header. Prints nothing when the include
@@ -87,7 +119,7 @@ _stackcheck_one() {
     rust)
       f="$base/Cargo.toml"
       if _cargo_has_clippy "$f"; then printf 'present\t\n'
-      elif _cargo_has "$f" workspace; then printf 'absent\t%s: workspace: needs ask\n' "$(_rel "$dir" Cargo.toml)"
+      elif _cargo_has "$f" workspace || _ws_member "$repo" "$dir"; then printf 'absent\t%s: workspace: needs ask\n' "$(_rel "$dir" Cargo.toml)"
       else printf 'absent\t%s lacks [lints.clippy]\n' "$(_rel "$dir" Cargo.toml)"; fi ;;
     python)
       if [ -f "$base/ruff.toml" ] || [ -f "$base/.ruff.toml" ] || grep -qs '^\[tool\.ruff' "$base/pyproject.toml"; then printf 'present\t\n'
@@ -112,7 +144,7 @@ check_stack_checks() {
 }
 
 fix_stack_checks() {
-  local repo="$1" lang dir base f bak res table line rel
+  local repo="$1" lang dir base f bak res table line rel lock lockbak meta_ok
   local wrote=() asks="" fails="" unk=""
   table="$(_clippy_table)"
   while IFS=$'\t' read -r lang dir; do
@@ -122,17 +154,25 @@ fix_stack_checks() {
     if [ "$lang" != rust ]; then asks="${asks:+$asks; }${res#*$'\t'}"; continue; fi
     base="$repo"; [ "$dir" = . ] || base="$repo/$dir"; f="$base/Cargo.toml"; rel="$(_rel "$dir" Cargo.toml)"
     # only a single-crate root ([package], no [workspace]); anything else is the user's call
-    if _cargo_has "$f" workspace; then asks="${asks:+$asks; }$rel: workspace: needs ask"; continue; fi
+    if [[ "${res#*$'\t'}" == *"workspace: needs ask"* ]]; then asks="${asks:+$asks; }$rel: workspace: needs ask"; continue; fi
     if ! _cargo_has "$f" package; then asks="${asks:+$asks; }$rel: no [package]: needs ask"; continue; fi
     if [ -z "$table" ]; then unk="${unk:+$unk; }canonical [lints.clippy] table not found in the rust include"; continue; fi
     bak="$(mktemp)" || { unk="${unk:+$unk; }cannot make backup"; continue; }
     cp -p "$f" "$bak"
+    lock="$base/Cargo.lock"; lockbak=""   # cargo metadata may create or rewrite Cargo.lock
+    if [ -f "$lock" ]; then lockbak="$(mktemp)"; cp -p "$lock" "$lockbak"; fi
     append_line "$f" ""
     while IFS= read -r line; do append_line "$f" "$line"; done <<<"$table"
     if ! command -v cargo >/dev/null 2>&1; then
-      cp "$bak" "$f"; rm -f "$bak"; unk="${unk:+$unk; }$rel: cargo not found, edit reverted"; continue
+      cp "$bak" "$f"; rm -f "$bak" "$lockbak"; unk="${unk:+$unk; }$rel: cargo not found, edit reverted"; continue
     fi
     if (cd "$base" && cargo metadata --no-deps --format-version 1 >/dev/null 2>&1); then
+      meta_ok=1
+    else
+      meta_ok=0
+    fi
+    if [ -n "$lockbak" ]; then cp "$lockbak" "$lock"; rm -f "$lockbak"; else rm -f "$lock"; fi
+    if [ "$meta_ok" = 1 ]; then
       rm -f "$bak"; wrote+=("$rel")
     else
       cp "$bak" "$f"; rm -f "$bak"; fails="${fails:+$fails; }$rel: cargo metadata failed, edit reverted"

@@ -45,11 +45,26 @@ R fix traps "$r" >/dev/null
 # --- CRLF .gitignore stays CRLF
 r="$(mkrepo)"; printf 'target/\r\nnode_modules/\r\n' > "$r/.gitignore"
 R fix traps "$r" >/dev/null
-[ "$(grep -c $'\r$' "$r/.gitignore")" = 4 ] && [ "$(wc -l < "$r/.gitignore")" = 4 ] \
+printf 'target/\r\nnode_modules/\r\n.semgrep/\r\n.env\r\n' > "$TMPROOT/want.crlf"
+cmp -s "$TMPROOT/want.crlf" "$r/.gitignore" \
   && ok "traps_crlf_file_stays_crlf" || bad "crlf: $(od -c "$r/.gitignore")"
 R fix traps "$r" >/dev/null
-[ "$(grep -c '^\.env' "$r/.gitignore")" = 1 ] && [ "$(grep -c '^\.semgrep/' "$r/.gitignore")" = 1 ] \
+cmp -s "$TMPROOT/want.crlf" "$r/.gitignore" \
   && ok "traps_crlf_rerun_no_duplicates" || bad "crlf dup: $(od -c "$r/.gitignore")"
+
+# --- CRLF with an UNTERMINATED last line: terminated with CRLF, not LF
+r="$(mkrepo)"; printf 'a\r\nb' > "$r/.gitignore"
+R fix traps "$r" >/dev/null
+printf 'a\r\nb\r\n.semgrep/\r\n.env\r\n' > "$TMPROOT/want.crlf"
+cmp -s "$TMPROOT/want.crlf" "$r/.gitignore" \
+  && ok "traps_crlf_unterminated_last_line_gets_crlf" || bad "crlf unterminated: $(od -c "$r/.gitignore")"
+
+# --- eol_of directly, on exact bytes
+( . "$SKILL_DIR/lib/common.sh"
+  printf 'a\r\nb\r\n' > "$TMPROOT/e1"; printf 'a\nb\n' > "$TMPROOT/e2"; : > "$TMPROOT/e3"; printf 'a' > "$TMPROOT/e4"
+  [ "$(eol_of "$TMPROOT/e1")" = crlf ] && [ "$(eol_of "$TMPROOT/e2")" = lf ] && [ "$(eol_of "$TMPROOT/e3")" = lf ] \
+    && [ "$(eol_of "$TMPROOT/e4")" = lf ] && [ "$(eol_of "$TMPROOT/missing")" = lf ] ) \
+  && ok "eol_of_detects_crlf_by_bytes" || bad "eol_of"
 
 # --- missing trailing newline gets terminated, not glued
 r="$(mkrepo)"; printf 'keepme' > "$r/.gitignore"
@@ -60,9 +75,14 @@ R fix traps "$r" >/dev/null
 # --- committed CRLF x.sh is not renormalised
 r="$(mkrepo)"; printf '#!/bin/sh\r\necho hi\r\n' > "$r/x.sh"; git -C "$r" add x.sh; git -C "$r" commit -qm sh
 sh_before="$(sha256sum "$r/x.sh" | cut -d' ' -f1)"; blob_before="$(git -C "$r" rev-parse :x.sh)"
-R fix traps "$r" >/dev/null
-# Raw bytes and the index entry are untouched. (git itself, once eol=lf exists, may list x.sh as
-# modified because the attribute now disagrees with the CRLF blob: that is git's view, not a write.)
+out="$(R fix traps "$r")"
+# Raw bytes and the index entry are untouched. Git itself, once eol=lf exists, lists x.sh as
+# modified (the attribute disagrees with the CRLF blob); the fix must REPORT that, not hide it.
+[ "$(st "$out")" = fixed ] && jq -r .detail <<<"$out" | grep -qF 'x.sh' \
+  && jq -r .detail <<<"$out" | grep -qF 'not renormalised' \
+  && ok "traps_reports_files_now_showing_modified" || bad "modified report: $out"
+r2="$(mkrepo)"; out="$(R fix traps "$r2")"
+! jq -r .detail <<<"$out" | grep -qF 'modified' && ok "traps_no_modified_report_when_none" || bad "spurious report: $out"
 [ "$(sha256sum "$r/x.sh" | cut -d' ' -f1)" = "$sh_before" ] && [ "$(git -C "$r" rev-parse :x.sh)" = "$blob_before" ] \
   && cmp -s <(printf '#!/bin/sh\r\necho hi\r\n') "$r/x.sh" \
   && ok "traps_no_renormalise" || bad "x.sh changed"
@@ -131,6 +151,37 @@ out="$(PATH="$stubs:$PATH" R fix stack-checks "$r")"
   && cmp -s "$r/Cargo.toml" "$TMPROOT/cargo.before" && [ "$(jq -c .wrote <<<"$out")" = "[]" ] \
   && ok "clippy_virtual_workspace_not_auto" || bad "virtual ws: $out"
 
+# R14: root workspace -> NOTHING written, members included
+r="$(mkrepo)"; mkdir "$r/m"; printf '[workspace]\nmembers = ["m"]\n' > "$r/Cargo.toml"
+printf '[package]\nname = "m"\n' > "$r/m/Cargo.toml"
+cp "$r/Cargo.toml" "$TMPROOT/ws.root"; cp "$r/m/Cargo.toml" "$TMPROOT/ws.m"
+out="$(PATH="$stubs:$PATH" R fix stack-checks "$r")"
+[ "$(st "$out")" = absent ] && [ "$(jq -c .wrote <<<"$out")" = "[]" ] && jq -r .detail <<<"$out" | grep -qF 'workspace: needs ask' \
+  && cmp -s "$r/Cargo.toml" "$TMPROOT/ws.root" && cmp -s "$r/m/Cargo.toml" "$TMPROOT/ws.m" \
+  && ok "clippy_workspace_writes_nothing_incl_members" || bad "ws members: $out"
+# glob member
+rm -rf "$r/m"; mkdir -p "$r/crates/c"; printf '[workspace]\nmembers = [\n  "crates/*",\n]\n' > "$r/Cargo.toml"
+printf '[package]\nname = "c"\n' > "$r/crates/c/Cargo.toml"; cp "$r/crates/c/Cargo.toml" "$TMPROOT/ws.m"
+out="$(PATH="$stubs:$PATH" R fix stack-checks "$r")"
+[ "$(jq -c .wrote <<<"$out")" = "[]" ] && cmp -s "$r/crates/c/Cargo.toml" "$TMPROOT/ws.m" \
+  && ok "clippy_workspace_glob_member_untouched" || bad "ws glob: $out"
+# independent crate that is NOT a member may still be fixed
+mkdir "$r/other"; printf '[package]\nname = "o"\n' > "$r/other/Cargo.toml"
+out="$(PATH="$stubs:$PATH" R fix stack-checks "$r")"
+[ "$(jq -c .wrote <<<"$out")" = '["other/Cargo.toml"]' ] \
+  && ! grep -q 'lints.clippy' "$r/Cargo.toml" && grep -qxF '[lints.clippy]' "$r/other/Cargo.toml" && cmp -s "$r/crates/c/Cargo.toml" "$TMPROOT/ws.m" \
+  && ok "clippy_nonmember_crate_beside_workspace_fixed" || bad "non-member: $out"
+
+# R15: Cargo.lock written by cargo metadata is not left behind / is restored byte-identical
+lockstub="$TMPROOT/stubs-lock"; mkdir -p "$lockstub"
+printf '#!/bin/sh\nprintf "# changed by cargo\\n" > Cargo.lock\nexit 0\n' > "$lockstub/cargo"; chmod +x "$lockstub/cargo"
+r="$(mkrepo)"; printf '%s' "$cargo_single" > "$r/Cargo.toml"
+out="$(PATH="$lockstub:$PATH" R fix stack-checks "$r")"
+[ "$(st "$out")" = fixed ] && [ ! -e "$r/Cargo.lock" ] && ok "clippy_new_cargo_lock_removed" || bad "lock created: $out"
+r="$(mkrepo)"; printf '%s' "$cargo_single" > "$r/Cargo.toml"; printf '# original lock\n' > "$r/Cargo.lock"
+out="$(PATH="$lockstub:$PATH" R fix stack-checks "$r")"
+[ "$(st "$out")" = fixed ] && [ "$(cat "$r/Cargo.lock")" = "# original lock" ] && ok "clippy_existing_cargo_lock_restored" || bad "lock changed: $out"
+
 # package + workspace (non-virtual) root is also ask
 r="$(mkrepo)"; printf '[package]\nname="a"\n\n[workspace]\nmembers=["b"]\n' > "$r/Cargo.toml"
 cp "$r/Cargo.toml" "$TMPROOT/cargo.before"
@@ -151,7 +202,8 @@ out="$(PATH="$stubs:$PATH" R fix stack-checks "$r")"
 # CRLF Cargo.toml stays CRLF
 r="$(mkrepo)"; printf '[package]\r\nname = "a"\r\n' > "$r/Cargo.toml"
 PATH="$stubs:$PATH" R fix stack-checks "$r" >/dev/null
-[ "$(grep -c $'\r$' "$r/Cargo.toml")" = "$(wc -l < "$r/Cargo.toml")" ] && grep -q 'implicit_return' "$r/Cargo.toml" \
+printf '[package]\r\nname = "a"\r\n\r\n[lints.clippy]\r\nall = { level = "warn", priority = -1 }\r\npedantic = { level = "warn", priority = -1 }\r\nimplicit_return = "allow"\r\n' > "$TMPROOT/want.cargo.crlf"
+cmp -s "$TMPROOT/want.cargo.crlf" "$r/Cargo.toml" \
   && ok "clippy_crlf_cargo_stays_crlf" || bad "crlf cargo: $(od -c "$r/Cargo.toml" | head)"
 
 # missing include -> unknown, nothing written
