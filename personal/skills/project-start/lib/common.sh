@@ -16,11 +16,17 @@ git_common_dir() {
 }
 
 # emit <id> <status> <detail> [wrote...] -> one step-result object. status is one of
-# present|absent|unknown by convention (not enforced here).
+# present|absent|unknown by convention (not enforced here). detail and the wrote paths reach jq on
+# stdin, never as arguments: jq.exe is a native Windows program, and past its ~32 KB command line
+# it prints nothing. They travel base64-encoded because jq.exe's stdin drops CR bytes. The stdin
+# carries the detail's base64, a "." line, then the base64 of the paths, each ended by \x1e.
 emit() {
   local id="$1" status="$2" detail="$3"; shift 3
-  jq -nc --arg id "$id" --arg s "$status" --arg d "$detail" '$ARGS.positional as $w
-    | {id:$id, status:$s, detail:$d, wrote:$w}' --args "$@"
+  { printf '%s' "$detail" | base64; printf '.\n'; [ $# -eq 0 ] || printf '%s\x1e' "$@" | base64; } \
+    | jq -nRc --arg id "$id" --arg s "$status" '[inputs] as $l | ($l | index(".")) as $i
+      | ($l[:$i] | add // "" | @base64d) as $d
+      | ($l[$i + 1:] | add // "" | @base64d | split("\u001e") | .[:-1]) as $w
+      | {id:$id, status:$s, detail:$d, wrote:$w}' || die "emit: jq could not build the $id result"
 }
 
 die() { echo "ritual: $*" >&2; exit 2; }

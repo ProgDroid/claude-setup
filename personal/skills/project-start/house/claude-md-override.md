@@ -16,9 +16,7 @@ enforcement mechanism of every skill that hands you a checklist (systematic debu
 test-driven development, verification before completion). **File the issue before writing
 the code**, then use `TodoWrite` for the procedure.
 
-Memory is **files**, not `bd remember`: bd owns work state only. Migrating memory into bd
-was evaluated and dropped (cross-machine sync would need a pinned `dolt` binary on every
-machine); do not re-propose it.
+**bd owns work state only; memory stays in files**, never `bd remember`.
 
 ### After any `bd setup claude` or beads upgrade
 

@@ -20,6 +20,19 @@ e="$(emit traps present "added 2 lines" .gitignore .gitattributes)"
   && ok "emit with wrote paths" || bad "emit: $e"
 [ "$(emit oracle unknown "no tool" | jq -c .wrote)" = '[]' ] && ok "emit with no wrote gives []" || bad "emit empty wrote"
 [ "$(emit x absent 'a "quoted" b' | jq -r .detail)" = 'a "quoted" b' ] && ok "emit escapes quotes" || bad "emit quoting"
+# (built with printf -v: a $'...' string inside "$(...)" loses its CR under Git Bash)
+printf -v crs 'a\r\nb\\c\037'
+[ "$(emit x absent "$crs" | jq -c .detail)" = '"a\r\nb\\c\u001f"' ] && ok "emit_keeps_cr_and_control_bytes_in_detail" || bad "emit CR: $(emit x absent "$crs" | jq -c .detail)"
+[ "$(emit x absent d "" "a b" | jq -c .wrote)" = '["","a b"]' ] && ok "emit_keeps_empty_and_spaced_wrote_elements" || bad "emit empty element"
+# the argv limit: jq.exe is a native Windows program (~32 KB command line). A 60 KB detail and
+# 2000 spaced paths must come back exactly, or every step that reports them prints nothing.
+big="$(printf 'chunk "q" \\ é %04d; ' $(seq 1 3000))"; big="${big:0:61440}"
+mapfile -t paths < <(seq 1 2000 | sed 's|^|some dir/file |; s|$|.txt|')
+e="$(emit untracked-docs present "$big" "${paths[@]}")"
+printf '%s' "$big" > "$TMPROOT/big.exp"; printf '%s' "$e" | jq -j .detail > "$TMPROOT/big.got" 2>/dev/null
+printf '%s\n' "${paths[@]}" > "$TMPROOT/paths.exp"; printf '%s' "$e" | jq -r '.wrote[]' 2>/dev/null | tr -d '\r' > "$TMPROOT/paths.got"
+[ "${#big}" -ge 60000 ] && [ "${#paths[@]}" = 2000 ] && cmp -s "$TMPROOT/big.exp" "$TMPROOT/big.got" && cmp -s "$TMPROOT/paths.exp" "$TMPROOT/paths.got" \
+  && ok "emit_large_detail_and_wrote" || bad "emit large: detail ${#big} chars, emitted $(printf '%s' "$e" | wc -c) bytes"
 
 echo "== git_common_dir =="
 repo="$(mkrepo)"

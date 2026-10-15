@@ -2,11 +2,8 @@
 # Verify the Beads managed block has not clobbered the local TodoWrite override.
 # Run after any `bd setup claude` or beads upgrade.
 #
-# Why this is a script and not a grep line inside CLAUDE.md: two earlier versions
-# were written as commands inside CLAUDE.md itself, and BOTH matched their own
-# documentation -- the first on the ban string, the second on the block markers,
-# which made sed run to EOF. A probe that lives inside the corpus it probes will
-# match itself.
+# It is a script, not a grep line inside CLAUDE.md, because a probe that lives
+# inside the corpus it probes matches its own documentation.
 #
 # Exit: 0 = ok, 1 = a check FAILED, 2 = UNKNOWN (the probe could not answer).
 

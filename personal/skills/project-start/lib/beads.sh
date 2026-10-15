@@ -153,10 +153,18 @@ check_beads_metrics() {
 # _beads_git_raw <top> <git args...>: git with no line-ending conversion and no attributes, so a
 # stash stores and restores the user's raw bytes. Measured with core.autocrlf=true: a plain stash
 # round trip rewrites LF and mixed-ending files as CRLF (and eol=lf files the other way).
+# --attr-source replaces only the in-tree attributes, so core.attributesFile is pointed at an empty
+# file here. $GIT_DIR/info/attributes cannot be overridden at all: fix_beads refuses --stash when
+# it is non-empty.
 _beads_git_raw() {
-  local top="$1" empty; shift
+  local top="$1" empty noattr arg rc; shift
   empty="$(git -C "$top" hash-object -t tree /dev/null)" || return 1
-  git -C "$top" -c core.autocrlf=false -c core.eol=lf -c core.safecrlf=false --attr-source="$empty" "$@"
+  noattr="$(mktemp)" || return 1
+  arg="$noattr"; command -v cygpath >/dev/null 2>&1 && arg="$(cygpath -m "$noattr")"
+  git -C "$top" -c core.autocrlf=false -c core.eol=lf -c core.safecrlf=false -c "core.attributesFile=$arg" \
+    --attr-source="$empty" "$@"; rc=$?
+  rm -f "$noattr"
+  return "$rc"
 }
 
 # _beads_stash_ref <top> <sha> -> stash@{N} for the stash commit <sha> (empty if gone).
@@ -164,25 +172,48 @@ _beads_stash_ref() {
   git -C "$1" stash list --format='%gd %H' 2>/dev/null | awk -v s="$2" '$2 == s { print $1; exit }'
 }
 
-# _beads_snapdiff <pre.json> <post.json> -> comma-joined paths whose XY, bytes or index differ
-# (or which are dirty on one side only), plus a branch change. Empty = identical.
-_beads_snapdiff() {
-  jq -rn --argjson a "$1" --argjson b "$2" '
-    def ent($s; $p): ($s.dirty | map(select(.path == $p)) | .[0]) as $d
-      | if $d == null then null else [$d.xy, $s.bytes[$p], $s.index[$p]] end;
-    ([$a.dirty[].path] + [$b.dirty[].path] | unique) as $ps
-    | [$ps[] | . as $p | select(ent($a; $p) != ent($b; $p))]
-      + (if $a.branch != $b.branch then ["branch " + $a.branch + " -> " + $b.branch] else [] end)
-    | join(", ")'
+# one path's state in a preflight snapshot: [XY, bytes, index], or null when it is not dirty there
+_BEADS_ENT='def ent($s; $p): ($s.dirty | map(select(.path == $p)) | .[0]) as $d
+  | if $d == null then null else [$d.xy, $s.bytes[$p], $s.index[$p]] end;'
+
+# _beads_snaps <label> <filter> <snapshot...> -> the filter's answer, one JSON array, with the
+# snapshots bound to $s[0], $s[1], ... They reach jq on stdin, never argv: jq.exe is a native
+# Windows program, so a command line past ~32 KB (about 95 dirty files per snapshot) fails with
+# "Argument list too long" and prints nothing. Status 1 and no output unless jq exits 0 AND answers
+# exactly one JSON array; callers treat that as "could not compare", never as "identical".
+# <label> names the call in jq's error message.
+_beads_snaps() {
+  local why="$1" f="$2" out; shift 2
+  out="$(printf '%s\n' "$@" | jq -sc --arg why "$why" --argjson n "$#" "$_BEADS_ENT"'
+    if length == $n and all(.[]; type == "object" and (.dirty | type) == "array") then . as $s | '"$f"'
+    else error("\($why): expected \($n) preflight snapshots") end' 2>/dev/null)" || return 1
+  out="${out//$'\r'/}"
+  [ "$(printf '%s\n' "$out" | jq -sc 'length == 1 and (.[0] | type) == "array"' 2>/dev/null | tr -d '\r')" = true ] || return 1
+  printf '%s\n' "$out"
 }
 
-# _beads_changed <mid.json> <end.json> -> JSON array of paths whose state changed between them.
+# _beads_snapdiff <pre> <post> [<excused>] -> comma-joined paths whose XY, bytes or index differ
+# (or which are dirty on one side only), plus a branch change; empty = identical. Paths dirty in
+# the <excused> snapshot (bd init's leftovers after a failed init) are left out unless they were
+# also dirty in <pre>. Status 1 when the compare could not run: that is a mismatch, never a pass.
+_beads_snapdiff() {
+  local arr out x='{"dirty":[]}'
+  [ -n "${3:-}" ] && x="$3"
+  arr="$(_beads_snaps snapdiff '$s[0] as $a | $s[1] as $b | ([$s[2].dirty[].path] - [$a.dirty[].path]) as $x
+    | ([$a.dirty[].path] + [$b.dirty[].path] | unique - $x) as $ps
+    | [$ps[] | . as $p | select(ent($a; $p) != ent($b; $p))]
+      + (if $a.branch != $b.branch then ["branch \($a.branch) -> \($b.branch)"] else [] end)' \
+    "$1" "$2" "$x")" || return 1
+  out="$(printf '%s\n' "$arr" | jq -r 'join(", ")')" || return 1
+  printf '%s' "${out//$'\r'/}"
+}
+
+# _beads_changed <mid> <end> -> JSON array of paths whose state changed between them. Status 1
+# when the compare could not run.
 _beads_changed() {
-  jq -cn --argjson a "$1" --argjson b "$2" '
-    def ent($s; $p): ($s.dirty | map(select(.path == $p)) | .[0]) as $d
-      | if $d == null then null else [$d.xy, $s.bytes[$p], $s.index[$p]] end;
-    ([$a.dirty[].path] + [$b.dirty[].path] | unique) as $ps
-    | [$ps[] | . as $p | select(ent($a; $p) != ent($b; $p))]'
+  _beads_snaps changed '$s[0] as $a | $s[1] as $b
+    | ([$a.dirty[].path] + [$b.dirty[].path] | unique) as $ps
+    | [$ps[] | . as $p | select(ent($a; $p) != ent($b; $p))]' "$1" "$2"
 }
 
 # _beads_append_missing <target> <house-file>: append the house file's rule lines the target
@@ -202,11 +233,15 @@ _beads_append_missing() {
 }
 
 # _beads_unban_block <claude-md>: inside the FIRST managed block only, replace the two bd
-# imperatives the house overrides. Every other byte, including each line's CR, is kept.
+# imperatives the house overrides. Every other byte, including each line's CR and a last line's
+# missing line ending, is kept.
 _beads_unban_block() {
-  local f="$1" tmp line cr inb=0 done=0 n=0
+  local f="$1" tmp line cr nl inb=0 done=0 n=0
   tmp="$(mktemp)" || return 1
-  while IFS= read -r line || [ -n "$line" ]; do
+  while :; do
+    if IFS= read -r line; then nl=$'\n'
+    elif [ -n "$line" ]; then nl=''
+    else break; fi
     cr=""; [[ "$line" == *$'\r' ]] && { cr=$'\r'; line="${line%$'\r'}"; }
     [ "$done" = 0 ] && [[ "$line" == *"$_BEADS_MARKER"* ]] && inb=1
     if [ "$inb" = 1 ]; then
@@ -214,7 +249,7 @@ _beads_unban_block() {
       elif [[ "$line" == *"$_BEADS_BAN_MEM"* ]]; then line="$_BEADS_LINE_MEM"; n=$((n + 1)); fi
       [[ "$line" == *'END BEADS INTEGRATION'* ]] && { inb=0; done=1; }
     fi
-    printf '%s%s\n' "$line" "$cr"
+    printf '%s%s%s' "$line" "$cr" "$nl"
   done < "$f" > "$tmp"
   [ "$n" -gt 0 ] && cat "$tmp" > "$f"
   rm -f "$tmp"
@@ -238,13 +273,23 @@ fix_beads() {
   done
   command -v bd >/dev/null 2>&1 || { emit beads unknown "bd not on PATH"; return 0; }
   local top; top="$(git -C "$repo" rev-parse --show-toplevel)" || die "cannot resolve repo root: $repo"
+  # An interrupted earlier run can leave the user's work only in its stash; nothing may run on top
+  # of that. Matched on the stash subject ("On <branch>: <message>"; a branch name holds no ':').
+  local held
+  held="$(git -C "$top" stash list --format='%gd %H %gs' 2>/dev/null | awk '{ s = $0; sub(/^[^ ]+ [^ ]+ /, "", s); sub(/^[^:]*: /, "", s) }
+    index(s, "ritual-beads") { printf "%s%s (%s)", sep, $1, $2; sep = ", " }')"
+  if [ -n "$held" ]; then
+    emit beads failed "a previous run's stash is still held: $held; apply it with \`git stash apply --index ${held%% *}\` then drop it (nothing was run)"
+    return 0
+  fi
   if [ "$(check_beads "$top" | jq -r .status)" = present ]; then
     emit beads already "house beads setup already holds"; return 0
   fi
 
   local pre ndirty have_beads=0
   pre="$(preflight "$top")" || die "preflight failed in $top (working-tree state unknown)"
-  ndirty="$(jq '.dirty | length' <<<"$pre")"
+  ndirty="$(jq '.dirty | length' <<<"$pre" | tr -d '\r')"
+  case "$ndirty" in ''|*[!0-9]*) die "preflight gave no dirty count in $top (working-tree state unknown)" ;; esac
   [ -d "$top/.beads" ] && have_beads=1
   if [ "$ndirty" -gt 0 ]; then
     [ "$stash" = 1 ] || { emit beads failed "dirty tree; re-run with --stash"; return 0; }
@@ -253,6 +298,11 @@ fix_beads() {
     coll="$(jq -r --arg re "$re" '[.dirty[].path | select(test($re))] | unique | join(", ")' <<<"$pre")"
     if [ -n "$coll" ]; then
       emit beads failed "uncommitted changes to paths bd writes: $coll; commit or move them first (nothing was run)"
+      return 0
+    fi
+    local ia; ia="$(git -C "$top" rev-parse --path-format=absolute --git-path info/attributes 2>/dev/null)"
+    if [ -n "$ia" ] && [ -s "$ia" ]; then
+      emit beads failed "$ia is not empty, and no git option sets it aside, so the stash round trip could change your bytes; empty it or commit your work first (nothing was run)"
       return 0
     fi
   fi
@@ -279,7 +329,7 @@ fix_beads() {
   fi
 
   # --- the steps where bd makes commits: init, then dropping the Dolt remote it wires to origin
-  local out prefix
+  local out prefix left="" lo
   if [ "${#fails[@]}" -eq 0 ]; then
     if [ "$have_beads" = 0 ]; then
       prefix="$(basename "$top" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')"
@@ -290,8 +340,10 @@ fix_beads() {
         if [ -f "$top/.beads/config.yaml" ] && [ -f "$top/.beads/metadata.json" ]; then
           notes+=("bd init (prefix $prefix)")
         else
-          fails+=("bd init failed: $(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | head -n 2 | paste -sd ' ' -)")
-          fails+=("left behind: $(_beads_status_paths "$top")${sha:+ (plus your stashed work, restored below)}, nothing was removed")
+          # with the user's work stashed, everything dirty now is bd's; the restore check excuses it
+          lo="$(_beads_status_paths "$top")"
+          fails+=("bd init failed: $(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | head -n 2 | paste -sd ' ' -) (leftovers: ${lo:-none}; nothing was removed)")
+          [ -n "$sha" ] && { left="$(preflight "$top")" || left=""; }
         fi
       fi
     else
@@ -300,22 +352,26 @@ fix_beads() {
   fi
   if [ "${#fails[@]}" -eq 0 ]; then
     (cd "$top" && bd dolt remote remove origin) >/dev/null 2>&1
-    out="$(cd "$top" && bd dolt remote list 2>&1)"
+    out="$(cd "$top" && bd dolt remote list 2>&1 | tr -d '\r')"
     if grep -qE '(^|[[:space:]])origin([[:space:]]|$)' <<<"$out"; then
       fails+=("a Dolt remote 'origin' is still configured after bd dolt remote remove origin")
     elif grep -qiE 'error|fail' <<<"$out"; then
       fails+=("bd dolt remote list could not answer: $(head -n 1 <<<"$out")")
+    elif [ "$(grep -v '^[[:space:]]*$' <<<"$out")" != 'No remotes configured.' ]; then
+      # bd 1.2.2's answer with no remotes, measured; anything else is not proof there is none
+      notes+=("dolt remote state unverified: bd dolt remote list answered '$(head -n 1 <<<"$out")'")
     fi
   fi
 
   # --- give the work back, then prove it
   if [ -n "$sha" ]; then
-    local aout arc post sdiff ref
+    local aout arc post sdiff sdrc ref
     aout="$(_beads_git_raw "$top" stash apply --index "$sha" 2>&1)"; arc=$?
     post="$(preflight "$top")" || post='{"branch":"?","dirty":[],"bytes":{},"index":{}}'
-    sdiff="$(_beads_snapdiff "$pre" "$post")"
+    sdiff="$(_beads_snapdiff "$pre" "$post" "$left")"; sdrc=$?
+    [ "$sdrc" -eq 0 ] || sdiff="unknown: the comparison itself failed, so nothing is proven"
     ref="$(_beads_stash_ref "$top" "$sha")"
-    if [ "$arc" -eq 0 ] && [ -z "$sdiff" ]; then
+    if [ "$arc" -eq 0 ] && [ "$sdrc" -eq 0 ] && [ -z "$sdiff" ]; then
       git -C "$top" stash drop -q "$ref" >/dev/null 2>&1
       if [ -n "$(_beads_stash_ref "$top" "$sha")" ]; then
         notes+=("your work was restored exactly, but its stash $ref could not be dropped")
@@ -323,7 +379,7 @@ fix_beads() {
         notes+=("your uncommitted work was set aside and restored byte-for-byte")
       fi
     else
-      fails+=("stash restore did not verify (apply exit $arc, differs: ${sdiff:-nothing}); the original work is kept in ${ref:-a stash} ($sha, 'ritual-beads') and was NOT dropped")
+      fails+=("your uncommitted work was NOT restored exactly (apply exit $arc, differs: ${sdiff:-nothing}); it is kept in ${ref:-a stash} ($sha, 'ritual-beads') and was NOT dropped")
     fi
   fi
   if [ "${#fails[@]}" -gt 0 ]; then
@@ -335,9 +391,13 @@ fix_beads() {
   local head1 mid kv rc n
   head1="$(git -C "$top" rev-parse -q --verify HEAD 2>/dev/null)"
   mid="$(preflight "$top")" || die "preflight failed in $top"
+  local -a late=()
   for kv in "${_BEADS_SETS[@]}"; do
     (cd "$top" && bd config set "${kv% *}" "${kv#* }") >/dev/null 2>&1
   done
+  # `check` does not require the interval (user-level config may supply it), so read back here
+  local iv; iv="$(_beads_cfg_get "$top/.beads/config.yaml" export.interval)"
+  [ "$iv" = 1ms ] || late+=("export.interval is '${iv:-unset}' in .beads/config.yaml after bd config set (want 1ms)")
   if [ -e "$top/.beads/PRIME.md" ]; then notes+=("kept the existing .beads/PRIME.md")
   else cp "$_BEADS_HOUSE/PRIME.md" "$top/.beads/PRIME.md"; fi
   if [ ! -e "$top/.beads/check-block.sh" ]; then
@@ -382,18 +442,22 @@ fix_beads() {
   local fin end wrote head2
   local -a w=()
   end="$(preflight "$top")" || die "preflight failed in $top"
-  wrote="$(_beads_changed "$mid" "$end")"
+  if ! wrote="$(_beads_changed "$mid" "$end")"; then
+    emit beads failed "could not work out which paths the house steps changed (the comparison failed), so none can be listed; $(_beads_join "${late[@]}" "${notes[@]}")"
+    return 0
+  fi
   mapfile -t w < <(jq -r '.[]' <<<"$wrote" | tr -d '\r')   # jq.exe ends lines with CRLF
   [ -n "$head0" ] && notes+=("bd commits: $(git -C "$top" rev-list --count "$head0..$head1" 2>/dev/null)")
   head2="$(git -C "$top" rev-parse -q --verify HEAD 2>/dev/null)"
   if [ "$head2" != "$head1" ]; then
-    emit beads failed "a commit was made during the house steps (HEAD $head1 -> $head2); check it did not take staged changes; $(_beads_join "${notes[@]}")" "${w[@]}"
+    emit beads failed "a commit was made during the house steps (HEAD $head1 -> $head2); check it did not take staged changes; $(_beads_join "${late[@]}" "${notes[@]}")" "${w[@]}"
     return 0
   fi
   fin="$(check_beads "$top")"
-  if [ "$(jq -r .status <<<"$fin")" = present ]; then
+  [ "$(jq -r .status <<<"$fin")" = present ] || late+=("after setup: $(jq -r .detail <<<"$fin")")
+  if [ "${#late[@]}" -eq 0 ]; then
     emit beads fixed "$(_beads_join "${notes[@]}")" "${w[@]}"
   else
-    emit beads failed "after setup: $(jq -r .detail <<<"$fin"); $(_beads_join "${notes[@]}")" "${w[@]}"
+    emit beads failed "$(_beads_join "${late[@]}" "${notes[@]}")" "${w[@]}"
   fi
 }

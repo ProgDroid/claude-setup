@@ -23,6 +23,10 @@ block() {
 }
 addblock() {
   if [ -f "$1" ] && grep -q 'BEGIN BEADS INTEGRATION' "$1"; then return 0; fi
+  if [ -n "${STUB_BLOCK_TOP:-}" ] && [ -s "$1" ]; then   # block first, the user's text after it
+    { if [ -n "${STUB_CRLF:-}" ]; then block | sed 's/$/\r/'; else block; fi; cat "$1"; } > "$1.new"
+    mv "$1.new" "$1"; return 0
+  fi
   if [ -n "${STUB_CRLF:-}" ]; then
     if [ -s "$1" ]; then printf '\r\n' >> "$1"; fi
     block | sed 's/$/\r/' >> "$1"
@@ -57,10 +61,13 @@ case "$1 ${2:-}" in
     case "${3:-}" in
       remove) [ -n "${STUB_REMOTE_STUCK:-}" ] && exit 0
               echo "Error removing remote: unknown remote: 'origin'" >&2; exit 1 ;;
-      list)   if [ -n "${STUB_REMOTE_STUCK:-}" ]; then echo "origin  git+origin"; else echo "No remotes configured."; fi
+      list)   if [ -n "${STUB_REMOTE_STUCK:-}" ]; then echo "origin  git+origin"
+              elif [ -n "${STUB_REMOTE_LIST+x}" ]; then [ -n "$STUB_REMOTE_LIST" ] && printf '%s\n' "$STUB_REMOTE_LIST"
+              else echo "No remotes configured."; fi   # real bd 1.2.2's answer, measured
               exit "$rc" ;;
     esac ;;
   "config set")
+    [ "$3" = "${STUB_SET_IGNORE:-}" ] && exit "$rc"
     f=.beads/config.yaml; grep -v "^$3:" "$f" > "$f.tmp"; printf '%s: %s\n' "$3" "$4" >> "$f.tmp"; mv "$f.tmp" "$f"
     exit "$rc" ;;
   "config get")
@@ -82,12 +89,45 @@ pf() { bash "$RITUAL" preflight "$1"; }
 logclear() { : > "$LOG"; }
 logn() { if [ -f "$LOG" ]; then grep -c '' "$LOG"; else echo 0; fi; }
 commit_all() { git -C "$1" add -A && git -C "$1" commit -q -m "$2"; }
-# same_user_state <pre> <post>: every path dirty in <pre> has the same XY, bytes and index in <post>
+# bare_lf <file> -> count of LF bytes not preceded by CR
+bare_lf() { od -An -tx1 -v "$1" | tr -s ' ' '\n' | awk 'NF { if ($1 == "0a" && prev != "0d") n++; prev = $1 } END { print n + 0 }'; }
+# same_user_state <pre> <post>: every path dirty in <pre> has the same XY, bytes and index in
+# <post>. The snapshots go through stdin: on argv, two 150-file snapshots overflow jq.exe's
+# command line, and an empty answer would read as a failed comparison for the wrong reason.
 same_user_state() {
-  jq -n --argjson a "$1" --argjson b "$2" '
-    [$a.dirty[] | . as $d | ($b.dirty | map(select(.path == $d.path)) | .[0]) as $e
+  printf '%s\n%s\n' "$1" "$2" | jq -s '.[0] as $a | .[1] as $b
+    | [$a.dirty[] | . as $d | ($b.dirty | map(select(.path == $d.path)) | .[0]) as $e
      | ($e != null and $e.xy == $d.xy and $b.bytes[$d.path] == $a.bytes[$d.path]
-        and $b.index[$d.path] == $a.index[$d.path])] | all' | grep -qx true
+        and $b.index[$d.path] == $a.index[$d.path])] | all' | tr -d '\r' | grep -qx true
+}
+
+# a jq wrapper for fail-closed tests: a call carrying the argument named in STUB_JQ_FAIL_ON
+# exits 126 printing nothing (what jq.exe does on an over-long command line); one carrying
+# STUB_JQ_GARBAGE_ON exits 0 printing something that is not JSON. Everything else is real jq.
+JQDIR="$TMPROOT/jq wrap"; mkdir -p "$JQDIR"
+{ printf '#!/usr/bin/env bash\nREAL_JQ=%q\n' "$(command -v jq)"; cat <<'WRAP'
+for a in "$@"; do
+  [ -n "${STUB_JQ_FAIL_ON:-}" ] && [ "$a" = "$STUB_JQ_FAIL_ON" ] && exit 126
+  [ -n "${STUB_JQ_GARBAGE_ON:-}" ] && [ "$a" = "$STUB_JQ_GARBAGE_ON" ] && { echo 'not json ['; exit 0; }
+done
+exec "$REAL_JQ" "$@"
+WRAP
+} > "$JQDIR/jq"; chmod +x "$JQDIR/jq"
+RJ() { ( stub_path "$STUBDIR"; stub_path "$JQDIR"; export STUB_BD_LOG="$LOG"; bash "$RITUAL" "$@" ); }
+
+# big_fixture <name> -> repo with 160 dirty files: 50 staged edits, 20 MM (staged, then edited
+# again), 30 unstaged edits, 60 untracked files in a spaced directory. Two such snapshots are
+# about 55 KB, past jq.exe's ~32 KB command line.
+big_fixture() {
+  local r i; r="$(mkrepo "$1")"
+  mkdir -p "$r/src" "$r/new stuff"
+  for i in $(seq 1 100); do printf 'line %s\n' "$i" > "$r/src/f$i.txt"; done
+  commit_all "$r" big
+  for i in $(seq 1 70); do printf 'staged\n' >> "$r/src/f$i.txt"; done
+  git -C "$r" add src
+  for i in $(seq 51 100); do printf 'again\n' >> "$r/src/f$i.txt"; done
+  for i in $(seq 1 60); do printf 'new %s\n' "$i" > "$r/new stuff/n $i.txt"; done
+  printf '%s\n' "$r"
 }
 
 # mkhouse <repo> <hooksPath|-> : a fully set-up beads repo built by hand (nested config.yaml,
@@ -124,6 +164,9 @@ out="$(NB check beads "$r")"
 r="$(mkrepo)"
 out="$(R check beads "$r")"
 [ "$(st "$out")" = absent ] && dt "$out" | grep -q '\.beads/' && ok "check_absent_when_no_dir" || bad "no dir: $out"
+# Not a discriminating test on its own: with no .beads/ the directory gate answers before any key is
+# read. The real proof that keys come from .beads/config.yaml and never from `bd config get` is the
+# check_requires_* loop below, because the stub's `config get` answers `true` for every key there.
 out="$(STUB_GET=true R check beads "$r")"
 [ "$(st "$out")" = absent ] && ok "check_ignores_user_level_config" || bad "user-level config leaked: $out"
 
@@ -211,6 +254,7 @@ w="$(jq -c '.wrote|sort' <<<"$out")"
 for p in .beads/config.yaml .beads/PRIME.md .beads/check-block.sh .beads/.gitignore .gitattributes .beads/interactions.jsonl CLAUDE.md AGENTS.md .codex/config.toml .agents/skills/beads/SKILL.md; do
   jq -e --arg p "$p" 'index($p)' <<<"$w" >/dev/null || { bad "wrote lacks $p: $w"; w=MISSING; }; done
 [ "$w" != MISSING ] && [ "$(jq length <<<"$w")" = 10 ] && ok "fix_wrote_lists_exactly_the_changed_paths" || bad "wrote: $w"
+grep -qx 'dolt remote list' "$LOG" && ! dt "$out" | grep -q 'unverified' && ok "fix_dolt_no_remotes_answer_is_verified" || bad "no-remotes answer: $out"
 
 # rerun
 logclear; out="$(R fix beads "$r")"
@@ -247,11 +291,57 @@ commit_all "$r" claude; cp "$r/CLAUDE.md" "$TMPROOT/block.before"; logclear
 out="$(R fix beads "$r")"
 [ "$(st "$out")" = failed ] && dt "$out" | grep -q 'check-block' && head -n 4 "$r/CLAUDE.md" | cmp -s - "$TMPROOT/block.before" \
   && ok "fix_never_edits_a_preexisting_block" || bad "pre-existing block: $out"
+grep -q '^init ' "$LOG" && ! grep -q 'setup claude' "$LOG" && ok "fix_setup_claude_not_run_when_marker_preexisted" || bad "setup claude ran over a pre-existing marker (or bd never ran): $(cat "$LOG")"
+
+r="$(mkrepo "Codex Repo")"; mkdir -p "$r/.codex" "$r/.agents/skills/beads"
+printf 'mine\n' > "$r/.codex/mine.toml"; printf 'my skill\n' > "$r/.agents/skills/beads/MINE.md"; commit_all "$r" codex; logclear
+out="$(R fix beads "$r")"
+[ "$(st "$out")" = fixed ] && grep -q '^init ' "$LOG" && [ "$(cat "$r/.codex/mine.toml" 2>/dev/null)" = mine ] \
+  && [ "$(cat "$r/.agents/skills/beads/MINE.md" 2>/dev/null)" = 'my skill' ] && [ -d "$r/.codex" ] && [ -d "$r/.agents/skills/beads" ] \
+  && ok "fix_keeps_preexisting_codex_and_agents_skill" || bad "pre-existing .codex/.agents: $out; $(ls -A "$r")"
+
+r="$(mkrepo "Remote Unknown")"; logclear
+out="$(STUB_REMOTE_LIST= R fix beads "$r")"
+[ "$(st "$out")" = fixed ] && dt "$out" | grep -q 'dolt remote state unverified' && ok "fix_dolt_unrecognised_answer_is_reported_unverified" || bad "empty remote list: $out"
+r="$(mkrepo "Remote Other")"; logclear
+out="$(STUB_REMOTE_LIST='upstream  git+elsewhere' R fix beads "$r")"
+[ "$(st "$out")" = fixed ] && dt "$out" | grep -q 'dolt remote state unverified' && dt "$out" | grep -q 'upstream' \
+  && ok "fix_dolt_other_answer_is_reported_unverified_and_quoted" || bad "other remote list: $out"
+
+r="$(mkrepo "Interval Repo")"; logclear
+out="$(STUB_SET_IGNORE=export.interval R fix beads "$r")"
+[ "$(st "$out")" = failed ] && dt "$out" | grep -q 'export.interval' && grep -qx 'config set export.interval 1ms' "$LOG" \
+  && ok "fix_fails_when_interval_not_written" || bad "interval unset: $out"
+
+# _beads_unban_block, directly: the managed block first, user text AFTER it, and a final line with
+# no line ending. Only the two ban lines may change; no byte is added after the last line.
+unban_case() {   # <eol> -> 0 when the result is byte-exact
+  ( . "$SKILL_DIR/lib/common.sh"; . "$SKILL_DIR/lib/beads.sh"; e="$1"
+    f="$TMPROOT/unban.$RANDOM"
+    printf "%s$e" '<!-- BEGIN BEADS INTEGRATION v:1 -->' '- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate' \
+      '- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files' '<!-- END BEADS INTEGRATION -->' '' 'my text after' > "$f"
+    printf 'no final newline' >> "$f"
+    { printf "%s$e" '<!-- BEGIN BEADS INTEGRATION v:1 -->' "$_BEADS_LINE_TODO" "$_BEADS_LINE_MEM" '<!-- END BEADS INTEGRATION -->' '' 'my text after'
+      printf 'no final newline'; } > "$f.exp"
+    [ "$(_beads_unban_block "$f")" = 2 ] && cmp -s "$f" "$f.exp" )
+}
+unban_case '\n' && ok "unban_keeps_user_text_after_block_and_no_final_newline" || bad "unban LF: trailing bytes changed"
+unban_case '\r\n' && ok "unban_keeps_user_text_after_block_and_no_final_newline_crlf" || bad "unban CRLF: trailing bytes changed"
+
+# end to end: bd puts its block ABOVE the user's CRLF CLAUDE.md; the user's bytes after the END
+# marker survive unchanged (the override is appended after them).
+r="$(mkrepo "Block Top")"; printf '# Mine\r\n\r\nKeep this.\r\n' > "$r/CLAUDE.md"; commit_all "$r" claude
+cp "$r/CLAUDE.md" "$TMPROOT/top.user"; logclear
+out="$(STUB_BLOCK_TOP=1 STUB_CRLF=1 R fix beads "$r")"
+endm='END BEADS INTEGRATION -->'; off="$(grep -abo "$endm" "$r/CLAUDE.md" | head -n 1 | cut -d: -f1)"
+[ "$(st "$out")" = fixed ] && [ -n "$off" ] && [ "$(head -n 1 "$r/CLAUDE.md" | grep -c 'BEGIN BEADS')" = 1 ] \
+  && tail -c +"$((off + ${#endm} + 3))" "$r/CLAUDE.md" | head -c "$(wc -c < "$TMPROOT/top.user")" | cmp -s - "$TMPROOT/top.user" \
+  && [ "$(bare_lf "$r/CLAUDE.md")" = 0 ] && ! grep -q 'do NOT use TodoWrite' "$r/CLAUDE.md" \
+  && ok "fix_user_text_after_block_is_byte_identical_crlf" || bad "block-top CLAUDE.md: $out; $(od -c "$r/CLAUDE.md" | head -n 4)"
 
 r="$(mkrepo "Crlf Claude")"; printf '# Mine\r\n\r\nKeep this.\r\n' > "$r/CLAUDE.md"; commit_all "$r" claude
 cp "$r/CLAUDE.md" "$TMPROOT/claude.crlf"; logclear
 out="$(STUB_CRLF=1 R fix beads "$r")"
-bare_lf() { od -An -tx1 -v "$1" | tr -s ' ' '\n' | awk 'NF { if ($1 == "0a" && prev != "0d") n++; prev = $1 } END { print n + 0 }'; }
 nlf="$(bare_lf "$r/CLAUDE.md")"
 printf 'a\r\nb\nc\r\n' > "$TMPROOT/lfctl"; [ "$(bare_lf "$TMPROOT/lfctl")" = 1 ] && ok "bare_lf_counter_sees_one_lf (control)" || bad "bare_lf counter blind"
 [ "$(st "$out")" = fixed ] && head -c "$(wc -c < "$TMPROOT/claude.crlf")" "$r/CLAUDE.md" | cmp -s - "$TMPROOT/claude.crlf" \
@@ -328,6 +418,76 @@ out="$(R fix beads "$r" --stash)"
 r="$(mkrepo "Dirty Beads")"; mkhouse "$r" -; commit_all "$r" beads; printf 'x: y\n' >> "$r/.beads/config.yaml"; logclear
 out="$(R fix beads "$r" --stash)"
 [ "$(st "$out")" = failed ] && dt "$out" | grep -q '\.beads/' && [ "$(logn)" = 0 ] && ok "fix_stash_refuses_dirty_beads_dir" || bad "dirty .beads: $out"
+
+# --- large trees: the compare must not depend on jq's command-line length
+r="$(big_fixture "Big Stash")"; pre="$(pf "$r")"; logclear
+[ "$(jq '.dirty|length' <<<"$pre")" -ge 150 ] && [ "$(jq '[.dirty[]|select(.xy=="MM")]|length' <<<"$pre")" = 20 ] \
+  && [ "$(jq '[.dirty[]|select(.xy=="??")]|length' <<<"$pre")" = 60 ] && [ "$(jq '[.dirty[]|select(.xy=="M ")]|length' <<<"$pre")" = 50 ] \
+  && [ "$(printf '%s%s' "$pre" "$pre" | wc -c)" -gt 40000 ] && ok "big_fixture_has_160_dirty_past_the_argv_limit (control)" || bad "big fixture: $(jq -c '[.dirty[].xy]|group_by(.)|map({(.[0]):length})|add' <<<"$pre")"
+out="$(R fix beads "$r" --stash)"; post="$(pf "$r")"
+[ "$(st "$out")" = fixed ] && [ "$(git -C "$r" log -1 --format=%s)" = 'bd init: initialize beads issue tracking' ] \
+  && same_user_state "$pre" "$post" && [ -z "$(git -C "$r" stash list)" ] \
+  && ok "fix_stash_roundtrip_150_dirty_files" || bad "150 roundtrip: $(st "$out"); $(dt "$out" | head -c 300); stash=$(git -C "$r" stash list)"
+w="$(jq -c '.wrote|sort' <<<"$out")"
+[ "$(jq length <<<"$w")" = 10 ] && jq -e 'index(".beads/config.yaml") and index("CLAUDE.md") and index(".gitattributes")' <<<"$w" >/dev/null \
+  && ok "fix_stash_150_wrote_lists_the_bd_paths" || bad "150 wrote: $w"
+
+r="$(big_fixture "Big Mutate")"; logclear
+out="$(STUB_INIT_MUTATE=README.md R fix beads "$r" --stash)"
+[ "$(st "$out")" = failed ] && git -C "$r" stash list | grep -q 'ritual-beads' && dt "$out" | grep -q 'README.md' \
+  && dt "$out" | grep -q 'stash@{0}' && ! grep -q 'config set' "$LOG" \
+  && ok "fix_stash_mismatch_detected_150_dirty_files" || bad "150 mismatch: $(st "$out"); stash=$(git -C "$r" stash list)"
+
+# --- fail closed: a compare that cannot run, or answers garbage, is a mismatch
+r="$(stash_fixture "Jq Fails")"; logclear
+out="$(STUB_JQ_FAIL_ON=snapdiff RJ fix beads "$r" --stash)"
+[ "$(st "$out")" = failed ] && git -C "$r" stash list | grep -q 'ritual-beads' && dt "$out" | grep -q 'stash@{0}' \
+  && grep -q '^init ' "$LOG" && ok "fix_stash_jq_failure_keeps_stash" || bad "jq failure: $out; stash=$(git -C "$r" stash list)"
+r="$(stash_fixture "Jq Garbage")"; logclear
+out="$(STUB_JQ_GARBAGE_ON=snapdiff RJ fix beads "$r" --stash)"
+[ "$(st "$out")" = failed ] && git -C "$r" stash list | grep -q 'ritual-beads' && grep -q '^init ' "$LOG" \
+  && ok "fix_stash_unparseable_compare_keeps_stash" || bad "jq garbage: $out; stash=$(git -C "$r" stash list)"
+r="$(mkrepo "Wrote Fails")"; logclear
+out="$(STUB_JQ_FAIL_ON=changed RJ fix beads "$r")"
+[ "$(st "$out")" = failed ] && dt "$out" | grep -q 'changed' && grep -q '^init ' "$LOG" \
+  && ok "fix_wrote_jq_failure_fails_the_step" || bad "wrote jq failure: $out"
+
+# --- a previous run's stash still held: refuse before running anything
+r="$(mkrepo "Held Stash")"; echo held >> "$r/README.md"; git -C "$r" stash push -q -m ritual-beads
+hsha="$(git -C "$r" rev-parse refs/stash)"; logclear
+out="$(R fix beads "$r" --stash)"
+[ "$(st "$out")" = failed ] && dt "$out" | grep -q 'stash@{0}' && dt "$out" | grep -q "$hsha" \
+  && dt "$out" | grep -qF 'git stash apply --index stash@{0}' && [ "$(logn)" = 0 ] \
+  && [ "$(git -C "$r" stash list | grep -c '')" = 1 ] && ok "fix_refuses_while_ritual_stash_held" || bad "held stash: $out; log=$(cat "$LOG")"
+r="$(mkrepo "Other Stash")"; echo other >> "$r/README.md"; git -C "$r" stash push -q -m 'my own work'; logclear
+out="$(R fix beads "$r")"
+[ "$(st "$out")" = fixed ] && git -C "$r" stash list | grep -q 'my own work' && ok "fix_ignores_an_unrelated_stash (control)" || bad "unrelated stash: $out"
+
+# --- attributes the raw stash cannot neutralise by itself
+r="$(stash_fixture "Info Attrs")"
+ia="$(git -C "$r" rev-parse --path-format=absolute --git-path info/attributes)"; mkdir -p "$(dirname "$ia")"
+printf '*.txt text eol=crlf\n' > "$ia"; pre="$(pf "$r")"; logclear
+out="$(R fix beads "$r" --stash)"; post="$(pf "$r")"
+[ "$(st "$out")" = failed ] && dt "$out" | grep -q 'info/attributes' && [ "$(logn)" = 0 ] && [ -z "$(git -C "$r" stash list)" ] \
+  && same_user_state "$pre" "$post" && ok "fix_stash_refuses_nonempty_info_attributes" || bad "info/attributes: $out"
+r="$(stash_fixture "Empty Info Attrs")"; ia="$(git -C "$r" rev-parse --path-format=absolute --git-path info/attributes)"
+mkdir -p "$(dirname "$ia")"; : > "$ia"; logclear
+[ "$(st "$(R fix beads "$r" --stash)")" = fixed ] && ok "fix_stash_allows_empty_info_attributes (control)" || bad "empty info/attributes refused"
+
+r="$(mkrepo "Attrs File")"; git -C "$r" config core.autocrlf true
+printf 'a\nb\n' > "$r/lf.txt"; commit_all "$r" lf 2>/dev/null
+printf '*.txt text eol=crlf\n' > "$TMPROOT/user-attributes"; git -C "$r" config core.attributesFile "$(cygpath -m "$TMPROOT/user-attributes")"
+printf 'c\n' >> "$r/lf.txt"; printf 'u\n' > "$r/untr.txt"
+pre="$(pf "$r")"; out="$(R fix beads "$r" --stash 2>/dev/null)"; post="$(pf "$r")"
+[ "$(st "$out")" = fixed ] && same_user_state "$pre" "$post" && ok "fix_stash_neutralises_core_attributesfile" || bad "attributesFile: $out"
+
+# --- init failure under --stash: bd's failure and the restore are reported separately
+r="$(stash_fixture "Init Fail Stash")"; pre="$(pf "$r")"; logclear
+out="$(STUB_INIT_FAIL=1 R fix beads "$r" --stash)"; post="$(pf "$r")"; d="$(dt "$out")"
+[ "$(st "$out")" = failed ] && grep -q 'bd init failed' <<<"$d" && grep -q 'leftovers: [^;]*\.beads/\.gitignore' <<<"$d" \
+  && grep -q 'restored byte-for-byte' <<<"$d" && ! grep -qi 'NOT restored\|did not verify' <<<"$d" \
+  && [ -z "$(git -C "$r" stash list)" ] && same_user_state "$pre" "$post" && [ -f "$r/.beads/.gitignore" ] \
+  && ok "fix_stash_init_failure_separates_leftovers_from_restore" || bad "init fail under stash: $out; stash=$(git -C "$r" stash list)"
 
 # the measured failure: a plain `git stash pop` turns MM into " M". A mutated copy of the skill
 # must report it, proving the verification can see it.

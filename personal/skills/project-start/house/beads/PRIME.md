@@ -21,7 +21,7 @@ Before saying "done" or "complete":
   exists*; TodoWrite is *how a procedure gets followed*. Use both.
 - **bd owns WORK STATE ONLY.** Memory is files (the project's memory directory and any
   committed copy of it), never `bd remember`. Decisions and rulings live in docs
-  (specs, plans, reviews). Do not re-propose a memory migration.
+  (specs, plans, reviews).
 - **Bead ids in commits:** put the id alone on its own line in the commit body when the
   commit finishes that bead, so tooling can report beads named that way but still open.
 - **Sync:** `.beads/issues.jsonl` is the export that travels in git (`export.auto` +
