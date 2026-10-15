@@ -24,3 +24,8 @@ emit() {
 }
 
 die() { echo "ritual: $*" >&2; exit 2; }
+
+# require_repo <path>: refuse (exit 2) unless <path> is inside a git repository.
+require_repo() {
+  local g; g="$(git_common_dir "$1" 2>/dev/null)" && [ -n "$g" ] || die "not a git repository: $1"
+}

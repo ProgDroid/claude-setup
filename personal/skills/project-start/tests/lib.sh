@@ -40,9 +40,14 @@ stub_path() { PATH="$1:$PATH"; export PATH; }
 # Use: PATH="$(path_without bd)" cmd.   CAVEAT: if the tool shares a directory with bash/git/jq
 # (e.g. /usr/bin), those vanish too; the helper then prints the reduced PATH anyway.
 path_without() {
-  local tool="$1" d out="" IFS=:
-  for d in $PATH; do
-    [ -x "$d/$tool" ] || [ -x "$d/$tool.exe" ] || out="${out:+$out:}$d"
+  local tool="$1" d rest out="" first=1
+  set -f
+  rest="$PATH:"
+  while [ -n "$rest" ]; do
+    d="${rest%%:*}"; rest="${rest#*:}"
+    if [ -n "$d" ] && { [ -x "$d/$tool" ] || [ -x "$d/$tool.exe" ]; }; then continue; fi
+    if [ "$first" = 1 ]; then out="$d"; first=0; else out="$out:$d"; fi
   done
+  set +f
   printf '%s\n' "$out"
 }

@@ -79,6 +79,21 @@ R record-write "$r2" "$(results '{"nosteps":1}')" >/dev/null 2>&1 && bad "shape 
 [ "$(R record-read "$r2")" = "$before" ] && ok "failed write leaves the record untouched" || bad "record changed by failed write"
 R bogus "$r2" >/dev/null 2>&1 && bad "unknown subcommand exits 0" || ok "unknown subcommand is an error"
 
+echo "== non-git path is refused =="
+ng="$TMPROOT/not a repo"; mkdir -p "$ng"
+printf '{"steps":{"ci":{"result":"done"}}}' > "$TMPROOT/ng-results.json"
+[ ! -e /ritual.json ] || bad "premise: /ritual.json already exists"
+if git -C "$ng" rev-parse --git-dir >/dev/null 2>&1; then bad "premise: fixture is inside a git repo"; else ok "premise: fixture dir is not in a git repo"; fi
+for sub in record-path record-read record-write due; do
+  if [ "$sub" = record-write ]; then args=("$ng" "$TMPROOT/ng-results.json"); else args=("$ng"); fi
+  out="$(R "$sub" "${args[@]}" 2>"$TMPROOT/ng.err")"; rc=$?
+  [ "$rc" -ne 0 ] && ok "$sub on a non-git dir exits non-zero" || bad "$sub on a non-git dir exited 0: $out"
+  grep -q 'not a git repository' "$TMPROOT/ng.err" && ok "$sub says 'not a git repository'" || bad "$sub stderr: $(cat "$TMPROOT/ng.err")"
+  [ -z "$out" ] && ok "$sub prints nothing on stdout" || bad "$sub stdout: $out"
+done
+[ ! -e /ritual.json ] && [ ! -e "$ng/ritual.json" ] && [ ! -e "$ng/.git/ritual.json" ] \
+  && ok "no ritual.json at filesystem root or in the dir after all four" || bad "a ritual.json was created"
+
 echo "== due =="
 r4="$(mkrepo due)"
 d="$(R due "$r4")"

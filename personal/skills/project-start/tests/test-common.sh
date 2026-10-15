@@ -35,5 +35,7 @@ command -v fakegh >/dev/null 2>&1 && bad "stub_path leaked (subshell test)" || o
 [ "$( stub_path "$TMPROOT/stubs"; PATH="$(path_without fakegh)"; command -v fakegh || echo GONE )" = GONE ] \
   && ok "path_without removes the dir holding a tool" || bad "path_without"
 [ "$(path_without definitely-not-a-tool-xyz)" = "$PATH" ] && ok "path_without an absent tool leaves PATH unchanged" || bad "path_without absent"
+[ "$(PATH="/usr/bin::/bin:*:" path_without definitely-not-a-tool-xyz)" = "/usr/bin::/bin:*:" ] \
+  && ok "path_without keeps empty segments and glob chars byte-identical" || bad "path_without mangled PATH"
 
 finish

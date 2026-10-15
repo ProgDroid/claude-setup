@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # The ritual record: $(git rev-parse --git-common-dir)/ritual.json. Written only from here, by bash.
 
-record_file() { printf '%s/ritual.json\n' "$(git_common_dir "$1")"; }
+record_file() {
+  local g; g="$(git_common_dir "$1" 2>/dev/null)" && [ -n "$g" ] || return 1
+  printf '%s/ritual.json\n' "$g"
+}
 
 record_path() { jq -nc --arg p "$(record_file "$1")" '{path:$p}'; }
 
