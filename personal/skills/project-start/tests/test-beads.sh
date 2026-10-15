@@ -405,6 +405,9 @@ out="$(STUB_INIT_MUTATE=README.md R fix beads "$r" --stash)"
 [ "$(st "$out")" = failed ] && git -C "$r" stash list | grep -q 'ritual-beads' && dt "$out" | grep -q 'stash@{0}' \
   && dt "$out" | grep -q 'README.md' && ! grep -q 'config set' "$LOG" \
   && ok "fix_stash_mismatch_keeps_stash" || bad "mismatch: $out; stash=$(git -C "$r" stash list)"
+msha="$(git -C "$r" rev-parse -q --verify refs/stash)"
+[ -n "$msha" ] && dt "$out" | grep -qF "core.autocrlf=false" && dt "$out" | grep -qF "stash apply --index $msha\`" \
+  && ok "fix_stash_mismatch_prints_the_raw_mode_apply" || bad "mismatch recovery command: $(dt "$out")"
 
 r="$(stash_fixture "Collide Repo")"; logclear
 out="$(STUB_INIT_MUTATE=edit.txt R fix beads "$r" --stash)"
@@ -457,8 +460,27 @@ r="$(mkrepo "Held Stash")"; echo held >> "$r/README.md"; git -C "$r" stash push 
 hsha="$(git -C "$r" rev-parse refs/stash)"; logclear
 out="$(R fix beads "$r" --stash)"
 [ "$(st "$out")" = failed ] && dt "$out" | grep -q 'stash@{0}' && dt "$out" | grep -q "$hsha" \
-  && dt "$out" | grep -qF 'git stash apply --index stash@{0}' && [ "$(logn)" = 0 ] \
-  && [ "$(git -C "$r" stash list | grep -c '')" = 1 ] && ok "fix_refuses_while_ritual_stash_held" || bad "held stash: $out; log=$(cat "$LOG")"
+  && dt "$out" | grep -qF "core.autocrlf=false -c core.eol=lf -c core.safecrlf=false -c core.attributesFile=/dev/null --attr-source=" \
+  && dt "$out" | grep -qF "stash apply --index $hsha\`" && dt "$out" | grep -qF 'git stash drop stash@{0}' && [ "$(logn)" = 0 ] \
+  && [ "$(git -C "$r" stash list | grep -c '')" = 1 ] && ok "fix_refuses_while_ritual_stash_held (prints the raw-mode apply)" || bad "held stash: $out; log=$(cat "$LOG")"
+
+# the printed recovery command, run literally, gives back the exact bytes under core.autocrlf=true,
+# where a plain `git stash apply --index` does not (control, on a copy of the same repo)
+r="$(mkrepo "Raw Recover")"; git -C "$r" config core.autocrlf true
+printf 'a\nb\n' > "$r/lf.txt"; commit_all "$r" lf 2>/dev/null
+printf 'c\n' >> "$r/lf.txt"; printf 'p\nq\r\n' > "$r/mixed.txt"
+pre="$(pf "$r")"; mkdir -p "$TMPROOT/rawexp"; cp "$r/lf.txt" "$r/mixed.txt" "$TMPROOT/rawexp/"
+( . "$SKILL_DIR/lib/common.sh"; . "$SKILL_DIR/lib/beads.sh"; _beads_git_raw "$r" stash push -q -u -m ritual-beads ) >/dev/null 2>&1   # what an interrupted run leaves
+hsha="$(git -C "$r" rev-parse -q --verify refs/stash)"; cp -r "$r" "$r plain"; logclear
+out="$(R fix beads "$r" --stash)"
+cmd="$(dt "$out" | sed -n 's/^[^`]*`\([^`]*\)`.*/\1/p')"
+(cd "$r" && eval "$cmd") >/dev/null 2>&1
+(cd "$r plain" && git stash apply --index "$hsha") >/dev/null 2>&1
+[ -n "$hsha" ] && [ "$(st "$out")" = failed ] && grep -qF 'core.autocrlf=false' <<<"$cmd" && grep -qF "$hsha" <<<"$cmd" \
+  && cmp -s "$r/lf.txt" "$TMPROOT/rawexp/lf.txt" && cmp -s "$r/mixed.txt" "$TMPROOT/rawexp/mixed.txt" && same_user_state "$pre" "$(pf "$r")" \
+  && ! cmp -s "$r plain/lf.txt" "$TMPROOT/rawexp/lf.txt" \
+  && ok "printed_raw_apply_command_restores_exact_bytes_under_autocrlf (control: plain apply differs)" \
+  || bad "raw recovery: cmd=[$cmd]; lf=$(od -c "$r/lf.txt" | head -n 1); plain=$(od -c "$r plain/lf.txt" | head -n 1)"
 r="$(mkrepo "Other Stash")"; echo other >> "$r/README.md"; git -C "$r" stash push -q -m 'my own work'; logclear
 out="$(R fix beads "$r")"
 [ "$(st "$out")" = fixed ] && git -C "$r" stash list | grep -q 'my own work' && ok "fix_ignores_an_unrelated_stash (control)" || bad "unrelated stash: $out"

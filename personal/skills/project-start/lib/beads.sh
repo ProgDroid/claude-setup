@@ -153,18 +153,23 @@ check_beads_metrics() {
 # _beads_git_raw <top> <git args...>: git with no line-ending conversion and no attributes, so a
 # stash stores and restores the user's raw bytes. Measured with core.autocrlf=true: a plain stash
 # round trip rewrites LF and mixed-ending files as CRLF (and eol=lf files the other way).
-# --attr-source replaces only the in-tree attributes, so core.attributesFile is pointed at an empty
-# file here. $GIT_DIR/info/attributes cannot be overridden at all: fix_beads refuses --stash when
-# it is non-empty.
+# --attr-source replaces only the in-tree attributes, so core.attributesFile is pointed at /dev/null
+# (git for Windows accepts it from Git Bash and from PowerShell: probed, a configured eol=crlf reads
+# back unspecified). $GIT_DIR/info/attributes cannot be overridden at all: fix_beads refuses
+# --stash when it is non-empty. The options are shared with the recovery command printed to the
+# user, so what the user is told to run is exactly what ran here.
+_BEADS_RAW_OPTS=(-c core.autocrlf=false -c core.eol=lf -c core.safecrlf=false -c core.attributesFile=/dev/null)
 _beads_git_raw() {
-  local top="$1" empty noattr arg rc; shift
+  local top="$1" empty; shift
   empty="$(git -C "$top" hash-object -t tree /dev/null)" || return 1
-  noattr="$(mktemp)" || return 1
-  arg="$noattr"; command -v cygpath >/dev/null 2>&1 && arg="$(cygpath -m "$noattr")"
-  git -C "$top" -c core.autocrlf=false -c core.eol=lf -c core.safecrlf=false -c "core.attributesFile=$arg" \
-    --attr-source="$empty" "$@"; rc=$?
-  rm -f "$noattr"
-  return "$rc"
+  git -C "$top" "${_BEADS_RAW_OPTS[@]}" --attr-source="$empty" "$@"
+}
+
+# _beads_raw_apply_cmd <top> <sha> -> the raw-mode `stash apply` for the user to run in the repo.
+# A plain `git stash apply` under core.autocrlf=true gives back different bytes (measured).
+_beads_raw_apply_cmd() {
+  local empty; empty="$(git -C "$1" hash-object -t tree /dev/null)"
+  printf 'git %s --attr-source=%s stash apply --index %s' "${_BEADS_RAW_OPTS[*]}" "${empty:-<empty-tree>}" "$2"
 }
 
 # _beads_stash_ref <top> <sha> -> stash@{N} for the stash commit <sha> (empty if gone).
@@ -279,7 +284,8 @@ fix_beads() {
   held="$(git -C "$top" stash list --format='%gd %H %gs' 2>/dev/null | awk '{ s = $0; sub(/^[^ ]+ [^ ]+ /, "", s); sub(/^[^:]*: /, "", s) }
     index(s, "ritual-beads") { printf "%s%s (%s)", sep, $1, $2; sep = ", " }')"
   if [ -n "$held" ]; then
-    emit beads failed "a previous run's stash is still held: $held; apply it with \`git stash apply --index ${held%% *}\` then drop it (nothing was run)"
+    local href="${held%% *}" hsha="${held%%)*}"; hsha="${hsha##*(}"
+    emit beads failed "a previous run's stash is still held: $held; apply it in raw mode, exactly as the ritual does, with \`$(_beads_raw_apply_cmd "$top" "$hsha")\` (a plain \`git stash apply\` can change line endings), then \`git stash drop $href\` (nothing was run)"
     return 0
   fi
   if [ "$(check_beads "$top" | jq -r .status)" = present ]; then
@@ -379,7 +385,7 @@ fix_beads() {
         notes+=("your uncommitted work was set aside and restored byte-for-byte")
       fi
     else
-      fails+=("your uncommitted work was NOT restored exactly (apply exit $arc, differs: ${sdiff:-nothing}); it is kept in ${ref:-a stash} ($sha, 'ritual-beads') and was NOT dropped")
+      fails+=("your uncommitted work was NOT restored exactly (apply exit $arc, differs: ${sdiff:-nothing}); it is kept in ${ref:-a stash} ($sha, 'ritual-beads') and was NOT dropped; the exact original applies onto a clean tree with \`$(_beads_raw_apply_cmd "$top" "$sha")\`")
     fi
   fi
   if [ "${#fails[@]}" -gt 0 ]; then
