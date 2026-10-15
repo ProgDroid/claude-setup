@@ -100,7 +100,35 @@ cmp -s "$r/CLAUDE.md" "$TMPROOT/exp.crlf" && ok "crlf_claude_md" || bad "crlf by
 out="$(R fix parking-lot "$r")"
 [ "$(st "$out")" = already ] && cmp -s "$r/CLAUDE.md" "$TMPROOT/exp.crlf" && ok "crlf_rerun_already" || bad "crlf rerun: $out"
 
-# --- the house rule line inside a CRLF file is still detected, and docs dir existing is fine
+# --- fenced "## " line inside Working rules does not end the section
+r="$(mkrepo)"
+printf '## Working rules\n\n- Be kind.\n\n```\n## not a heading\n```\n\n## Other\n\nstuff\n' > "$r/CLAUDE.md"
+R fix parking-lot "$r" >/dev/null
+{ printf '## Working rules\n\n- Be kind.\n\n```\n## not a heading\n```\n'; cat "$HOUSE_RULE"; printf '\n## Other\n\nstuff\n'; } > "$TMPROOT/exp.fence"
+cmp -s "$r/CLAUDE.md" "$TMPROOT/exp.fence" && ok "fenced_heading_does_not_end_section" || bad "fence bytes: $(cat "$r/CLAUDE.md")"
+
+# --- a fenced "## Working rules" is not the section
+r="$(mkrepo)"
+printf '# Proj\n\n~~~\n## Working rules\n~~~\n' > "$r/CLAUDE.md"
+R fix parking-lot "$r" >/dev/null
+{ printf '# Proj\n\n~~~\n## Working rules\n~~~\n\n## Working rules\n\n'; cat "$HOUSE_RULE"; } > "$TMPROOT/exp.fenchead"
+cmp -s "$r/CLAUDE.md" "$TMPROOT/exp.fenchead" && ok "fenced_working_rules_heading_ignored" || bad "fenchead bytes: $(cat "$r/CLAUDE.md")"
+
+# --- empty Working rules section
+r="$(mkrepo)"
+printf '## Working rules\n\n\n## Other\n\nstuff\n' > "$r/CLAUDE.md"
+R fix parking-lot "$r" >/dev/null
+{ printf '## Working rules\n\n'; cat "$HOUSE_RULE"; printf '\n## Other\n\nstuff\n'; } > "$TMPROOT/exp.empty"
+cmp -s "$r/CLAUDE.md" "$TMPROOT/exp.empty" && ok "empty_working_rules_section" || bad "empty bytes: $(cat "$r/CLAUDE.md")"
+
+# --- a ### subsection does not end Working rules
+r="$(mkrepo)"
+printf '## Working rules\n\n- Be kind.\n\n### Sub\n\n- sub item\n\n## Other\n\nstuff\n' > "$r/CLAUDE.md"
+R fix parking-lot "$r" >/dev/null
+{ printf '## Working rules\n\n- Be kind.\n\n### Sub\n\n- sub item\n'; cat "$HOUSE_RULE"; printf '\n## Other\n\nstuff\n'; } > "$TMPROOT/exp.sub"
+cmp -s "$r/CLAUDE.md" "$TMPROOT/exp.sub" && ok "subsection_does_not_end_working_rules" || bad "sub bytes: $(cat "$r/CLAUDE.md")"
+
+# --- after a fresh fix (LF file) the rule is detected; an existing docs dir is fine
 r="$(mkrepo)"; mkdir -p "$r/docs"
 R fix parking-lot "$r" >/dev/null
 [ "$(st "$(R check parking-lot "$r")")" = present ] && ok "existing_docs_dir_ok" || bad "docs dir"
