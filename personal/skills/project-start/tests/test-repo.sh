@@ -88,6 +88,37 @@ out="$(cand "$r")"
 r="$(mkrepo)"; printf 'TODO bin\0\0data' > "$r/b.bin"; git -C "$r" add -A; git -C "$r" commit -q -m c
 out="$(cand "$r")"; [ "$(jq '.items|length' <<<"$out")" = 0 ] && ok "candidates_skip_binary" || bad "candidates_binary: $out"
 
+# --- noise filters (word boundary + comment marker, vendored paths, length)
+r="$(mkrepo)"; mkdir -p "$r/vendor/x" "$r/src" "$r/docs"
+printf 'TODOs: none\nTODO_LIST = 1\nMY_FIXME = 2\n// TODO: real\n/* FIXME block */\n * TODO star line\n-- TODO sql\nx = 1 ; TODO semi\n<!-- TODO html -->\nplain TODO prose\n// TODOs: none\n// TODO_LIST = 1\n// MY_FIXME x\n' > "$r/src/a.c"
+printf '// TODO: vendored\n' > "$r/vendor/x/v.c"
+printf '// TODO: minified\n' > "$r/src/app.min.js"
+printf '// TODO: lockfile\n' > "$r/pkg.lock"
+printf '// TODO: in dist\n' > "$r/src/dist.c"; mkdir -p "$r/dist"; printf '// TODO: dist file\n' > "$r/dist/o.js"
+printf '// TODO: %0300d\n' 0 > "$r/src/long.c"
+printf 'We have TODOs: none here.\nA TODO in prose.\n- TODO list item\n<!-- FIXME html comment -->\n' > "$r/docs/n.md"
+git -C "$r" add -A; git -C "$r" commit -q -m c
+out="$(cand "$r")"
+got="$(jq -c '[.items[]|.text+"@"+.source]' <<<"$out")"
+want='["list item@docs/n.md:3","html comment@docs/n.md:4","real@src/a.c:4","block@src/a.c:5","star line@src/a.c:6","sql@src/a.c:7","semi@src/a.c:8","html@src/a.c:9","in dist@src/dist.c:1"]'
+# note: FIXME html comment text is "html comment"; "FIXME block */" strips the closer
+[ "$got" = "$want" ] && ok "candidates_word_boundary_markers_and_excludes" || bad "candidates_noise: $got"
+
+# Open-section matching and fences, numbered items
+r="$(mkrepo)"; mkdir -p "$r/docs"
+printf '## Opening notes\n- not open\n## Open\n1. numbered one\n- bullet two\n```\n## Done\n```\n- still open\n## Open questions\n- third\n## Closed\n- no\n' > "$r/docs/o.md"
+git -C "$r" add -A; git -C "$r" commit -q -m c
+out="$(cand "$r")"
+[ "$(jq -c '[.items[].text]' <<<"$out")" = '["numbered one","bullet two","still open","third"]' ] \
+  && ok "candidates_open_exact_heading_fences_numbered" || bad "candidates_open: $out"
+
+# gh timeout
+r="$(mkrepo)"; mkdir -p "$TMPROOT/stub-slow"
+printf '#!/usr/bin/env bash\nexec sleep 30\n' > "$TMPROOT/stub-slow/gh"; chmod +x "$TMPROOT/stub-slow/gh"
+t0=$SECONDS; out="$(stub_path "$TMPROOT/stub-slow"; bash "$RITUAL" check public-sweep "$r")"; el=$((SECONDS - t0))
+[ "$(st "$out")" = unknown ] && [ "$(jq -r .detail <<<"$out")" = "gh timed out" ] && [ "$el" -lt 15 ] \
+  && ok "gh_timeout_unknown_fast" || bad "gh_timeout: ${el}s $out"
+
 # non-repo
 bash "$RITUAL" candidates "$TMPROOT" >/dev/null 2>&1; [ $? -eq 2 ] && ok "candidates_requires_repo" || bad "candidates_requires_repo"
 finish
