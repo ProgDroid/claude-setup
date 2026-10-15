@@ -1,0 +1,11 @@
+{
+  "_comment": "First matching rule wins. Match by plugin key + event, or by script name (a whole whitespace-separated token of the command, reduced to its basename). Never absolute paths and never hook ids: ids hash the command, which can hold a machine path. Unmatched hooks bridge, unclassified. Rules for a user's own hooks do not belong here: they go in <OC config dir>/cc-parity-dispositions.json (same schema, merged over these, user entries win).",
+  "rules": [
+    { "plugin": "superpowers@superpowers-dev", "event": "SessionStart", "disposition": "skip", "reason": "The composed superpowers OC adapter injects the bootstrap" },
+    { "plugin": "explanatory-output-style@claude-plugins-official", "event": "SessionStart", "disposition": "skip", "reason": "Output style is cosmetic (spec non-goal)" },
+    { "script": "serena-hooks", "disposition": "skip", "reason": "OC equivalents are hand-ported hooks; serena-hooks has no opencode client" },
+    { "script": "job-state-nudge.sh", "disposition": "cc-only", "reason": "Keys on tool_response.backgroundTaskId, which OC never supplies" },
+    { "script": "auto-commit.sh", "disposition": "bridge", "reason": "A no-op outside cloud sessions, by its own design" },
+    { "plugin": "semgrep@claude-plugins-official", "event": "SessionEnd", "disposition": "degraded", "reason": "Best-effort on process exit" }
+  ]
+}
