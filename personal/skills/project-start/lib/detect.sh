@@ -60,8 +60,8 @@ _det_add() {
 # The ONE runner list. A command line counts only if it STARTS with a known runner invocation
 # (never by substring), and never if it starts with an install/echo-style command.
 _DET_NEVER='^(pip3?|apt|apt-get|brew|echo|npm (install|ci|i)|cargo install|pnpm install|yarn install|python3? -m pip)([[:space:]]|$)'
-_DET_TEST_RE='^(cargo test|cargo nextest|pytest|python3? -m pytest|py -m pytest|npm test|npm run test|pnpm test|yarn test|go test|flutter test|dart test|just test[A-Za-z0-9_-]*|make test|ctest|deno test|bun test|bash [^ ]*test[^ ]*\.sh)([[:space:]]|$)'
-_DET_LINT_RE='^(cargo clippy|ruff|flake8|eslint|npm run lint|go vet|golangci-lint|flutter analyze|dart analyze|just (lint|check)|make (lint|check))([[:space:]]|$)'
+_DET_TEST_RE='^(cargo test|cargo nextest|pytest|(python3?|py) -m pytest|(uv|poetry|pipenv) run (python3? -m )?pytest|(npm|pnpm|yarn|bun) (run )?test[A-Za-z0-9:_-]*|go test|flutter test|dart test|just test[A-Za-z0-9_-]*|make test[A-Za-z0-9_-]*|ctest|deno test|bash [^ ]*test[^ ]*\.sh)([[:space:]]|$)'
+_DET_LINT_RE='^(cargo clippy|ruff|(uv|poetry) run ruff|flake8|eslint|(npm|pnpm|yarn) run lint[A-Za-z0-9:_-]*|go vet|golangci-lint|flutter analyze|dart analyze|just (lint|check)|make (lint|check))([[:space:]]|$)'
 
 # _det_classify <cmd> -> test | lint | none
 _det_classify() {
@@ -71,14 +71,26 @@ _det_classify() {
   else echo none; fi
 }
 
-# _det_classify_stream <source>: reads commands on stdin, adds root-dir entries for runner matches.
+# _det_classify_stream <source>: reads command LINES on stdin. Each line is split into segments
+# on && || ; | ; every segment is trimmed, stripped of leading VAR=value assignments and classified
+# on its own (so `npm ci && npm test` yields npm test). A `cd <dir>` segment directly before a
+# match is kept as a prefix, so the reported command is runnable as written.
 _det_classify_stream() {
-  local cmd
-  while IFS= read -r cmd; do
-    case "$(_det_classify "$cmd")" in
-      test) _det_add test . "$cmd" "$1" ;;
-      lint) _det_add lint . "$cmd" "$1" ;;
-    esac
+  local line seg lastcd stripped
+  while IFS= read -r line; do
+    lastcd=""
+    while IFS= read -r seg; do
+      seg="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+      [ -n "$seg" ] || continue
+      stripped="$(printf '%s' "$seg" | sed -E 's/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)+//')"
+      case "$stripped" in
+        cd\ *) lastcd="$stripped"; continue ;;
+      esac
+      case "$(_det_classify "$stripped")" in
+        test) _det_add test . "${lastcd:+$lastcd && }$stripped" "$1" ;;
+        lint) _det_add lint . "${lastcd:+$lastcd && }$stripped" "$1" ;;
+      esac
+    done < <(printf '%s\n' "$line" | sed -E 's/&&|\|\||;|\|/\n/g')
   done
 }
 
@@ -97,7 +109,7 @@ _det_just_make() {
     [ -f "$f" ] || continue
     while IFS= read -r line; do
       line="${line%$'\r'}"
-      if [[ "$line" =~ ^(test[A-Za-z0-9_-]*|lint|check|clippy)([[:space:]][^:=]*)?:($|[^=]) ]]; then
+      if [[ "$line" =~ ^@?(test[A-Za-z0-9_-]*|lint|check|clippy)([[:space:]]+[^:]*)?:($|[^=]) ]]; then
         name="${BASH_REMATCH[1]}"
         case "$name" in test*) _det_add test . "just $name" "$f" ;; *) _det_add lint . "just $name" "$f" ;; esac
       fi
@@ -108,9 +120,9 @@ _det_just_make() {
     [ -f "$f" ] || continue
     while IFS= read -r line; do
       line="${line%$'\r'}"
-      if [[ "$line" =~ ^(test|check|lint)[[:space:]]*:($|[^=]) ]]; then
+      if [[ "$line" =~ ^(test[A-Za-z0-9_-]*|check|lint)[[:space:]]*:($|[^=]) ]]; then
         name="${BASH_REMATCH[1]}"
-        if [ "$name" = test ]; then _det_add test . "make $name" "$f"; else _det_add lint . "make $name" "$f"; fi
+        case "$name" in test*) _det_add test . "make $name" "$f" ;; *) _det_add lint . "make $name" "$f" ;; esac
       fi
     done < "$f"
     break   # first existing name only (case-insensitive filesystems list one file twice)
@@ -119,18 +131,21 @@ _det_just_make() {
 }
 
 # Test/lint entries from CI workflows. Single-line `run: <cmd>` is taken as is; for a block
-# scalar (`run: |` / `run: >`) only the FIRST non-blank line of the block is considered.
-# Each line is classified by known-runner invocation (_det_classify), not by substring.
+# scalar (`run: |` / `run: >`) EVERY non-blank line indented deeper than the `run` key is read.
+# Each line is classified by known-runner invocation (_det_classify_stream), not by substring.
 _det_ci() {
   local f
   for f in .github/workflows/*.yml .github/workflows/*.yaml; do
     [ -f "$f" ] || continue
     tr -d '\r' < "$f" | awk '
+      function ind(s) { match(s, /^ */); return RLENGTH }
+      blk && NF && ind($0) > kc { l=$0; sub(/^ +/, "", l); print l; next }
+      blk && NF { blk=0 }
       /^[[:space:]]*(-[[:space:]]+)?run:[[:space:]]*/ {
         v=$0; sub(/^[[:space:]]*(-[[:space:]]+)?run:[[:space:]]*/, "", v)
+        kc=index($0, "run:") - 1
         if (v ~ /^[|>][-+]?[[:space:]]*$/) { blk=1; next }
-        blk=0; print v; next }
-      blk && NF { sub(/^[[:space:]]+/, ""); print; blk=0 }' \
+        blk=0; print v; next }' \
     | sed -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" \
     | _det_classify_stream "$f"
   done
@@ -140,7 +155,7 @@ _det_ci() {
 # any file under a tests/ dir. A workspace root searches its whole tree (members live below it);
 # a plain crate searches only its src/ and tests/. target/ and node_modules/ are never read.
 _det_rust_has_tests() {
-  local d="$1" toml="$2" re='#\[(tokio::)?test(\]|\()|#\[cfg\(test\)\]'
+  local d="$1" toml="$2" re='#\[([A-Za-z0-9_]+::)*test(\]|\()|#\[cfg\(test\)\]|#\[(rstest|test_case)'
   if ! grep -Eq '^\[workspace\]' "$toml"; then
     grep -rEqs --include='*.rs' "$re" "$(_det_path "$d" src)" "$(_det_path "$d" tests)" 2>/dev/null && return 0
     [ -n "$(find "$(_det_path "$d" tests)" -type f -print -quit 2>/dev/null)" ] && return 0
@@ -257,11 +272,13 @@ stack_json() {
             go) printf 'include\tgolang.md\n' ;;
             node)
               p="$(_det_path "$d" package.json)"
-              if ! jq -e . "$p" >/dev/null 2>&1; then printf 'unparsed\t%s\n' "$p"   # react include undecidable
-              elif jq -e '((.dependencies // {}) + (.devDependencies // {})) | has("react")' "$p" >/dev/null 2>&1; then
+              if jq -e '((.dependencies // {}) + (.devDependencies // {})) | has("react")' "$p" >/dev/null 2>&1; then
                 printf 'include\treact.md\n'; fi ;;
           esac
         done < <(_det_langs "$d")
+        # every manifest the scan tried to parse: a failure is reported, never invisible
+        p="$(_det_path "$d" package.json)"
+        if [ -f "$p" ] && ! jq -e . "$p" >/dev/null 2>&1; then printf 'unparsed\t%s\n' "$p"; fi
       done < <(_det_dirs))" || die "cannot scan: $repo"
   [ "$status" = present ] && lines="$lines"$'\n'"include	testing.md"
   printf '%s\n' "$lines" | jq -Rnc '

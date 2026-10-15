@@ -199,6 +199,57 @@ eq "stack_reports_unparsed_manifest" "$(stk "$r" | jq -c '.unparsed')" '["web/pa
 r="$(mkrepo)"; mk "$r/go.mod" 'module m'; mk "$r/node_modules/x/a_test.go"; mk "$r/vendor/y/b_test.go"
 eq "go_tests_only_in_pruned_dirs_is_absent" "$(jq -r .status <<<"$(orc "$r")")" absent
 
+# --- compound CI command lines: segments, env prefixes, cd, multi-line blocks
+ci_cmds() { # ci_cmds <yaml body>: prints the test cmds JSON for a repo holding that workflow
+  local rr; rr="$(mkrepo)"; mk "$rr/.github/workflows/ci.yml" "$1"; orc "$rr" | jq -c '[.test[].cmd]'
+}
+eq "ci_cd_prefix_kept" "$(ci_cmds '- run: cd x && cargo test')" '["cd x && cargo test"]'
+eq "ci_env_assignment_stripped" "$(ci_cmds '- run: RUST_LOG=1 cargo test')" '["cargo test"]'
+eq "ci_install_then_test_same_line" "$(ci_cmds '- run: npm ci && npm test')" '["npm test"]'
+eq "ci_uv_run_pytest" "$(ci_cmds '- run: uv run pytest')" '["uv run pytest"]'
+eq "ci_pnpm_run_test" "$(ci_cmds '- run: pnpm run test')" '["pnpm run test"]'
+eq "ci_npm_run_test_colon_script" "$(ci_cmds '- run: npm run test:unit')" '["npm run test:unit"]'
+eq "ci_semicolon_and_pipe_segments" "$(ci_cmds '- run: make build; go test ./... | tee out.txt')" '["go test ./..."]'
+eq "ci_npm_ci_alone_is_none" "$(ci_cmds '- run: npm ci')" '[]'
+eq "ci_multiline_block_reads_every_line" "$(ci_cmds 'steps:
+  - name: t
+    run: |
+      npm ci
+      npm test
+  - run: echo after')" '["npm test"]'
+eq "ci_block_ends_at_dedent" "$(ci_cmds 'steps:
+  - run: |
+      echo hi
+    env:
+      X: pytest
+  - run: ctest')" '["ctest"]'
+
+# --- justfile / Makefile name forms
+r="$(mkrepo)"; mk "$r/justfile" '@test:
+    cargo test
+test2 arg="a":
+    true
+test_unit:
+    true'
+eq "justfile_quiet_params_and_underscore" "$(jq -c '[.test[].cmd]' <<<"$(orc "$r")")" '["just test","just test2","just test_unit"]'
+r="$(mkrepo)"; mk "$r/Makefile" '.PHONY: test
+test-unit:
+	true
+test_all: dep
+	true'
+eq "makefile_test_variants_not_phony" "$(jq -c '[.test[].cmd]' <<<"$(orc "$r")")" '["make test-unit","make test_all"]'
+
+# --- rust test attribute variants
+for attr in '#[actix_web::test]' '#[actix_rt::test]' '#[sqlx::test]' '#[async_std::test]' '#[rstest]' '#[test_case(1)]'; do
+  r="$(mkrepo)"; mk "$r/Cargo.toml" '[package]'; mk "$r/src/lib.rs" "$attr"
+  eq "rust_attr_$attr" "$(jq -r .status <<<"$(orc "$r")")" present
+done
+
+# --- stack reports a malformed manifest anywhere the scan looked (here: a workspace member)
+r="$(mkrepo)"; mk "$r/Cargo.toml" '[workspace]
+members = ["crates/x"]'; mk "$r/crates/x/Cargo.toml" '[package]'; mk "$r/crates/x/package.json" '{ nope'
+eq "stack_unparsed_in_member_dir" "$(stk "$r" | jq -c '.unparsed')" '["crates/x/package.json"]'
+
 # --- failure modes
 bash "$RITUAL" stack "$TMPROOT/not-a-repo-$$" >/dev/null 2>&1; eq "stack_refuses_non_repo" "$?" 2
 bash "$RITUAL" oracle "$TMPROOT/not-a-repo-$$" >/dev/null 2>&1; eq "oracle_refuses_non_repo" "$?" 2
