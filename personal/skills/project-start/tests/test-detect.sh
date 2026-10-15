@@ -10,7 +10,7 @@ eq() { # eq <name> <got> <want>
 }
 
 # --- nested server crate + app flutter (no root manifest), plus root pytest.ini
-r="$(mkrepo)"; mk "$r/server/Cargo.toml" '[package]'; mk "$r/app/pubspec.yaml"; mk "$r/pytest.ini" '[pytest]'
+r="$(mkrepo)"; mk "$r/server/Cargo.toml" '[package]'; mk "$r/server/src/lib.rs" '#[test] fn t() {}'; mk "$r/app/pubspec.yaml"; mk "$r/pytest.ini" '[pytest]'
 out="$(stk "$r")"
 eq "stack_nested_rust_flutter_plus_root_python" "$(jq -c .stacks <<<"$out")" \
   '[{"lang":"python","dir":"."},{"lang":"flutter","dir":"app"},{"lang":"rust","dir":"server"}]'
@@ -71,7 +71,7 @@ members = [
 ]
 [workspace.lints.clippy]
 pedantic = "warn"'
-mk "$r/crates/a/Cargo.toml" '[package]'; mk "$r/crates/b/Cargo.toml" '[package]'; mk "$r/tools/cli/Cargo.toml" '[package]'
+mk "$r/crates/a/src/lib.rs" '#[cfg(test)] mod t {}'; mk "$r/crates/a/Cargo.toml" '[package]'; mk "$r/crates/b/Cargo.toml" '[package]'; mk "$r/tools/cli/Cargo.toml" '[package]'
 o="$(orc "$r")"
 eq "cargo_lint_workspace_form" "$(jq -c '[.lint[]|[.dir,.cmd]]' <<<"$o")" '[[".","cargo clippy --all-targets -- -D warnings"]]'
 eq "workspace_members_not_separate_test_cmds" "$(jq -c '[.test[]|[.dir,.cmd]]' <<<"$o")" '[[".","cargo test"]]'
@@ -115,10 +115,95 @@ r="$(mkrepo)"; mk "$r/pyproject.toml" '[tool.ruff]
 line-length = 100'
 eq "ruff_lint" "$(jq -c .lint <<<"$(orc "$r")")" '[{"cmd":"ruff check","dir":".","source":"pyproject.toml"}]'
 
+# --- justfile / Makefile / README sources
+r="$(mkrepo)"; mk "$r/justfile" 'set shell := ["bash", "-c"]
+test := "x"
+check-all := "y"
+test-unit arg:
+    cargo test
+lint:
+    cargo clippy
+# test: commented out
+  test-indented:
+    true'
+o="$(orc "$r")"
+eq "justfile_recipes_not_assignments" "$(jq -c '[.test[].cmd,.lint[].cmd]' <<<"$o")" '["just test-unit","just lint"]'
+eq "justfile_source_named" "$(jq -c '[.test[0].source,.test[0].dir]' <<<"$o")" '["justfile","."]'
+r="$(mkrepo)"; mk "$r/justfile" 'test := "x"'
+eq "justfile_assignment_alone_is_absent" "$(jq -r .status <<<"$(orc "$r")")" absent
+r="$(mkrepo)"; mk "$r/Makefile" 'CC := gcc
+build:
+	true
+test:
+	./run
+check:
+	true'
+o="$(orc "$r")"
+eq "makefile_targets" "$(jq -c '[.status,.test[0].cmd,.lint[0].cmd,.test[0].source]' <<<"$o")" '["present","make test","make check","Makefile"]'
+r="$(mkrepo)"; mk "$r/Makefile" 'test := 1'
+eq "makefile_assignment_alone_is_absent" "$(jq -r .status <<<"$(orc "$r")")" absent
+r="$(mkrepo)"; mk "$r/README.md" '# Proj
+
+Remember to run the tests before pushing; pytest is great.
+
+```sh
+$ pip install pytest
+cargo nextest run
+echo "tests done"
+```
+
+    npm test
+'
+o="$(orc "$r")"
+eq "readme_fenced_runner_only" "$(jq -c '[.test[]|[.cmd,.source]]' <<<"$o")" '[["cargo nextest run","README.md"]]'
+r="$(mkrepo)"; mk "$r/README.md" 'Please run the tests with pytest and make test.'
+eq "readme_prose_never_counts" "$(jq -r .status <<<"$(orc "$r")")" absent
+
+# --- runner classification: known runners only, installs never
+r="$(mkrepo)"; mk "$r/.github/workflows/ci.yml" 'steps:
+  - run: pip install pytest
+  - run: echo "tests done"
+  - run: cargo install cargo-nextest
+  - run: npm install --save-dev jest
+  - run: python -m pytest -q
+  - run: cargo nextest run
+  - run: golangci-lint run'
+o="$(orc "$r")"
+eq "ci_known_runners_only_test" "$(jq -c '[.test[].cmd]' <<<"$o")" '["cargo nextest run","python -m pytest -q"]'
+eq "ci_known_runners_only_lint" "$(jq -c '[.lint[].cmd]' <<<"$o")" '["golangci-lint run"]'
+
+# --- rust: cargo test only when a test exists
+r="$(mkrepo)"; mk "$r/Cargo.toml" '[package]'; mk "$r/src/lib.rs" 'pub fn f() {}'
+eq "rust_crate_without_tests_has_no_cargo_test" "$(jq -c '[.status,(.test|length)]' <<<"$(orc "$r")")" '["absent",0]'
+mk "$r/src/lib.rs" '#[tokio::test]
+async fn t() {}'
+eq "rust_tokio_test_counts" "$(jq -r '.test[0].cmd' <<<"$(orc "$r")")" "cargo test"
+r="$(mkrepo)"; mk "$r/Cargo.toml" '[package]'; mk "$r/tests/it.rs" 'fn main() {}'
+eq "rust_tests_dir_counts" "$(jq -r .status <<<"$(orc "$r")")" present
+r="$(mkrepo)"; mk "$r/Cargo.toml" '[package]
+[lints.clippy]
+pedantic = "warn"'; mk "$r/target/debug/x.rs" '#[test]'
+o="$(orc "$r")"
+eq "rust_target_dir_not_read_and_lint_still_reported" "$(jq -c '[.status,(.lint|length)]' <<<"$o")" '["absent",1]'
+
+# --- UNKNOWN is not absent: malformed manifest
+r="$(mkrepo)"; mk "$r/package.json" '{ not json'
+o="$(orc "$r")"
+eq "malformed_package_json_is_unknown" "$(jq -c '[.status,.detail]' <<<"$o")" '["unknown","could not parse: package.json"]'
+r="$(mkrepo)"; mk "$r/web/package.json" '{ not json'; mk "$r/pytest.ini"
+o="$(orc "$r")"
+eq "malformed_manifest_but_test_found_is_present" "$(jq -c '[.status,.detail]' <<<"$o")" '["present","could not parse: web/package.json"]'
+eq "stack_reports_unparsed_manifest" "$(stk "$r" | jq -c '.unparsed')" '["web/package.json"]'
+
+# --- go: test files under pruned dirs do not count
+r="$(mkrepo)"; mk "$r/go.mod" 'module m'; mk "$r/node_modules/x/a_test.go"; mk "$r/vendor/y/b_test.go"
+eq "go_tests_only_in_pruned_dirs_is_absent" "$(jq -r .status <<<"$(orc "$r")")" absent
+
 # --- failure modes
 bash "$RITUAL" stack "$TMPROOT/not-a-repo-$$" >/dev/null 2>&1; eq "stack_refuses_non_repo" "$?" 2
 bash "$RITUAL" oracle "$TMPROOT/not-a-repo-$$" >/dev/null 2>&1; eq "oracle_refuses_non_repo" "$?" 2
 bash "$RITUAL" stack >/dev/null 2>&1; eq "stack_usage_error" "$?" 2
+eq "stack_json_dies_when_repo_unscannable" "$( . "$SKILL_DIR/lib/common.sh"; . "$SKILL_DIR/lib/detect.sh"; (stack_json "$TMPROOT/does-not-exist") >/dev/null 2>&1; echo $?)" 2
 eq "oracle_unknown_when_detection_cannot_run" \
   "$( . "$SKILL_DIR/lib/common.sh"; . "$SKILL_DIR/lib/detect.sh"; oracle_json "$TMPROOT/does-not-exist")" \
   '{"status":"unknown","test":[],"lint":[]}'
