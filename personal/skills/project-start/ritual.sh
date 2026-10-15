@@ -7,6 +7,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib/workspace.sh"
 . "$HERE/lib/detect.sh"
 . "$HERE/lib/files.sh"
+. "$HERE/lib/repo.sh"
 command -v jq >/dev/null 2>&1 || die "jq is required"
 
 sub="${1:-}"; [ $# -gt 0 ] && shift
@@ -19,6 +20,7 @@ case "$sub" in
   commit-plan)  [ $# -ge 3 ] || die "usage: commit-plan <repo> <preflight.json> <wrote.json>"; require_repo "$1"; commit_plan "$1" "$2" "$3" ;;
   stack)        [ $# -ge 1 ] || die "usage: stack <repo>";  require_repo "$1"; stack_json "$1" ;;
   oracle)       [ $# -ge 1 ] || die "usage: oracle <repo>"; require_repo "$1"; oracle_json "$1" ;;
+  candidates)   [ $# -ge 1 ] || die "usage: candidates <repo>"; require_repo "$1"; candidates "$1" ;;
   check|fix)    # generic router: check_<step>/fix_<step> (hyphens -> underscores)
     [ $# -ge 2 ] || die "usage: $sub <step> <repo> [args...]"
     step="$1"; repo="$2"; shift 2
@@ -26,5 +28,5 @@ case "$sub" in
     fn="${sub}_${step//-/_}"
     declare -F "$fn" >/dev/null 2>&1 || die "unknown step: $step"
     "$fn" "$repo" "$@" ;;
-  *) die "unknown subcommand: ${sub:-<none>} (record-path|record-read|record-write|due|preflight|commit-plan|stack|oracle|check|fix)" ;;
+  *) die "unknown subcommand: ${sub:-<none>} (record-path|record-read|record-write|due|preflight|commit-plan|stack|oracle|candidates|check|fix)" ;;
 esac
