@@ -93,7 +93,7 @@ n=$(wc -c < "$TMPROOT/cargo.before")
 [ "$(st "$out")" = fixed ] && [ "$(jq -c .wrote <<<"$out")" = '["Cargo.toml"]' ] \
   && cmp -s <(head -c "$n" "$r/Cargo.toml") "$TMPROOT/cargo.before" \
   && grep -qxF '[lints.clippy]' "$r/Cargo.toml" && grep -qxF 'implicit_return = "allow"' "$r/Cargo.toml" \
-  && ! grep -q 'trailing prose' "$r/Cargo.toml" \
+  && ! grep -q 'trailing prose' "$r/Cargo.toml" && ! grep -q '```' "$r/Cargo.toml" \
   && ok "clippy_missing_fix_appends_canonical" || bad "append: $out / $(cat "$r/Cargo.toml")"
 [ "$(st "$(R check stack-checks "$r")")" = present ] && ok "clippy_after_fix_present" || bad "after fix not present"
 cp "$r/Cargo.toml" "$TMPROOT/cargo.fixed"

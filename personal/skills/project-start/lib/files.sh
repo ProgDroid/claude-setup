@@ -73,7 +73,7 @@ _clippy_table() {
   local src="${RITUAL_RUST_INCLUDE:-$HOME/.claude/includes/rust.md}"
   [ -r "$src" ] || return 0
   tr -d '\r' < "$src" | awk '/^\[lints\.clippy\][[:space:]]*$/ { on = 1; print; next }
-       on && (/^[[:space:]]*$/ || /^\[/) { exit }
+       on && (/^[[:space:]]*$/ || /^\[/ || /^```/) { exit }
        on { print }'
 }
 
