@@ -4,6 +4,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib/common.sh"
 . "$HERE/lib/record.sh"
+. "$HERE/lib/workspace.sh"
 command -v jq >/dev/null 2>&1 || die "jq is required"
 
 sub="${1:-}"; [ $# -gt 0 ] && shift
@@ -12,5 +13,14 @@ case "$sub" in
   record-read)  [ $# -ge 1 ] || die "usage: record-read <repo>";  require_repo "$1"; record_read "$1" ;;
   record-write) [ $# -ge 2 ] || die "usage: record-write <repo> <results.json>";  require_repo "$1"; record_write "$1" "$2" ;;
   due)          [ $# -ge 1 ] || die "usage: due <repo>";  require_repo "$1"; record_due "$1" ;;
-  *) die "unknown subcommand: ${sub:-<none>} (record-path|record-read|record-write|due)" ;;
+  preflight)    [ $# -ge 1 ] || die "usage: preflight <repo>"; require_repo "$1"; preflight "$1" ;;
+  commit-plan)  [ $# -ge 3 ] || die "usage: commit-plan <repo> <preflight.json> <wrote.json>"; require_repo "$1"; commit_plan "$1" "$2" "$3" ;;
+  check|fix)    # generic router: check_<step>/fix_<step> (hyphens -> underscores)
+    [ $# -ge 2 ] || die "usage: $sub <step> <repo> [args...]"
+    step="$1"; repo="$2"; shift 2
+    require_repo "$repo"
+    fn="${sub}_${step//-/_}"
+    declare -F "$fn" >/dev/null 2>&1 || die "unknown step: $step"
+    "$fn" "$repo" "$@" ;;
+  *) die "unknown subcommand: ${sub:-<none>} (record-path|record-read|record-write|due|preflight|commit-plan|check|fix)" ;;
 esac
