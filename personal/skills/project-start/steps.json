@@ -1,0 +1,90 @@
+{
+  "ritual_version": 1,
+  "steps": [
+    {
+      "id": "preflight",
+      "kind": "check",
+      "version": 1
+    },
+    {
+      "id": "beads",
+      "kind": "ask",
+      "version": 1
+    },
+    {
+      "id": "stack",
+      "kind": "auto",
+      "version": 1
+    },
+    {
+      "id": "lessons",
+      "kind": "auto",
+      "version": 1
+    },
+    {
+      "id": "traps",
+      "kind": "auto",
+      "version": 1
+    },
+    {
+      "id": "stack-checks",
+      "kind": "ask",
+      "version": 1
+    },
+    {
+      "id": "oracle",
+      "kind": "auto",
+      "version": 1
+    },
+    {
+      "id": "public-sweep",
+      "kind": "ask",
+      "version": 1
+    },
+    {
+      "id": "secret-scan",
+      "kind": "ask",
+      "version": 1
+    },
+    {
+      "id": "workspace",
+      "kind": "ask",
+      "version": 1
+    },
+    {
+      "id": "untracked-docs",
+      "kind": "ask",
+      "version": 1
+    },
+    {
+      "id": "beads-seed",
+      "kind": "ask",
+      "version": 1
+    },
+    {
+      "id": "beads-metrics",
+      "kind": "check",
+      "version": 1
+    },
+    {
+      "id": "ci",
+      "kind": "ask",
+      "version": 1
+    },
+    {
+      "id": "baseline",
+      "kind": "ask",
+      "version": 1
+    },
+    {
+      "id": "commit",
+      "kind": "ask",
+      "version": 1
+    },
+    {
+      "id": "record",
+      "kind": "auto",
+      "version": 1
+    }
+  ]
+}
