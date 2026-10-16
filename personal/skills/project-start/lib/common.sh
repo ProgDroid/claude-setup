@@ -56,6 +56,20 @@ path_norm() {
   printf '%s' "${p%/}"
 }
 
+# md_fence <line>: track ``` / ~~~ fenced blocks in the global MD_FENCE (empty = outside; set it to
+# "" before each scan). Returns 0 when <line> is a fence delimiter or is inside a fence (so it
+# cannot be a heading). A trailing CR is ignored.
+md_fence() {
+  local l="${1%$'\r'}"
+  if [[ -n "$MD_FENCE" ]]; then
+    [[ "$l" =~ ^\ {0,3}${MD_FENCE}{3,}[[:space:]]*$ ]] && MD_FENCE=""
+    return 0
+  fi
+  if [[ "$l" =~ ^\ {0,3}(\`\`\`|~~~) ]]; then MD_FENCE="${BASH_REMATCH[1]:0:1}"; return 0; fi
+  return 1
+}
+MD_FENCE=""
+
 # eol_of <file> -> crlf|lf. crlf iff the first line ends in CR; empty/missing -> lf.
 eol_of() {
   # byte-level on purpose: under Git Bash, grep does not see the CR in $'\r$'

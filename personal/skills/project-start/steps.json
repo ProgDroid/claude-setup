@@ -82,6 +82,11 @@
       "version": 1
     },
     {
+      "id": "handoff",
+      "kind": "ask",
+      "version": 1
+    },
+    {
       "id": "commit",
       "kind": "ask",
       "version": 1

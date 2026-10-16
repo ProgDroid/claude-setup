@@ -33,18 +33,6 @@ check_parking_lot() {
   else emit parking-lot absent "$miss"; fi
 }
 
-# _park_fence <line>: track ``` / ~~~ fenced blocks in the global _PARK_FENCE (empty = outside).
-# Returns 0 when <line> is a fence delimiter or is inside a fence (so it cannot be a heading).
-_park_fence() {
-  local l="${1%$'\r'}"
-  if [[ -n "$_PARK_FENCE" ]]; then
-    [[ "$l" =~ ^\ {0,3}${_PARK_FENCE}{3,}[[:space:]]*$ ]] && _PARK_FENCE=""
-    return 0
-  fi
-  if [[ "$l" =~ ^\ {0,3}(\`\`\`|~~~) ]]; then _PARK_FENCE="${BASH_REMATCH[1]:0:1}"; return 0; fi
-  return 1
-}
-
 # _park_insert_rule <claude-md>: add the house rule under ## Working rules. Existing bytes are
 # kept; lines are inserted with the file's own line ending.
 _park_insert_rule() {
@@ -53,9 +41,9 @@ _park_insert_rule() {
   mapfile -t rule < <(tr -d '\r' < "$_PARK_RULE_FILE")
   local -a lines
   mapfile -t lines < "$f"
-  _PARK_FENCE=""
+  MD_FENCE=""
   for i in "${!lines[@]}"; do
-    _park_fence "${lines[$i]}" && continue
+    md_fence "${lines[$i]}" && continue
     line="${lines[$i]%$'\r'}"
     if [[ "$line" =~ ^##[[:space:]]+Working[[:space:]]+rules[[:space:]]*$ ]]; then h=$((i + 1)); break; fi
   done
@@ -70,9 +58,9 @@ _park_insert_rule() {
     return 0
   fi
   end=${#lines[@]}          # index of the next "## " heading, else EOF
-  _PARK_FENCE=""
+  MD_FENCE=""
   for ((i = h; i < ${#lines[@]}; i++)); do
-    _park_fence "${lines[$i]}" && continue
+    md_fence "${lines[$i]}" && continue
     if [[ "${lines[$i]}" == '## '* ]]; then end=$i; break; fi
   done
   k=$((end - 1))            # insert after the last non-blank line of the section

@@ -6,8 +6,8 @@
 echo "== steps.json =="
 sj="$(steps_json)"
 [ -f "$sj" ] && ok "steps_json names an existing file" || bad "steps_json: $sj"
-exp='preflight beads stack lessons traps stack-checks oracle public-sweep secret-scan workspace untracked-docs parking-lot beads-seed beads-metrics ci baseline commit record'
-[ "$(jq -r '.steps|map(.id)|join(" ")' "$sj")" = "$exp" ] && ok "18 step ids in spec order" || bad "ids: $(jq -r '.steps|map(.id)|join(" ")' "$sj")"
+exp='preflight beads stack lessons traps stack-checks oracle public-sweep secret-scan workspace untracked-docs parking-lot beads-seed beads-metrics ci baseline handoff commit record'
+[ "$(jq -r '.steps|map(.id)|join(" ")' "$sj")" = "$exp" ] && ok "19 step ids in spec order" || bad "ids: $(jq -r '.steps|map(.id)|join(" ")' "$sj")"
 [ "$(jq -c '[.steps[].version]|unique' "$sj")" = '[1]' ] && [ "$(jq .ritual_version "$sj")" = 1 ] && ok "all versions 1, ritual_version 1" || bad "versions"
 [ "$(jq -r '.steps[]|select(.id=="stack-checks")|.kind' "$sj")" = ask ] && [ "$(jq -r '.steps[]|select(.id=="preflight")|.kind' "$sj")" = check ] \
   && [ "$(jq -r '.steps[]|select(.id=="oracle")|.kind' "$sj")" = auto ] && ok "kinds follow the spec table" || bad "kinds"
@@ -33,6 +33,14 @@ printf '%s' "$big" > "$TMPROOT/big.exp"; printf '%s' "$e" | jq -j .detail > "$TM
 printf '%s\n' "${paths[@]}" > "$TMPROOT/paths.exp"; printf '%s' "$e" | jq -r '.wrote[]' 2>/dev/null | tr -d '\r' > "$TMPROOT/paths.got"
 [ "${#big}" -ge 60000 ] && [ "${#paths[@]}" = 2000 ] && cmp -s "$TMPROOT/big.exp" "$TMPROOT/big.got" && cmp -s "$TMPROOT/paths.exp" "$TMPROOT/paths.got" \
   && ok "emit_large_detail_and_wrote" || bad "emit large: detail ${#big} chars, emitted $(printf '%s' "$e" | wc -c) bytes"
+
+echo "== md_fence =="
+# fence_mask <line...> -> one char per line: F = fence or inside one, . = could be a heading
+fence_mask() { local l m=""; MD_FENCE=""; for l in "$@"; do if md_fence "$l"; then m+=F; else m+=.; fi; done; printf '%s' "$m"; }
+[ "$(fence_mask '## a' '```' '## b' '```' '## c')" = '.FFF.' ] && ok "md_fence_backtick_block" || bad "backtick: $(fence_mask '## a' '```' '## b' '```' '## c')"
+[ "$(fence_mask '~~~md' '## b' '```' '~~~~' '## c')" = 'FFFF.' ] && ok "md_fence_tilde_block_not_closed_by_backticks" || bad "tilde: $(fence_mask '~~~md' '## b' '```' '~~~~' '## c')"
+[ "$(fence_mask '    ```' '## b')" = '..' ] && ok "md_fence_four_space_indent_is_not_a_fence" || bad "indent: $(fence_mask '    ```' '## b')"
+[ "$(fence_mask $'```\r' $'## b\r' $'```\r' $'## c\r')" = 'FFF.' ] && ok "md_fence_crlf_lines" || bad "crlf fence"
 
 echo "== git_common_dir =="
 repo="$(mkrepo)"
