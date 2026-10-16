@@ -30,6 +30,8 @@ RS() { ( stub_path "$STUBDIR"; export STUB_GIT_FAIL="$1"; shift; bash "$RITUAL" 
   && ok "house_routine_heading_then_marker_bullet_naming_the_skill" || bad "house routine shape: $(head -n 3 "$HOUSE_ROUTINE")"
 n="$(grep -c '^- ' "$HOUSE_ROUTINE")"
 [ "$n" -ge 3 ] && [ "$n" -le 5 ] && ok "house_routine_is_a_3_to_5_line_pointer" || bad "routine bullets: $n"
+grep '^- ' "$HOUSE_ROUTINE" | grep -F '.claude/handoff.json' | grep -qF '(default: "How did the last change go?")' \
+  && ok "house_routine_gives_the_default_question" || bad "default question missing: $(cat "$HOUSE_ROUTINE")"
 [ "$(crs "$HOUSE_ROUTINE")" = 0 ] && [ "$(crs "$HOUSE_NEXT")" = 0 ] && ok "house_files_are_lf" || bad "house files carry CR"
 [ "$(grep '^#' "$HOUSE_NEXT" | tr '\n' '|')" = '# NEXT|## Where we are|## How to run|## How it behaves|## Try this|## Things you might notice|## Tell me if|## Housekeeping|## Known rough edges|## Feedback log|' ] \
   && [ "$(grep -c '^_.*_$' "$HOUSE_NEXT")" = 9 ] && ok "next_md_template_has_the_spec_sections_each_with_a_hint" || bad "template sections: $(grep '^#' "$HOUSE_NEXT")"
@@ -68,7 +70,7 @@ h0="$(head_of "$r")"
 out="$(R handoff-commit "$r")"
 [ "$(st "$out")" = fixed ] && [ "$(git -C "$r" rev-list --count "$h0..HEAD")" = 1 ] && ok "handoff_commit_makes_exactly_one_commit" || bad "handoff-commit: $out"
 [ "$(git -C "$r" show --name-only --format= HEAD)" = NEXT.md ] && ok "handoff_commit_holds_next_md_alone" || bad "files: $(git -C "$r" show --name-only --format= HEAD)"
-printf '%s\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n' "$SUBJ" > "$TMPROOT/exp.msg"
+printf '%s\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n' "$SUBJ" > "$TMPROOT/exp.msg"
 git -C "$r" cat-file commit HEAD | sed "1,/^$/d" | cmp -s - "$TMPROOT/exp.msg" && ok "handoff_commit_message_exact" || bad "message: $(git -C "$r" log -1 --format=%B)"
 det "$out" | grep -qF "$(git -C "$r" rev-parse --short=7 HEAD)" && ok "handoff_commit_detail_names_the_commit" || bad "detail: $out"
 [ -z "$(git -C "$r" status --porcelain)" ] && [ "$(git -C "$r" log -1 --format=%s)" = "$SUBJ" ] && ok "handoff_commit_leaves_a_clean_tree" || bad "status: $(git -C "$r" status --porcelain)"
@@ -334,6 +336,102 @@ cp "$HOUSE_NEXT" "$d/NEXT.md"
 out="$(R handoff-commit "$d")"
 [ "$(st "$out")" = fixed ] && [ "$(git -C "$d" rev-list --count HEAD)" = 1 ] && [ "$(git -C "$d" show --name-only --format= HEAD)" = NEXT.md ] \
   && ok "unborn_branch_handoff_commit_is_the_root_commit" || bad "unborn commit: $out"
+
+# --- a "# " H1 ends the routine section (replace keeps everything after it)
+for eol in lf crlf; do
+  r="$(mkrepo)"
+  printf '# A\n## Session routine\n- mine\n# Appendix\nkeep me\n## Other\nx\n' > "$TMPROOT/h1.in"
+  { printf '# A\n'; cat "$HOUSE_ROUTINE"; printf '\n# Appendix\nkeep me\n## Other\nx\n'; } > "$TMPROOT/h1.exp"
+  if [ "$eol" = crlf ]; then sed -i 's/$/\r/' "$TMPROOT/h1.in" "$TMPROOT/h1.exp"; fi
+  cp "$TMPROOT/h1.in" "$r/CLAUDE.md"
+  out="$(R fix handoff "$r" --replace-routine)"
+  [ "$(st "$out")" = fixed ] && cmp -s "$r/CLAUDE.md" "$TMPROOT/h1.exp" && ok "replace_routine_stops_at_h1 ($eol)" || bad "h1 $eol: $out; $(od -c "$r/CLAUDE.md" | tail -12)"
+done
+r="$(mkrepo)"
+{ printf '## Session routine\n\n- mine\n\n# Appendix\n\n'; sed -n 3p "$HOUSE_ROUTINE"; } > "$r/CLAUDE.md"
+out="$(R check handoff "$r")"
+det "$out" | grep -qF 'different session routine (line 1)' && ok "marker_bullet_after_an_h1_is_not_in_the_section" || bad "h1 scan: $out"
+
+# --- the routine heading matches in any case, and is then a DIFFERENT routine (never a second heading)
+r="$(mkrepo)"
+printf '# Proj\n\n## Session Routine\n\n- Ask how it went.\n' > "$r/CLAUDE.md"; cp "$r/CLAUDE.md" "$TMPROOT/case.before"
+out="$(R fix handoff "$r")"
+[ "$(st "$out")" = absent ] && det "$out" | grep -qF 'different session routine (line 3)' && cmp -s "$r/CLAUDE.md" "$TMPROOT/case.before" \
+  && ok "session_routine_heading_any_case_is_a_different_routine" || bad "case: $out; $(cat "$r/CLAUDE.md")"
+
+# --- handoff-commit under status.showUntrackedFiles=no: an untracked NEXT.md is not "ignored"
+r="$(mkrepo)"; git -C "$r" config status.showUntrackedFiles no; cp "$HOUSE_NEXT" "$r/NEXT.md"; h1="$(head_of "$r")"
+out="$(R handoff-commit "$r")"
+[ "$(st "$out")" = fixed ] && [ "$(git -C "$r" rev-list --count "$h1..HEAD")" = 1 ] && [ "$(git -C "$r" show --name-only --format= HEAD)" = NEXT.md ] \
+  && ok "untracked_next_md_with_show_untracked_no_is_committed" || bad "showUntracked=no: $out"
+
+# --- NEXT.md partly staged (MM): the worktree version goes in, alone; index and worktree then agree
+r="$(mkrepo)"; cp "$HOUSE_NEXT" "$r/NEXT.md"; git -C "$r" add NEXT.md && git -C "$r" commit -q -m 'docs: notes'
+echo 'STAGED LINE' >> "$r/NEXT.md"; git -C "$r" add NEXT.md; echo 'UNSTAGED LINE' >> "$r/NEXT.md"
+echo other > "$r/other.txt"
+[ "$(git -C "$r" status --porcelain -- NEXT.md)" = 'MM NEXT.md' ] || bad "premise: NEXT.md is not MM"
+cp "$r/NEXT.md" "$TMPROOT/mm.work"
+out="$(R handoff-commit "$r")"
+[ "$(st "$out")" = fixed ] && [ "$(git -C "$r" show --name-only --format= HEAD)" = NEXT.md ] \
+  && git -C "$r" cat-file blob HEAD:NEXT.md | cmp -s - "$TMPROOT/mm.work" && cmp -s "$r/NEXT.md" "$TMPROOT/mm.work" \
+  && [ -z "$(git -C "$r" status --porcelain -- NEXT.md)" ] && [ "$(git -C "$r" status --porcelain)" = '?? other.txt' ] \
+  && ok "handoff_commit_mm_next_md" || bad "MM: $out; $(git -C "$r" status --porcelain)"
+
+# --- anchor subjects: only a subject starting exactly "handoff:" counts
+r="$(mkrepo)"; R fix handoff "$r" >/dev/null
+git -C "$r" commit -q --allow-empty -m 'Handoff: x'
+git -C "$r" commit -q --allow-empty --cleanup=verbatim -m ' handoff: x'
+[ "$(git -C "$r" log -1 --format=%s)" = ' handoff: x' ] || bad "premise: leading space not kept in the subject"
+out="$(R check handoff "$r")"
+det "$out" | grep -qF 'no handoff: commit' && ok "anchor_subject_variants_capital_and_leading_space_are_not_anchors" || bad "variants: $out"
+git -C "$r" commit -q --allow-empty -m 'handoff: x'
+out="$(R check handoff "$r")"
+[ "$(st "$out")" = present ] && ok "anchor_subject_variants_exact_prefix_is_an_anchor" || bad "exact: $out"
+
+# --- a corrupt HEAD is unknown, never "no anchor"
+r="$(mkrepo)"; R fix handoff "$r" >/dev/null
+printf 'not a sha\n' > "$r/.git/refs/heads/main"
+out="$(R check handoff "$r")"
+[ "$(st "$out")" = unknown ] && det "$out" | grep -qF 'could not read the history' && ok "corrupt_head_check_is_unknown" || bad "corrupt check: $out"
+out="$(R handoff-commit "$r")"
+[ "$(st "$out")" = unknown ] && [ "$(cat "$r/.git/refs/heads/main")" = 'not a sha' ] && ok "corrupt_head_handoff_commit_is_unknown" || bad "corrupt commit: $out"
+
+# --- the marker is written atomically: a failing jq leaves no file and reports failed
+JQDIR="$TMPROOT/jq shim"; mkdir -p "$JQDIR"
+{ printf '#!/usr/bin/env bash\nREAL_JQ=%q\n' "$(command -v jq)"; cat <<'WRAP'
+for a in "$@"; do [ "$a" = -Rs ] && { echo "shim: jq fails" >&2; exit 5; }; done
+exec "$REAL_JQ" "$@"
+WRAP
+} > "$JQDIR/jq"; chmod +x "$JQDIR/jq"
+r="$(mkrepo)"
+out="$( stub_path "$JQDIR"; bash "$RITUAL" fix handoff "$r" )"
+[ "$(st "$out")" = failed ] && [ ! -e "$r/.claude/handoff.json" ] && [ -z "$(ls -A "$r/.claude" 2>/dev/null)" ] \
+  && ok "marker_write_failure_leaves_no_file" || bad "atomic: $out; $(ls -A "$r/.claude" 2>/dev/null)"
+out="$(R fix handoff "$r")"
+det "$out" | grep -qF 'marker created' && [ "$(tr -d '\r' < "$r/.claude/handoff.json" | jq -c .)" = '{}' ] \
+  && ok "marker_rerun_after_failure_creates_it" || bad "atomic rerun: $out"
+
+# --- R47: a linked worktree is refused; check still reports the truth
+snap() { git -C "$1" status --porcelain --untracked-files=all; (cd "$1" && find . -path ./.git -prune -o -print | sort); git -C "$1" rev-parse HEAD; git -C "$1" ls-files -s; }
+r="$(mkrepo)"; wt="$TMPROOT/ritual fixtures/linked wt"
+git -C "$r" worktree add -q -b side "$wt" >/dev/null 2>&1 || bad "premise: git worktree add failed"
+snap "$r" > "$TMPROOT/main.before"; snap "$wt" > "$TMPROOT/wt.before"
+out="$(R fix handoff "$wt" --ask q)"
+snap "$r" > "$TMPROOT/main.after"; snap "$wt" > "$TMPROOT/wt.after"
+[ "$(st "$out")" = unknown ] && [ "$(det "$out")" = 'linked worktree; run the handoff step from the main checkout' ] && [ "$(jq -c .wrote <<<"$out")" = '[]' ] \
+  && cmp -s "$TMPROOT/wt.before" "$TMPROOT/wt.after" && cmp -s "$TMPROOT/main.before" "$TMPROOT/main.after" \
+  && ok "linked_worktree_fix_is_unknown_and_writes_nothing" || bad "wt fix: $out; $(diff "$TMPROOT/wt.before" "$TMPROOT/wt.after")"
+out="$(R check handoff "$wt")"
+[ "$(st "$out")" = absent ] && det "$out" | grep -qF 'NEXT.md missing' && ok "linked_worktree_check_reports_the_truth" || bad "wt check: $out"
+cp "$HOUSE_NEXT" "$wt/NEXT.md"
+snap "$r" > "$TMPROOT/main.before"; snap "$wt" > "$TMPROOT/wt.before"
+out="$(R handoff-commit "$wt")"
+snap "$r" > "$TMPROOT/main.after"; snap "$wt" > "$TMPROOT/wt.after"
+[ "$(st "$out")" = failed ] && [ "$(det "$out")" = 'linked worktree; run the handoff step from the main checkout' ] \
+  && cmp -s "$TMPROOT/wt.before" "$TMPROOT/wt.after" && cmp -s "$TMPROOT/main.before" "$TMPROOT/main.after" \
+  && ok "linked_worktree_handoff_commit_fails_and_commits_nothing" || bad "wt commit: $out; $(diff "$TMPROOT/wt.before" "$TMPROOT/wt.after")"
+out="$(R fix handoff "$r")"
+[ "$(st "$out")" = fixed ] && [ -f "$r/NEXT.md" ] && ok "main_checkout_with_a_linked_worktree_is_not_refused" || bad "main with wt: $out"
 
 # --- run from a subdirectory: paths resolve at the repo root
 r="$(mkrepo)"; mkdir -p "$r/sub dir"

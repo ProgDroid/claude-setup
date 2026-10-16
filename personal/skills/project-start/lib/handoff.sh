@@ -8,11 +8,21 @@ _HANDOFF_ROUTINE_FILE="$RITUAL_SKILL_DIR/house/session-routine.md"
 _HANDOFF_MARKER='.claude/handoff.json'
 _HANDOFF_MARK='- **Handoff.**'   # opening of the house section's first bullet; detection keys on it
 _HANDOFF_SUBJECT='handoff: NEXT.md created by the project-start ritual'
-_HANDOFF_TRAILER='Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>'
+_HANDOFF_TRAILER='Co-Authored-By: Claude <noreply@anthropic.com>'
+_HANDOFF_WORKTREE='linked worktree; run the handoff step from the main checkout'
+
+# _handoff_linked <top>: true when <top> is a linked worktree (its git dir is not the common dir).
+# Spec: NEXT.md is never edited in a linked worktree.
+_handoff_linked() {
+  local g c
+  g="$(git -C "$1" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || return 1
+  c="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  [ "$g" != "$c" ]
+}
 
 # _handoff_scan <claude-md> -> "house:<N>" when a "## Session routine" section (heading outside
-# fences, at line N) holds the house bullet outside fences; else "other:<N>" for the first such
-# heading; else nothing.
+# fences, at line N, any case) holds the house bullet outside fences; else "other:<N>" for the
+# first such heading; else nothing. A section ends at the next "# " or "## " heading.
 _handoff_scan() {
   local f="$1" i line h=-1 first=0
   [ -f "$f" ] || return 0
@@ -22,8 +32,8 @@ _handoff_scan() {
   for i in "${!lines[@]}"; do
     md_fence "${lines[$i]}" && continue
     line="${lines[$i]%$'\r'}"
-    if [[ "$line" == '## '* ]]; then
-      if [[ "$line" =~ ^##[[:space:]]+Session[[:space:]]+routine[[:space:]]*$ ]]; then
+    if [[ "$line" =~ ^#{1,2}\  ]]; then
+      if [[ "${line,,}" =~ ^##[[:space:]]+session[[:space:]]+routine[[:space:]]*$ ]]; then
         h=$i; [ "$first" -eq 0 ] && first=$((i + 1))
       else h=-1; fi
       continue
@@ -42,7 +52,8 @@ _handoff_append_section() {
 }
 
 # _handoff_replace_section <claude-md> <N>: replace the section whose heading is line N (up to the
-# next "## " heading outside fences, else EOF) with the house section. Bytes outside it are kept.
+# next "# " or "## " heading outside fences, else EOF) with the house section. Bytes outside it are
+# kept; one blank line separates the house section from the heading that follows it.
 _handoff_replace_section() {
   local f="$1" h=$(($2 - 1)) eol=$'\n' end i tmp line
   [ "$(eol_of "$f")" = crlf ] && eol=$'\r\n'
@@ -52,7 +63,7 @@ _handoff_replace_section() {
   MD_FENCE=""
   for ((i = h + 1; i < ${#lines[@]}; i++)); do
     md_fence "${lines[$i]}" && continue
-    if [[ "${lines[$i]}" == '## '* ]]; then end=$i; break; fi
+    if [[ "${lines[$i]}" =~ ^#{1,2}\  ]]; then end=$i; break; fi
   done
   tmp="$f.handoff.$$"
   head -n "$h" "$f" > "$tmp"
@@ -70,10 +81,13 @@ _handoff_ignored() {
 
 # _handoff_anchor <top> -> prints "<sha> <subject>" of the newest commit whose SUBJECT starts
 # "handoff:" (never --grep, which also matches body lines). Returns 0 found, 1 none (an unborn
-# branch has none), 2 history unreadable.
+# branch has none), 2 history unreadable (including a HEAD that is neither valid nor unborn).
 _handoff_anchor() {
   local log
-  git -C "$1" rev-parse -q --verify HEAD >/dev/null 2>&1 || return 1
+  if ! git -C "$1" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+    git -C "$1" symbolic-ref -q HEAD >/dev/null 2>&1 && return 1   # unborn branch
+    return 2
+  fi
   log="$(git -C "$1" log --format='%H %s' 2>/dev/null)" || return 2
   log="$(grep -m 1 -E '^[0-9a-f]+ handoff:' <<<"$log")" || return 1
   printf '%s\n' "$log"
@@ -127,8 +141,9 @@ fix_handoff() {
       *) die "fix handoff: unknown argument: $1" ;;
     esac
   done
-  local top ign scan n note changed=0 different="" wrote=() notes=()
+  local top ign scan n note tmp changed=0 different="" wrote=() notes=()
   top="$(git -C "$repo" rev-parse --show-toplevel)" || die "cannot resolve repo root: $repo"
+  if _handoff_linked "$top"; then emit handoff unknown "$_HANDOFF_WORKTREE"; return 0; fi
 
   if [ -e "$top/NEXT.md" ]; then notes+=("NEXT.md kept")
   else
@@ -141,12 +156,16 @@ fix_handoff() {
     if [ "$given" -ne 0 ]; then notes+=("marker kept (--ask/--paths not applied)"); else notes+=("marker kept"); fi
   else
     # ask and paths reach jq on stdin (\x1e-separated): jq.exe is a native program and argv
-    # would cross a Windows code-page conversion
-    mkdir -p "$top/.claude" && printf '%s\x1e%s' "$ask" "$paths" \
+    # would cross a Windows code-page conversion. Written to a temp file then moved, so a failure
+    # never leaves a partial marker that a rerun would keep.
+    tmp="$top/$_HANDOFF_MARKER.tmp.$$"
+    if ! { mkdir -p "$top/.claude" && printf '%s\x1e%s' "$ask" "$paths" \
       | jq -Rs --arg g "$given" '(split("\u001e")) as $v | ($g | tonumber) as $g
           | (if $g % 2 == 1 then {ask: $v[0]} else {} end)
             + (if $g >= 2 then {paths: [$v[1] | splits("[ \t\n]+") | select(length > 0)]} else {} end)' \
-      | tr -d '\r' > "$top/$_HANDOFF_MARKER" || { emit handoff failed "could not write $_HANDOFF_MARKER"; return 0; }
+      | tr -d '\r' > "$tmp" && mv "$tmp" "$top/$_HANDOFF_MARKER"; }; then
+      rm -f "$tmp"; emit handoff failed "could not write $_HANDOFF_MARKER"; return 0
+    fi
     notes+=("marker created"); changed=1
     [ "$ign" = no ] && wrote+=("$_HANDOFF_MARKER")
   fi
@@ -179,6 +198,7 @@ fix_handoff() {
 handoff_commit() {
   local repo="$1" top anchor rc raw p tracked=0 added=0 st msg out kind head files others=()
   top="$(git -C "$repo" rev-parse --show-toplevel)" || die "cannot resolve repo root: $repo"
+  if _handoff_linked "$top"; then emit handoff failed "$_HANDOFF_WORKTREE"; return 0; fi
   anchor="$(_handoff_anchor "$top")"; rc=$?
   case "$rc" in
     0) emit handoff already "a handoff: commit exists: ${anchor:0:7} ${anchor#* }"; return 0 ;;
@@ -194,9 +214,16 @@ handoff_commit() {
     return 0
   fi
   git -C "$top" ls-files --error-unmatch -- NEXT.md >/dev/null 2>&1 && tracked=1
-  st="$(git -C "$top" status --porcelain -- NEXT.md)" || { emit handoff unknown "could not read the status of NEXT.md"; return 0; }
-  if [ "$tracked" = 0 ] && [ -z "$st" ]; then
-    emit handoff failed "NEXT.md is git-ignored here; a handoff: commit cannot hold it"; return 0
+  if [ "$tracked" = 0 ]; then
+    # ask git directly: an empty status line also means "untracked" under status.showUntrackedFiles=no
+    git -C "$top" check-ignore -q -- NEXT.md 2>/dev/null; rc=$?
+    case "$rc" in
+      0) emit handoff failed "NEXT.md is git-ignored here; a handoff: commit cannot hold it"; return 0 ;;
+      1) st='?? NEXT.md' ;;
+      *) emit handoff unknown "could not tell whether NEXT.md is git-ignored"; return 0 ;;
+    esac
+  else
+    st="$(git -C "$top" status --porcelain -- NEXT.md)" || { emit handoff unknown "could not read the status of NEXT.md"; return 0; }
   fi
 
   msg="$(mktemp)" || die "mktemp failed"
