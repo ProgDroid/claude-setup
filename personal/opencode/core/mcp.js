@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { inlineEntry } from "./marketplace.js";
 
 // Scoped CC MCP servers -> OC V1 `mcp` config (packages/core/src/v1/config/mcp.ts:
 // local {command[], environment?, enabled?} | remote {url, headers?, enabled?}).
@@ -47,7 +48,18 @@ function substituteRoot(v, root) {
   return v;
 }
 
-function pluginServers(p, unknown) {
+// A manifest-style `mcpServers` value: an inline servers map, a path, or an array of either.
+function manifestServers(value, root, add, unknown, name) {
+  if (isObj(value)) return add(value);
+  for (const rel of [].concat(value)) {
+    if (typeof rel === "string") add(serversOf(readJson(path.resolve(root, rel), unknown, `plugin:${name}:${rel}`)));
+    else if (isObj(rel)) add(rel);
+  }
+}
+
+// CC (bundle qot): {...root .mcp.json, ...manifest.mcpServers}, the manifest winning. When the
+// plugin has no plugin.json the marketplace entry is the manifest (marketplace.js inlineEntry).
+function pluginServers(p, unknown, home) {
   const out = {};
   const root = p.installPath;
   const name = p.name || p.key;
@@ -58,18 +70,14 @@ function pluginServers(p, unknown) {
   };
   add(serversOf(readJson(path.join(root, ".mcp.json"), unknown, `plugin:${name}:.mcp.json`)));
   const manifest = readJson(path.join(root, ".claude-plugin", "plugin.json"), unknown, `plugin:${name}:plugin.json`);
-  if (isObj(manifest) && manifest.mcpServers !== undefined) {
-    if (isObj(manifest.mcpServers)) add(manifest.mcpServers);
-    else {
-      for (const rel of [].concat(manifest.mcpServers)) {
-        if (typeof rel === "string") add(serversOf(readJson(path.resolve(root, rel), unknown, `plugin:${name}:${rel}`)));
-      }
-    }
-  }
+  if (isObj(manifest) && manifest.mcpServers !== undefined) manifestServers(manifest.mcpServers, root, add, unknown, name);
+  const entry = inlineEntry(p, { home, unknown });
+  if (isObj(entry) && entry.mcpServers !== undefined) manifestServers(entry.mcpServers, root, add, unknown, name);
   return out;
 }
 
-// collectMcp({ claudeJson, projectDir, plugins, settings?, unknown?, trusted? })
+// collectMcp({ claudeJson, projectDir, plugins, settings?, unknown?, trusted?, home? })
+// (`home` locates the marketplaces for inline entry servers; without it none are read.)
 //   -> Record<name, CcServer & { scope: "user" | "project" | "plugin" }>
 // Precedence (later wins): plugin < user < project .mcp.json < the ~/.claude.json projects
 // entry (CC's "local" scope). Plugin servers carry CC's own name `plugin:<plugin>:<server>`,
@@ -80,7 +88,7 @@ function pluginServers(p, unknown) {
 // .mcp.json server; the projects entry's `disabledMcpServers` drops a server of any scope.
 // R47: a project .mcp.json starts only when CC trusts the directory (`trusted`, default false:
 // fail closed); an untrusted one is reported per server and never started, approved or not.
-export function collectMcp({ claudeJson, projectDir, plugins = [], settings = {}, unknown = [], trusted = false } = {}) {
+export function collectMcp({ claudeJson, projectDir, plugins = [], settings = {}, unknown = [], trusted = false, home } = {}) {
   const cj = isObj(claudeJson) ? claudeJson : {};
   const st = isObj(settings) ? settings : {};
   const out = {};
@@ -90,7 +98,7 @@ export function collectMcp({ claudeJson, projectDir, plugins = [], settings = {}
 
   for (const p of Array.isArray(plugins) ? plugins : []) {
     if (!p || !p.installPath || p.exists === false) continue;
-    put(pluginServers(p, unknown), "plugin");
+    put(pluginServers(p, unknown, home), "plugin");
   }
   put(isObj(cj.mcpServers) ? cj.mcpServers : {}, "user");
 

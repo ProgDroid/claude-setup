@@ -79,13 +79,53 @@ function resolveOnPath(name, env) {
   return null;
 }
 
+// D2 (0.12.1): a port of CC 2.1.300's `k3n`, which CC applies to a Windows bash shell-form command
+// (`if(mt&&!Ut&&!qt)dn=k3n(dn)`): when the first token, read with quotes and backslash escapes,
+// ends in `.sh`, the command becomes `bash <command>`. That is what lets `~/.claude/hooks/x.sh` run
+// under a home with a space: a space-free `-c` argument goes on the Windows command line unquoted,
+// MSYS expands its leading `~` to the home path before bash starts, and bash then splits it at the
+// space (exit 126/127). With the prefix the argument has a space, so it is quoted, and bash does
+// the tilde expansion itself, as one word. A space-free command that is not `.sh` (`~/bin/x`) is
+// left alone, as CC leaves it (measured: CC's own spawn fails on it the same way).
+export function ccWinShellForm(command) {
+  const s = String(command ?? "");
+  const r = s.trim();
+  let tok = "";
+  for (let i = 0; i < r.length; ) {
+    const c = r[i];
+    if (c === '"' || c === "'") {
+      const end = r.indexOf(c, i + 1);
+      if (end === -1) {
+        tok += r.slice(i + 1);
+        break;
+      }
+      tok += r.slice(i + 1, end);
+      i = end + 1;
+    } else if (c === "\\" && i + 1 < r.length) {
+      tok += r[i + 1];
+      i += 2;
+    } else if (/\s/.test(c)) break;
+    else {
+      tok += c;
+      i++;
+    }
+  }
+  return tok.endsWith(".sh") ? `bash ${s}` : s;
+}
+
 // Decide { file, args, verbatim } for an entry (R11 + R25 for exec form on win32).
 export function plan(entry, { cwd = process.cwd(), env = process.env } = {}) {
   const root = entry.pluginRoot;
   const command = substitute(entry.command, root);
   if (!Array.isArray(entry.args)) {
     if (entry.shell === "powershell") return { file: "powershell", args: ["-NoProfile", "-Command", command] };
-    return { file: findBash(), args: ["-c", command] };
+    // R54 m-5: the order differs from CC. Here `${CLAUDE_PLUGIN_ROOT}` is substituted into the text
+    // first, then the .sh rewrite reads the result. CC runs k3n on the raw command and lets bash
+    // expand the variable from the env. The prefix decision can only differ for an UNQUOTED
+    // `${CLAUDE_PLUGIN_ROOT}/x.sh` whose root holds a space, and that fails both ways (bash splits
+    // the expanded variable in CC; the first token stops at the space here). Do not rely on this
+    // order for anything else.
+    return { file: findBash(), args: ["-c", WIN ? ccWinShellForm(command) : command] };
   }
   const args = entry.args.map((a) => substitute(a, root));
   if (!WIN) return { file: command, args };
@@ -246,6 +286,8 @@ export function runHook(entry, input, opts = {}) {
     let done = false;
     let killing = false; // set before the kill so the resulting exit/close still counts as a timeout
     let timer;
+    let backgrounded = false; // D3: the first stdout line declared the hook async
+    let cancelling = false; // R53: cancel() (dispose) is ending a detached hook; not a failure
     const out = [];
     const err = [];
     const text = () => ({ stdout: Buffer.concat(out).toString(), stderr: Buffer.concat(err).toString() });
@@ -253,8 +295,12 @@ export function runHook(entry, input, opts = {}) {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      const res = { ...base, ...r, ...(killing ? { timedOut: true, status: null } : {}), durationMs: Date.now() - started };
-      if (detached) reportDetached(entry, res, opts);
+      const res = { ...base, ...r, ...(killing ? { timedOut: true, status: null } : cancelling ? { cancelled: true, status: null } : {}), durationMs: Date.now() - started };
+      if (backgrounded) {
+        // The async line was the declaration, not the answer: what follows it is the answer.
+        const nl = res.stdout.indexOf("\n");
+        reportDetached(entry, { ...res, stdout: nl === -1 ? "" : res.stdout.slice(nl + 1), detached: true, asyncByStdout: true }, opts);
+      } else if (detached) reportDetached(entry, res, opts);
       else resolve(res);
     };
     child.on("error", (e) => finish({ ...text(), spawnError: String(e?.message ?? e), detached }));
@@ -266,9 +312,24 @@ export function runHook(entry, input, opts = {}) {
     let exitMs = null;
     child.on("exit", () => { exitMs = Date.now(); });
     const kill = () => killTree(child, started, () => exitMs, opts.onKill);
+    // R53.1: a detached hook's result carries cancel(), which dispose calls for a hook still running
+    // at exit, as CC's teardown does (`Qis`: kill, outcome "cancelled"). It goes through the same
+    // R23/R27-R29 tree kill, resolves once the kill is done, is idempotent, and reports the outcome
+    // as cancelled, never failed. A hook that already finished is left alone.
+    let cancelP = null;
+    const cancel = () =>
+      (cancelP ??= (async () => {
+        if (done) return;
+        cancelling = true;
+        clearTimeout(timer);
+        timer = null;
+        await kill().catch(() => {});
+        try { child.stdout?.destroy(); child.stderr?.destroy(); } catch {}
+        finish({ detached: true, ...(backgrounded ? text() : {}) });
+      })());
     if (detached) {
       child.unref();
-      resolve({ ...base, status: 0, detached: true, durationMs: Date.now() - started });
+      resolve({ ...base, status: 0, detached: true, durationMs: Date.now() - started, cancel });
       child.on("exit", (code) => finish({ status: code, detached: true }));
       timer = setTimeout(() => {
         killing = true;
@@ -277,7 +338,41 @@ export function runHook(entry, input, opts = {}) {
       timer.unref?.();
       return;
     }
-    child.stdout.on("data", (d) => out.push(d));
+    // D3 (0.12.1), CC 2.1.300's stdout listener: until checked, the first line of stdout so far,
+    // trimmed (`kr(Jr).trim()`, kr = up to the first "\n"), is ignored while it holds no `}`; once it
+    // does, it is parsed once, and `{"async":true}` (`"async"in e&&e.async===!0`) backgrounds the hook:
+    // the caller gets status 0 at once and the outcome arrives later through onDetached (R26). The
+    // pipes stay drained. R53.3: its timeout is cleared then, as CC's `background()` clears it
+    // (`this.#C()` -> clearTimeout); it runs until it exits or dispose cancels it. CC only logs
+    // `asyncTimeout` (`let q=r.asyncTimeout||15000` feeds a log line and nothing else). A CONFIGURED
+    // async hook (above) keeps its R26 timeout.
+    let head = "";
+    let checked = false;
+    child.stdout.on("data", (d) => {
+      out.push(d);
+      if (checked) return;
+      head += d.toString();
+      const nl = head.indexOf("\n");
+      const first = (nl === -1 ? head : head.slice(0, nl)).trim();
+      if (!first.includes("}")) {
+        if (nl !== -1) checked = true; // a complete first line without `}` can never qualify
+        return;
+      }
+      checked = true;
+      head = "";
+      let j;
+      try {
+        j = JSON.parse(first);
+      } catch {
+        return;
+      }
+      if (j === null || typeof j !== "object" || Array.isArray(j) || j.async !== true || done) return;
+      backgrounded = true;
+      clearTimeout(timer);
+      timer = null;
+      try { child.unref(); } catch {}
+      resolve({ ...base, status: 0, detached: true, asyncByStdout: true, durationMs: Date.now() - started, cancel });
+    });
     child.stderr.on("data", (d) => err.push(d));
     child.on("close", (code) => finish({ status: code, ...text() }));
     timer = setTimeout(() => {
@@ -295,7 +390,7 @@ export function runHook(entry, input, opts = {}) {
 // R26: a detached hook's eventual outcome. Same failed semantics as interpret(); never throws.
 function reportDetached(entry, res, opts) {
   try {
-    const failed = interpret(entry.event, res).failed;
+    const failed = res.cancelled ? false : interpret(entry.event, res).failed; // R53.1: cancelled is not failed
     if (typeof opts.onDetached === "function") opts.onDetached({ ...res, failed });
     else if (failed) log(`detached hook failed: ${entry.id ?? entry.command} status=${res.status} timedOut=${res.timedOut} ${res.spawnError ?? ""}`);
   } catch {}

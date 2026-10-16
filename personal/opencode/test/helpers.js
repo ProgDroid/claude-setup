@@ -42,6 +42,9 @@ export function makeCcHome(settings = {}) {
       "superpowers@superpowers-dev": [{ scope: "user", version: "7.0.0", installPath: sp }],
     },
   });
+  // A real plugin ships a manifest; without one the marketplace entry is the manifest (D1) and these homes have no marketplaces.
+  w(path.join(semgrep, ".claude-plugin", "plugin.json"), { name: "semgrep" });
+  w(path.join(sp, ".claude-plugin", "plugin.json"), { name: "superpowers" });
   w(path.join(semgrep, "hooks", "hooks.json"), { hooks: { SessionEnd: [{ hooks: [{ type: "command", command: "semgrep-end" }] }] } });
   w(path.join(semgrep, "skills", "scan", "SKILL.md"), "---\nname: scan\n---\nbody\n");
   fs.mkdirSync(path.join(semgrep, "bin"), { recursive: true });

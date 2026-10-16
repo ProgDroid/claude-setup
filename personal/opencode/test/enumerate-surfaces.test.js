@@ -106,7 +106,7 @@ describe("notTranslated (R16)", () => {
         expect((HANDLED[cat] || []).includes(k)).toBe(false);
       }
     }
-    expect(n).toBe(8); // ocTools.execute dropped again (R39); hasTrustDialogAccepted handled (R47)
+    expect(n).toBe(9); // ocTools.execute dropped again (R39); hasTrustDialogAccepted handled (R47); +pluginManifest.lspServers (D1, 0.12.1)
   });
   test("the 4 review (b) keys plus effort/model/LSP/trust are members", () => {
     expect(Object.keys(NOT_TRANSLATED.env).sort()).toEqual(["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "ENABLE_LSP_TOOL", "ENABLE_LSP_TOOLS"]);

@@ -93,12 +93,12 @@ export function buildInventory({ home = os.homedir(), projectDir = process.cwd()
   const { plugins } = pl;
 
   unknown.push(...cjUnknown);
-  const servers = collectMcp({ claudeJson, projectDir, plugins, settings: merged, unknown, trusted: settings.trusted });
+  const servers = collectMcp({ claudeJson, projectDir, plugins, settings: merged, unknown, trusted: settings.trusted, home });
   const oc = toOcMcp(servers, { env });
   unknown.push(...oc.unknown);
   const mcp = oc.mcp;
 
-  unknown.push(...enumerate({ sources, plugins, claudeJson, ocTools: Array.isArray(ocTools) ? ocTools : [], mcpServers: Object.keys(mcp), projectDir }));
+  unknown.push(...enumerate({ sources, plugins, claudeJson, ocTools: Array.isArray(ocTools) ? ocTools : [], mcpServers: Object.keys(mcp), projectDir, home }));
 
   const disp = loadRules(env);
   if (disp.problem) unknown.push({ where: disp.file, key: "dispositions", note: disp.problem });

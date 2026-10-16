@@ -10,7 +10,7 @@ import { stateStore } from "../core/state.js";
 import { ocPaths } from "../core/paths.js";
 import { log as coreLog } from "../core/log.js";
 import { buildInput, interpret } from "../core/protocol.js";
-import { runHook as coreRunHook } from "../core/runner.js";
+import { runHook as coreRunHook, timeoutFor } from "../core/runner.js";
 import { matches, ifAllows, tokenize } from "../core/hooks.js";
 import { wildcardMatch } from "../core/wildcard.js";
 import { toCcCalls, toCcResponse, applyUpdatedInput, unmappedUpdateKeys, undroppableKeys, UPDATE_ARG_MAPS, sanitizeMcpName } from "../core/toolmap.js";
@@ -25,6 +25,9 @@ import { ccVersion as coreCcVersion, fetchChangelog as coreFetchChangelog, parse
 
 const RUNS = new Set(["bridge", "degraded"]); // skip / cc-only never run
 const SESSION_END_BUDGET_MS = 1500; // CC's SessionEnd hooks share a 1.5 s budget (hooks docs)
+// D4: past a hook's own timeout, the runner's tree kill (R27: snapshot steps capped at 3 s, then
+// taskkill capped at 3 s) still needs time to settle the run; dispose waits this much longer.
+const EXIT_GRACE_MS = 10000;
 
 // Built-in agents whose own rules deny edit (OC v1.19.0 agent/agent.ts:156-249: plan's edit map;
 // explore, compaction, title, summary via "*":"deny"). R34 re-asserts the deny per agent, which OC
@@ -210,6 +213,7 @@ export async function createV1(ctx = {}, deps = {}) {
   const runHook = deps.runHook ?? coreRunHook;
   const partId = deps.partId ?? newPartId;
   const flushMs = deps.flushMs ?? 1000;
+  const exitGraceMs = deps.exitGraceMs ?? EXIT_GRACE_MS;
   const projectDir = ctx?.directory ?? ctx?.worktree ?? process.cwd();
   const worktree = ctx?.worktree ?? projectDir;
   const client = ctx?.client;
@@ -316,23 +320,57 @@ export async function createV1(ctx = {}, deps = {}) {
     }
   }
 
+  // D4: Stop runs, started from the un-awaited `event`, are tracked here; dispose awaits each,
+  // bounded by its hooks' own timeouts plus exitGraceMs, and the process "exit" handler records
+  // whatever is still in flight. R53.1: detached hooks (R26, D3) are NOT in this set: they go in
+  // detachedRuns, and dispose cancels them instead of waiting (CC's teardown, `Qis`).
+  // R54 I-1: a run's deadline and the hooks it may count come from its SYNC entries only. An async
+  // or asyncRewake entry is detached once spawned: its timeout must not stretch the wait, and it is
+  // never a failure here (R53.1). A run with only async entries is still tracked, with exitGraceMs
+  // as its deadline, so dispose lets run() spawn them before the cancel step looks for them.
+  const inflight = new Set(); // { p, entries: sync entries (counted), all, deadline }
+  const detachedRuns = new Set(); // { entry, cancel }
+  const track = (p, entries) => {
+    if (!entries.length) return;
+    const sync = entries.filter((e) => !(e.async || e.asyncRewake));
+    const rec = { p, entries: sync, all: entries, deadline: Date.now() + (sync.length ? Math.max(...sync.map((e) => timeoutFor(e))) * 1000 : 0) + exitGraceMs };
+    inflight.add(rec);
+    p.then(
+      () => inflight.delete(rec),
+      () => inflight.delete(rec),
+    );
+  };
+  const idList = (entries) => dedupe(entries.map((e) => `${e.id} (${e.event})`)).join(", ");
+  const inflightIds = (recs) => idList(recs.flatMap((r) => r.entries));
+
   // Runs entries in parallel (CC semantics), one runHook per entry so R26's onDetached knows which
   // hook failed. Failures -> state.failures; malformed / not-honoured (R24) / unknown fields -> log.
   async function run(entries, input, cwd = projectDir) {
     return Promise.all(
       entries.map(async (e) => {
+        let settle;
+        const settled = new Promise((res) => (settle = res));
         const r = await runHook(e, input, {
           cwd,
           projectDir,
           env: settingsEnv,
           onDetached: (d) => {
-            if (d?.failed) {
-              state.failures.add(e.id, failMsg(d));
-              log(`detached hook failed: ${e.id} (${e.event}) ${failMsg(d)}`);
-              scheduleFlush();
+            try {
+              if (d?.failed) {
+                state.failures.add(e.id, failMsg(d));
+                log(`detached hook failed: ${e.id} (${e.event}) ${failMsg(d)}`);
+                scheduleFlush();
+              }
+            } finally {
+              settle();
             }
           },
         });
+        if (r?.detached) {
+          const rec = { entry: e, cancel: r.cancel };
+          detachedRuns.add(rec);
+          settled.then(() => detachedRuns.delete(rec));
+        }
         const it = interpret(e.event, r);
         if (it.failed) {
           state.failures.add(e.id, failMsg(r));
@@ -557,6 +595,20 @@ export async function createV1(ctx = {}, deps = {}) {
 
   try {
     (deps.onExit ?? ((fn) => process.once("exit", fn)))(() => {
+      // D4: an exit that dispose did not see through (a hard exit, or dispose cut short). Only
+      // synchronous work runs here: one log line and one counted failure per Stop hook still in
+      // flight, so it surfaces in the next session's parity line. R53.1: Stop only; a detached hook
+      // still running is not recorded (CC counts those as cancelled, not failed).
+      try {
+        const recs = [...inflight].filter((r) => r.entries.length);
+        inflight.clear();
+        if (recs.length) {
+          log(`hooks pending at exit, outcome unknown: ${inflightIds(recs)}`);
+          for (const r of recs) for (const e of r.entries) state.failures.add(e.id, "pending at exit: still running when OC exited; outcome unknown");
+        }
+      } catch {
+        // exiting
+      }
       try {
         flushNow();
       } catch {
@@ -766,17 +818,28 @@ export async function createV1(ctx = {}, deps = {}) {
       }
     },
 
-    // No injection here: OC does not await `event` (row 7).
+    // No injection here: OC does not await `event` (row 7). D4: so the Stop run is tracked from this
+    // first line (before the session lookup) and dispose awaits it.
     event: async ({ event } = {}) => {
+      let p = null;
       try {
         if (event?.type !== "session.idle") return;
-        const sid = event.properties?.sessionID;
-        if (typeof sid !== "string" || !(await isTopLevel(sid))) return; // CC's Stop skips subagents
         const entries = hooksFor("Stop");
-        if (entries.length) await run(entries, buildInput("Stop", { sessionId: sid, cwd: projectDir }));
+        if (!entries.length) return;
+        p = (async () => {
+          try {
+            const sid = event.properties?.sessionID;
+            if (typeof sid !== "string" || !(await isTopLevel(sid))) return; // CC's Stop skips subagents
+            await run(entries, buildInput("Stop", { sessionId: sid, cwd: projectDir }));
+          } catch (e) {
+            fail("event", e);
+          }
+        })();
+        track(p, entries);
       } catch (e) {
         fail("event", e);
       }
+      await p;
     },
 
     // R9: chat.message also fires for other plugins' noReply prompts (indistinguishable here: the
@@ -838,7 +901,47 @@ export async function createV1(ctx = {}, deps = {}) {
     },
 
     // SessionEnd is best effort: OC calls dispose on instance shutdown; a hard exit only flushes.
+    // D4: OC v1.19.0 awaits dispose before it exits (effect-cmd.ts `finally { await
+    // store.dispose(ctx) }` -> the plugin scope finalizer `Promise.resolve(hook.dispose?.())`; then
+    // index.ts process.exit()), so in-flight synchronous Stop runs are awaited here first, each
+    // bounded by its SYNC hooks' own timeouts plus exitGraceMs (R54 I-1). A run that outlives its bound is logged
+    // and counted; it never blocks exit for longer. R53.1: then, after SessionEnd (R54 m-6), every
+    // detached hook still running (an async Stop or SessionEnd hook included) is cancelled, as CC's
+    // teardown does
+    // (`Qis`: `r.shellCommand.kill(); await PWe(r,1,"cancelled")`): the runner's R23/R27-R29 tree
+    // kill, reported as cancelled and never counted. Detached hooks are never waited for.
     dispose: async () => {
+      try {
+        const waited = new Set();
+        for (;;) {
+          const batch = [...inflight].filter((r) => !waited.has(r));
+          if (!batch.length) break;
+          for (const r of batch) waited.add(r);
+          log(`dispose: waiting for Stop runs in flight at exit: ${idList(batch.flatMap((r) => r.all))}`);
+          const late = await Promise.all(
+            batch.map(
+              (r) =>
+                new Promise((res) => {
+                  // a ref'd timer: it also keeps the process alive while the runs settle
+                  const t = setTimeout(() => res(r), Math.max(0, r.deadline - Date.now()));
+                  r.p.then(
+                    () => (clearTimeout(t), res(null)),
+                    () => (clearTimeout(t), res(null)),
+                  );
+                }),
+            ),
+          );
+          for (const r of late) {
+            if (!r || !inflight.has(r)) continue;
+            inflight.delete(r); // counted here, so the exit handler does not count it again
+            if (!r.entries.length) continue; // async only: nothing to count (R53.1)
+            log(`hooks still running at exit, past their timeout: ${inflightIds([r])}`);
+            for (const e of r.entries) state.failures.add(e.id, "still running at exit, past its timeout");
+          }
+        }
+      } catch (e) {
+        fail("dispose:inflight", e);
+      }
       try {
         const entries = hooksFor("SessionEnd").filter((h) => matches(h.matcher, "other"));
         if (entries.length && started.size) {
@@ -853,6 +956,23 @@ export async function createV1(ctx = {}, deps = {}) {
         }
       } catch (e) {
         fail("dispose", e);
+      }
+      // R54 m-6: the cancel step runs AFTER SessionEnd, so an async SessionEnd hook spawned just
+      // above is cancelled too instead of outliving OC.
+      try {
+        const recs = [...detachedRuns];
+        detachedRuns.clear();
+        if (recs.length) {
+          log(`dispose: cancelling detached hooks still running at exit (cancelled, not failures, as in CC): ${dedupe(recs.map((r) => `${r.entry.id} (${r.entry.event})`)).join(", ")}`);
+          let t;
+          await Promise.race([
+            Promise.all(recs.map((r) => Promise.resolve().then(() => r.cancel?.()).catch(() => {}))),
+            new Promise((res) => (t = setTimeout(res, exitGraceMs))),
+          ]);
+          clearTimeout(t);
+        }
+      } catch (e) {
+        fail("dispose:cancel", e);
       }
       try {
         await spHooks.dispose?.();

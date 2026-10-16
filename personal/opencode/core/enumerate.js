@@ -3,6 +3,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { pluginHookSources } from "./pluginhooks.js";
 import { OC_TO_CC, OC_INTERNAL } from "./toolmap.js";
+import { inlineEntry } from "./marketplace.js";
 
 const require = createRequire(import.meta.url);
 // Keys that genuinely do not affect OC behaviour, each with a reason. Only
@@ -41,6 +42,9 @@ export const HANDLED = {
   ocTools: [...Object.keys(OC_TO_CC), ...OC_INTERNAL],
 };
 
+// Components a marketplace entry can declare inline that the adapter does not read (D1b).
+const INLINE_UNTRANSLATED = ["hooks", "commands", "agents", "outputStyles", "themes"];
+
 // Project-entry keys that are ignorable only while empty; a non-empty value is behaviour.
 const IGNORED_WHILE_EMPTY = new Set(["allowedTools", "mcpContextUris"]);
 
@@ -57,7 +61,7 @@ function readJson(file) {
 }
 
 // Notes carry key NAMES only, never values: env, headers and .claude.json hold secrets.
-export function enumerate({ sources = [], plugins = [], claudeJson, ocTools = [], mcpServers = [], projectDir } = {}) {
+export function enumerate({ sources = [], plugins = [], claudeJson, ocTools = [], mcpServers = [], projectDir, home } = {}) {
   const out = [];
   const seen = new Set();
   const report = (where, key, note) => {
@@ -158,6 +162,19 @@ export function enumerate({ sources = [], plugins = [], claudeJson, ocTools = []
     for (const src of pluginHookSources(p.installPath)) {
       if (src.kind === "file") walkHooksFile(label, src.data);
       else walkHooks(label, src.data);
+    }
+    // A plugin with no plugin.json takes its manifest from the marketplace entry (marketplace.js):
+    // inline MCP servers are walked like manifest ones; inline lspServers are reported, never dropped.
+    // collectMcp already reports an unreadable marketplace, so this call's sink is discarded.
+    const entry = inlineEntry(p, { home, unknown: [] });
+    if (isObj(entry)) {
+      if (isObj(entry.mcpServers)) walkServers(label, entry.mcpServers, "mcp.*");
+      if (entry.lspServers !== undefined) check("pluginManifest", "lspServers", label, "marketplace-entry:lspServers", "unknown plugin manifest key");
+      // D1b: the entry is the manifest, and the adapter reads none of these from it (it reads
+      // components from the install path only): report each, one item per plugin and key.
+      for (const k of INLINE_UNTRANSLATED) {
+        if (entry[k] !== undefined) report(label, `marketplace-entry:${k}`, "affects behaviour; not translated to OC: declared inline in the marketplace entry (the plugin has no plugin.json); the adapter reads this component from the install path only");
+      }
     }
     // MCP: .mcp.json, plus a manifest `mcpServers` (inline object or path(s)).
     walkMcpFile(label, readJson(path.join(p.installPath, ".mcp.json")), "mcp.*");

@@ -14,5 +14,8 @@
   "claudeJson": {
     "claudeAiMcpEverConnected": "claude.ai connector MCP servers are not available in OC"
   },
-  "claudeJsonProject": {}
+  "claudeJsonProject": {},
+  "pluginManifest": {
+    "lspServers": "CC plugin language servers (declared in plugin.json or inline in the marketplace entry); OC has its own LSP configuration, so none are started from the plugin"
+  }
 }

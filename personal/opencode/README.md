@@ -38,6 +38,9 @@ error occurs or a CC record is missing, the adapter fails closed.
 - **Hooks:** CC command hooks, run through OC's tool and chat hooks with CC's JSON protocol
   (exit 2 blocks, structured JSON output, `continue:false`, matchers, `if`, timeouts in seconds).
   Other handler types (`prompt`, `http`, `agent`) are reported as unknown and never run.
+  On Windows a shell-form hook whose first word ends in `.sh` runs as `bash <command>`, as CC does,
+  so a `~/...sh` hook works under a home path with a space. A hook whose first stdout line is
+  `{"async":true}` is detached after that line, as in CC.
 - **MCP servers**, mirrored with their scope and exposed as `<server>_<tool>` (translated to and
   from CC's `mcp__<server>__<tool>` so matchers work).
 - **Skills and agents** from CC's user, project and enabled-plugin directories.
@@ -112,6 +115,7 @@ Re-check these when deciding. Any one of 1-3 makes a move worth re-evaluating, a
 
 ## Known gaps
 
+- **Plugin language servers are not translated.** `lspServers` (in `plugin.json` or inline in the marketplace entry, as `gopls-lsp` and `typescript-lsp` do) is reported once (like every parity item); OC has its own LSP configuration. Inline `mcpServers` in a marketplace entry (as `qmd` does) *is* enumerated, when the plugin has no `plugin.json`, as CC does.
 - **No PowerShell tool** on the OC side, so CC hooks and rules that target it have no counterpart.
 - **OC auto mode has no classifier.** CC's auto-mode behaviour is not reproduced.
 - **A hook `ask` blocks.** OC cannot prompt from a hook, so an `ask` decision denies.
@@ -179,6 +183,28 @@ Re-check these when deciding. Any one of 1-3 makes a move worth re-evaluating, a
 - **First-message caveat:** the parity line goes into the first qualifying message of a
   top-level session. `chat.message` cannot tell a user's prompt from another plugin's `noReply`
   prompt (see "Where the parity line lands").
+- **Windows: a `~/` hook command that is a single word with no `.sh` (`~/bin/x`, no arguments)
+  fails under a home with a space.** A command with no whitespace goes to Git Bash unquoted, Git
+  Bash expands its `~` before bash starts, and bash splits the path. Any whitespace in the command
+  (`~/bin/x arg`) makes it quoted, so that works. CC 2.1.300 leaves such a command alone too, so it
+  fails there as well. `bash ~/bin/x` or a `.sh` name works.
+- **At exit, OC waits for Stop hooks and cancels async ones, as CC does.** A synchronous Stop hook
+  (OC starts it without awaiting) still running when OC disposes the plugin is awaited, up to its
+  own `timeout` plus 10 s, so its failure is logged and reported next session. So `opencode run` can
+  wait for a slow synchronous Stop hook. Async Stop hooks never stretch that wait and are never
+  counted. A detached hook still running (`async`, `asyncRewake`, or `{"async":true}` on the first
+  stdout line; Stop and SessionEnd hooks included) is not waited for: its process tree is killed and
+  it is recorded as cancelled, not as a failure, as CC's own teardown does. The kill is best effort:
+  when the hook's own process has already exited while a background child still holds its output,
+  that child can be left running, since the exited process's id is never reused for a kill (R28).
+  A synchronous Stop hook still running at an exit that skips dispose is recorded as a failure,
+  "pending at exit".
+- **Async hook timeouts.** A hook configured `async`/`asyncRewake` is killed at its own `timeout`
+  and counted as a failure, as before (CC clears that timer as well, and kills such a hook only at
+  exit). A hook that declares itself async on its first stdout line
+  has its timeout cleared at that line, as in CC: it runs until it exits or OC exits. `asyncTimeout`
+  is not a kill timer here or in CC 2.1.300, which only logs it. An async hook's later JSON answer
+  is not delivered: OC has no way to inject it after the call, and no rewake.
 - **`GET /config` exposes expanded MCP secrets locally**, as OC's own `{env:}` substitution does.
   If you serve OC (`opencode serve`/`web`), set `OPENCODE_SERVER_PASSWORD`.
 
