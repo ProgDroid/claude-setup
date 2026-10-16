@@ -94,6 +94,18 @@ out="$( stub_path "$DET"; stub_path "$OLDGIT"; bash "$RITUAL" check secret-scan 
 [ "$(st "$out")" = unknown ] && [[ "$(dt "$out")" == *"git hook run"* ]] && [ "$(git -C "$r" status --porcelain)" = "$p0" ] \
   && ok "unknown_when_git_hook_run_missing" || bad "unknown_when_git_hook_run_missing: $out"
 
+# fix_unknown_when_unprovable (R45): the block is present but the proof cannot run -> fix is
+# unknown ("not proved: <cause>"), never already, and writes nothing. Both causes.
+s1="$(sha256sum "$r/.beads/hooks/pre-commit" | cut -d' ' -f1)"
+out="$(N fix secret-scan "$r")"
+[ "$(st "$out")" = unknown ] && [[ "$(dt "$out")" == "not proved: "*gitleaks* ]] && [ "$(jq -c .wrote <<<"$out")" = '[]' ] \
+  && [ "$(sha256sum "$r/.beads/hooks/pre-commit" | cut -d' ' -f1)" = "$s1" ] \
+  && ok "fix_unknown_when_unprovable (no gitleaks)" || bad "fix_unknown_when_unprovable (no gitleaks): $out"
+out="$( stub_path "$DET"; stub_path "$OLDGIT"; bash "$RITUAL" fix secret-scan "$r" )"
+[ "$(st "$out")" = unknown ] && [[ "$(dt "$out")" == "not proved: "*"git hook run"* ]] && [ "$(jq -c .wrote <<<"$out")" = '[]' ] \
+  && [ "$(git -C "$r" status --porcelain)" = "$p0" ] \
+  && ok "fix_unknown_when_unprovable (no git hook run)" || bad "fix_unknown_when_unprovable (no git hook run): $out"
+
 echo "== fix =="
 # fix_inserts_into_beads_hook: block lands in .beads/hooks/pre-commit right after the shebang; bd's
 # block and the user line follow it byte-for-byte.

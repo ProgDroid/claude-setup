@@ -282,7 +282,7 @@ fix_secret_scan() {
     st="$(jq -r .status <<<"$res" 2>/dev/null | tr -d '\r')"; dt="$(jq -r .detail <<<"$res" 2>/dev/null | tr -d '\r')"
     case "$st" in
       present) emit secret-scan already "${swept}ritual block already in $hook; $dt" ;;
-      unknown) emit secret-scan already "${swept}ritual block already in $hook (not proved: $dt)" ;;
+      unknown) emit secret-scan unknown "${swept}not proved: $dt" ;;
       *)       emit secret-scan failed "${swept}ritual block already in $hook, but ${dt:-the proof gave no result}" ;;
     esac
     return 0
