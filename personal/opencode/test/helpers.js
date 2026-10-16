@@ -4,9 +4,13 @@ import path from "node:path";
 
 // tree: { "relative/path": string | object(JSON) }. Paths are relative to the
 // temp home; a key prefixed "project:" goes into the temp project dir instead.
+// Both dirs live under the preload's CC_PARITY_TEST_DIR, which its global afterAll removes, so a
+// test that never calls cleanup() no longer leaks them into the system temp dir.
 export function makeHome(tree = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "ccp-home-"));
-  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), "ccp-proj-"));
+  const base = process.env.CC_PARITY_TEST_DIR || os.tmpdir();
+  fs.mkdirSync(base, { recursive: true });
+  const home = fs.mkdtempSync(path.join(base, "ccp-home-"));
+  const projectDir = fs.mkdtempSync(path.join(base, "ccp-proj-"));
   for (const [rel, content] of Object.entries(tree)) {
     const isProj = rel.startsWith("project:");
     const file = path.join(isProj ? projectDir : home, isProj ? rel.slice(8) : rel);
