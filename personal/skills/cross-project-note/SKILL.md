@@ -1,6 +1,6 @@
 ---
 name: cross-project-note
-description: Use when you notice something that belongs to a different project than the one this session is working in - a bug, an idea, a follow-up, a fact another project needs - to file it for that project's next session instead of losing it.
+description: Use when you notice something that belongs to a different project than the one this session is working in - a bug, an idea, a follow-up, a fact another project needs - and before you offer to note it, file it or leave it for later; the user should not have to say yes to keep it.
 ---
 
 # Cross-project note
