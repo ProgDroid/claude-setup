@@ -10,6 +10,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib/repo.sh"
 . "$HERE/lib/parking.sh"
 . "$HERE/lib/beads.sh"
+. "$HERE/lib/secretscan.sh"
 command -v jq >/dev/null 2>&1 || die "jq is required"
 
 sub="${1:-}"; [ $# -gt 0 ] && shift
