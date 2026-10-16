@@ -19,7 +19,13 @@ cat > "$PASSIVE/gitleaks" <<'STUB'
 #!/usr/bin/env bash
 echo "INF no leaks found" >&2; exit 0
 STUB
-chmod +x "$DET/gitleaks" "$PASSIVE/gitleaks"
+# CRASH exits non-zero WITHOUT a leaks line, as gitleaks does on a broken config.
+CRASH="$TMPROOT/stub crash"; mkdir -p "$CRASH"
+cat > "$CRASH/gitleaks" <<'STUB'
+#!/usr/bin/env bash
+echo "FTL unable to load gitleaks config, err: While parsing config: toml: expected character =" >&2; exit 1
+STUB
+chmod +x "$DET/gitleaks" "$PASSIVE/gitleaks" "$CRASH/gitleaks"
 
 NOGL="$(path_without gitleaks)"
 # runners: D = detecting stub first on PATH, P = passive stub, N = no gitleaks by either route
@@ -40,7 +46,7 @@ bd_shim() {
   printf "%s$e" '#!/usr/bin/env sh' "$BEGIN_BD" \
     '# This section is managed by beads. Do not remove these markers.' \
     'if [ -n "${SHIM_LOG:-}" ]; then echo shim-ran >> "$SHIM_LOG"; fi' \
-    'if [ -n "${SHIM_STAGE:-}" ]; then git add -- "$SHIM_STAGE"; fi' \
+    'if [ -n "${SHIM_STAGE:-}" ]; then git --literal-pathspecs add -- "$SHIM_STAGE"; fi' \
     'if [ -n "${SHIM_TOUCH:-}" ]; then echo touched >> "$SHIM_TOUCH"; fi' \
     '# --- END BEADS INTEGRATION v1.2.2 ---' 'true # user line after the bd block' > "$1"
   chmod +x "$1"
@@ -101,7 +107,7 @@ tail -n +"$((end_ln + 1))" "$h" > "$TMPROOT/new.rest"
   && [ -n "$end_ln" ] && cmp -s "$TMPROOT/orig.rest" "$TMPROOT/new.rest" \
   && [ "$(grep -nxF "$BEGIN_BD" "$h" | cut -d: -f1)" -gt "$end_ln" ] \
   && ok "fix_inserts_into_beads_hook" || bad "fix_inserts_into_beads_hook: $out / end=$end_ln"
-grep -qF '"$_ritual_gl" git --pre-commit --staged --redact --no-banner' "$h" \
+grep -qF '"$_ritual_gl" git --pre-commit --staged --redact --no-banner --verbose' "$h" \
   && ok "fix_block_runs_pinned_command" || bad "pinned command missing from block"
 
 # fix_idempotent: a second fix changes nothing and keeps one marker pair.
@@ -141,12 +147,15 @@ tail -n +2 "$TMPROOT/orig" > "$TMPROOT/orig.rest"; tail -n +"$((end_ln + 1))" "$
 out="$(D check secret-scan "$r")"
 [ "$(st "$out")" = present ] && ok "crlf_hook_proves_present" || bad "crlf_hook_proves_present: $out"
 
-# fix_refuses_non_shell_hook: a python pre-commit is left byte-identical and the step fails.
-for sb in '#!/usr/bin/env python3' '#!/usr/bin/python' '#!/usr/bin/env -S node --no-warnings'; do
+# fix_refuses_non_shell_hook: a python pre-commit is left byte-identical and the step fails,
+# naming the interpreter (the detail carries the parsed name only, never the shebang line).
+for pair in 'python3|#!/usr/bin/env python3' 'python|#!/usr/bin/python' 'node|#!/usr/bin/env -S node --no-warnings'; do
+  want="${pair%%|*}"; sb="${pair#*|}"
   r="$(mkrepo py)"; h="$r/.git/hooks/pre-commit"; printf '%s\nprint("hi")\n' "$sb" > "$h"
-  s0="$(sha256sum "$h" | cut -d' ' -f1)"; want="${sb##*[/ ]}"
+  s0="$(sha256sum "$h" | cut -d' ' -f1)"
   out="$(D fix secret-scan "$r")"
-  [ "$(st "$out")" = failed ] && [[ "$(dt "$out")" == *"$want"* ]] && [ "$(sha256sum "$h" | cut -d' ' -f1)" = "$s0" ] \
+  [ "$(st "$out")" = failed ] && [[ "$(dt "$out")" == *"(interpreter: $want)"* ]] && [[ "$(dt "$out")" != *'#!'* ]] \
+    && [ "$(sha256sum "$h" | cut -d' ' -f1)" = "$s0" ] \
     && [ "$(jq -c .wrote <<<"$out")" = '[]' ] && ok "fix_refuses_non_shell_hook ($want)" || bad "fix_refuses_non_shell_hook ($sb): $out"
 done
 # ...but the shell family is accepted
@@ -190,13 +199,106 @@ out="$(D check secret-scan "$r")"
   || bad "proof_detects_bypass: block-in-.git/hooks=$inplace $out"
 
 # proof_requires_nonzero_exit: a hook whose scan REPORTS the leak but lets the commit through
-# (here an edited block that swallows gitleaks' exit) is not a working scan.
+# (here an edited block that swallows gitleaks' exit) is not a working scan. The block is in the
+# hook git runs, so this is `failed` with the cause (R41), for check AND fix (never absent/already).
 r="$(mkrepo swallow)"
 printf '%s\n' '#!/usr/bin/env sh' '# >>> ritual secret-scan' 'gitleaks git --pre-commit --staged --redact --no-banner || true' \
   'echo >&2 "gitleaks: leak reported, ignored"' '# <<< ritual secret-scan' > "$r/.git/hooks/pre-commit"
 out="$(D check secret-scan "$r")"
-[ "$(st "$out")" = absent ] && [ -z "$(git -C "$r" status --porcelain)" ] && ok "proof_requires_nonzero_exit" \
-  || bad "proof_requires_nonzero_exit: $out"
+[ "$(st "$out")" = failed ] && [[ "$(dt "$out")" == *"did not fire"* ]] && [[ "$(dt "$out")" == *"leak reported, ignored"* ]] \
+  && [ -z "$(git -C "$r" status --porcelain)" ] && ok "proof_requires_nonzero_exit" || bad "proof_requires_nonzero_exit: $out"
+out="$(D fix secret-scan "$r")"
+[ "$(st "$out")" = failed ] && [[ "$(dt "$out")" == *"did not fire"* ]] && ok "fix_fails_on_edited_block" \
+  || bad "fix_fails_on_edited_block: $out"
+
+# r41_no_trailing_colon: a hook that printed nothing gives a detail without a dangling ": ".
+r="$(mkrepo quiet)"
+printf '%s\n' '#!/usr/bin/env sh' '# >>> ritual secret-scan' 'true' '# <<< ritual secret-scan' > "$r/.git/hooks/pre-commit"
+out="$(D check secret-scan "$r")"; d="$(dt "$out")"
+[ "$(st "$out")" = failed ] && [[ "$d" == *"did not fire"* ]] && [[ "$d" != *: ]] && [[ "$d" != *": " ]] \
+  && ok "r41_no_trailing_colon" || bad "r41_no_trailing_colon: $out"
+
+# r43_crash_blocks_with_failed_to_run: gitleaks exiting non-zero with no leaks line (broken config)
+# blocks the commit, says it failed to run and never says secrets were found; check is failed.
+r="$(mkrepo crash)"; D fix secret-scan "$r" >/dev/null
+echo ok > "$r/benign.txt"; git -C "$r" add benign.txt; h0="$(git -C "$r" rev-parse HEAD)"
+err="$( stub_path "$CRASH"; git -C "$r" commit -q -m benign 2>&1 )"; rc=$?
+[ "$rc" != 0 ] && [ "$(git -C "$r" rev-parse HEAD)" = "$h0" ] && [[ "$err" == *"failed to run"* ]] \
+  && [[ "$err" == *"nothing was scanned"* ]] && [[ "$err" != *"found secrets"* ]] \
+  && ok "r43_crash_blocks_with_failed_to_run" || bad "r43_crash_blocks_with_failed_to_run: rc=$rc $err"
+git -C "$r" rm -q --cached benign.txt
+out="$( stub_path "$CRASH"; bash "$RITUAL" check secret-scan "$r" )"
+[ "$(st "$out")" = failed ] && [[ "$(dt "$out")" == *"failed to run"* ]] && ok "r43_check_failed_names_cause" \
+  || bad "r43_check_failed_names_cause: $out"
+err="$( stub_path "$DET"; printf 'aws_access_key_id = %s\n' "$KEY" > "$r/k.txt"; git -C "$r" add k.txt; git -C "$r" commit -q -m k 2>&1 )"
+[[ "$err" == *"found secrets"* ]] && [[ "$err" != *"failed to run"* ]] && ok "r43_leak_message_says_found" \
+  || bad "r43_leak_message_says_found: $err"
+git -C "$r" rm -q --cached k.txt; rm -f "$r/k.txt"
+
+# block_safe_under_sh_e: the block runs under the hook's shebang flags; Git for Windows ignores
+# them, so the hook is run with an explicit `sh -e` here. Three cases: no gitleaks, leak, clean.
+r="$(mkrepo she)"; h="$r/.git/hooks/pre-commit"; printf '#!/bin/sh -e\necho after-block\n' > "$h"
+D fix secret-scan "$r" >/dev/null
+err="$( cd "$r" && PATH="$NOGL" LOCALAPPDATA="$(cygpath -w "$EMPTY_LA")" sh -e .git/hooks/pre-commit 2>&1 )"; rc=$?
+[ "$rc" = 0 ] && [[ "$err" == *WARNING*gitleaks* ]] && [[ "$err" == *after-block* ]] \
+  && ok "block_safe_under_sh_e (no gitleaks: warns, continues)" || bad "block_safe_under_sh_e (absent): rc=$rc $err"
+printf 'aws_access_key_id = %s\n' "$KEY" > "$r/k.txt"; git -C "$r" add k.txt
+err="$( cd "$r" && stub_path "$DET" && sh -e .git/hooks/pre-commit 2>&1 )"; rc=$?
+[ "$rc" != 0 ] && [[ "$err" == *"ritual secret-scan: gitleaks found secrets"* ]] && [[ "$err" != *after-block* ]] \
+  && ok "block_safe_under_sh_e (leak: message, blocks)" || bad "block_safe_under_sh_e (leak): rc=$rc $err"
+git -C "$r" rm -q --cached k.txt; rm -f "$r/k.txt"
+err="$( cd "$r" && stub_path "$DET" && sh -e .git/hooks/pre-commit 2>&1 )"; rc=$?
+[ "$rc" = 0 ] && [[ "$err" == *after-block* ]] && ok "block_safe_under_sh_e (clean: passes)" \
+  || bad "block_safe_under_sh_e (clean): rc=$rc $err"
+
+# sweep_removes_leftover_proof_file: a proof file left by a killed run (staged AND on disk) is
+# removed by the next check and by fix, and reported; look-alike names are not touched.
+r="$(bd_repo)"; D fix secret-scan "$r" >/dev/null
+lo=".ritual-secret-scan-proof.LEFT01"
+seed_leftover() {
+  printf 'aws_access_key_id = %s\n' "$KEY" > "$r/$lo"; git -C "$r" add -f "$lo"
+  echo keep > "$r/.ritual-secret-scan-proofX"; mkdir -p "$r/sub"; echo keep > "$r/sub/$lo"
+}
+seed_leftover
+seeded="$(git -C "$r" ls-files -- "$lo")"
+out="$(D check secret-scan "$r")"
+[ "$seeded" = "$lo" ] && [ "$(st "$out")" = present ] && [[ "$(dt "$out")" == *"leftover proof file"* ]] \
+  && [ -z "$(git -C "$r" ls-files -- "$lo")" ] && [ ! -e "$r/$lo" ] \
+  && [ -e "$r/.ritual-secret-scan-proofX" ] && [ -e "$r/sub/$lo" ] \
+  && ok "sweep_removes_leftover_proof_file (check)" || bad "sweep (check): seeded=$seeded $out"
+seed_leftover
+out="$(D fix secret-scan "$r")"
+[[ "$(dt "$out")" == *"leftover proof file"* ]] && [ -z "$(git -C "$r" ls-files -- "$lo")" ] && [ ! -e "$r/$lo" ] \
+  && [ -e "$r/sub/$lo" ] && ok "sweep_removes_leftover_proof_file (fix)" || bad "sweep (fix): $out"
+rm -rf "$r/sub" "$r/.ritual-secret-scan-proofX"
+
+# term_waits_for_cleanup: TERM to the whole job (as a harness timeout sends) while the hook runs.
+# The ritual must not exit before the proof has cleaned up, and reports failed "interrupted".
+SLOW="$TMPROOT/stub slow"; mkdir -p "$SLOW"
+cat > "$SLOW/gitleaks" <<'STUB'
+#!/usr/bin/env bash
+: > "$SLOW_MARK"; sleep 5; echo "INF no leaks found" >&2; exit 0
+STUB
+chmod +x "$SLOW/gitleaks"
+p0="$(git -C "$r" status --porcelain=v1 --untracked-files=all)"
+mark="$TMPROOT/slow.mark"; rm -f "$mark"
+set -m
+( stub_path "$SLOW"; export SLOW_MARK="$mark"; exec bash "$RITUAL" check secret-scan "$r" > "$TMPROOT/term.out" 2>/dev/null ) &
+pid=$!
+set +m
+for i in $(seq 1 150); do [ -e "$mark" ] && break; sleep 0.2; done
+mid="$(git -C "$r" ls-files -- '.ritual-secret-scan-proof.*' | wc -l | tr -d ' ')"
+kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid"
+wait "$pid"; trc=$?
+now_left="$(proof_leftovers "$r")"; now_idx="$(git -C "$r" ls-files -- '.ritual-secret-scan-proof.*' | wc -l | tr -d ' ')"
+[ -e "$mark" ] && [ "$mid" = 1 ] && [ "$trc" != 0 ] && [ "$now_left" = 0 ] && [ "$now_idx" = 0 ] \
+  && [ "$(st "$(cat "$TMPROOT/term.out")")" = failed ] && [[ "$(dt "$(cat "$TMPROOT/term.out")")" == *interrupted* ]] \
+  && ok "term_waits_for_cleanup" || bad "term_waits_for_cleanup: mark=$([ -e "$mark" ] && echo y) mid=$mid rc=$trc left=$now_left idx=$now_idx out=$(cat "$TMPROOT/term.out")"
+for i in $(seq 1 30); do
+  [ "$(proof_leftovers "$r")" = 0 ] && [ "$(git -C "$r" status --porcelain=v1 --untracked-files=all)" = "$p0" ] && break; sleep 1
+done
+[ "$(proof_leftovers "$r")" = 0 ] && [ "$(git -C "$r" status --porcelain=v1 --untracked-files=all)" = "$p0" ] \
+  && ok "term_leaves_no_key" || bad "term_leaves_no_key: $(git -C "$r" status --porcelain)"
 
 # proof_cleans_up: a dirty tree (staged, unstaged, untracked) is exactly as it was after the proof.
 r="$(bd_repo)"; D fix secret-scan "$r" >/dev/null; git -C "$r" add .beads; git -C "$r" commit -q -m scan
@@ -210,18 +312,41 @@ out="$( export SHIM_LOG="$log"; D check secret-scan "$r" )"
 [ "$(st "$out")" = present ] && [ ! -s "$log" ] && ok "proof_blocks_before_bd_shim" || bad "proof_blocks_before_bd_shim: $out / log=$(cat "$log")"
 
 # proof_reverts_hook_staging: when detection fails, bd's shim runs and stages a file that was only
-# modified before. The proof unstages it again and reports absent, not failed.
+# modified before. The proof unstages it again: the step is failed for the R41 cause (the proof did
+# not fire), never for side effects.
 echo '{"id":"x-2"}' >> "$r/.beads/issues.jsonl"
 p0="$(git -C "$r" status --porcelain=v1 --untracked-files=all)"
 out="$( export SHIM_STAGE=.beads/issues.jsonl; P check secret-scan "$r" )"
-[ "$(st "$out")" = absent ] && [ "$(git -C "$r" status --porcelain=v1 --untracked-files=all)" = "$p0" ] \
+[ "$(st "$out")" = failed ] && [[ "$(dt "$out")" == *"did not fire"* ]] && [[ "$(dt "$out")" != *"could not be undone"* ]] \
+  && [ "$(git -C "$r" status --porcelain=v1 --untracked-files=all)" = "$p0" ] \
   && [[ "$p0" == *" M .beads/issues.jsonl"* ]] && [ "$(proof_leftovers "$r")" = 0 ] \
   && ok "proof_reverts_hook_staging" || bad "proof_reverts_hook_staging: $out / $(git -C "$r" status --porcelain)"
+
+# restore_uses_literal_pathspecs: the hook stages `a[1].txt`; restoring it must not glob onto the
+# user's staged change to `a1.txt`.
+echo user > "$r/a1.txt"; git -C "$r" add a1.txt; echo hook > "$r/a[1].txt"
+p0="$(git -C "$r" status --porcelain=v1 --untracked-files=all)"; i0="$(git -C "$r" ls-files -s -- a1.txt)"
+out="$( export SHIM_STAGE='a[1].txt'; P check secret-scan "$r" )"
+[[ "$p0" == *"A  a1.txt"* ]] && [[ "$(dt "$out")" != *"could not be undone"* ]] \
+  && [ "$(git -C "$r" status --porcelain=v1 --untracked-files=all)" = "$p0" ] && [ "$(git -C "$r" ls-files -s -- a1.txt)" = "$i0" ] \
+  && ok "restore_uses_literal_pathspecs" || bad "restore_uses_literal_pathspecs: $out / $(git -C "$r" status --porcelain)"
+git -C "$r" rm -q --cached a1.txt; rm -f "$r/a1.txt" "$r/a[1].txt"
+
+# restore_restaged_user_change: a path with a staged AND a further unstaged change (MM) that the
+# hook re-stages gets the user's staged blob back.
+echo v1 > "$r/j.txt"; git -C "$r" add j.txt; git -C "$r" commit -q -m j --no-verify -- j.txt
+echo v2 > "$r/j.txt"; git -C "$r" add j.txt; echo v3 > "$r/j.txt"
+p0="$(git -C "$r" status --porcelain=v1 --untracked-files=all)"; i0="$(git -C "$r" ls-files -s -- j.txt)"
+out="$( export SHIM_STAGE=j.txt; P check secret-scan "$r" )"
+[[ "$p0" == *"MM j.txt"* ]] && [[ "$(dt "$out")" != *"could not be undone"* ]] \
+  && [ "$(git -C "$r" status --porcelain=v1 --untracked-files=all)" = "$p0" ] && [ "$(git -C "$r" ls-files -s -- j.txt)" = "$i0" ] \
+  && ok "restore_restaged_user_change" || bad "restore_restaged_user_change: $out / $(git -C "$r" status --porcelain)"
+git -C "$r" reset -q -- j.txt; git -C "$r" checkout -q -- j.txt
 
 # proof_failed_when_side_effects_remain: a hook that rewrites a file cannot be undone -> failed,
 # naming the path.
 out="$( export SHIM_TOUCH=README.md; P check secret-scan "$r" )"
-[ "$(st "$out")" = failed ] && [[ "$(dt "$out")" == *README.md* ]] && [ "$(proof_leftovers "$r")" = 0 ] \
+[ "$(st "$out")" = failed ] && [[ "$(dt "$out")" == *"could not be undone"*README.md* ]] && [ "$(proof_leftovers "$r")" = 0 ] \
   && ok "proof_failed_when_side_effects_remain" || bad "proof_failed_when_side_effects_remain: $out"
 
 # resolver_uses_localappdata_fallback: gitleaks only at $LOCALAPPDATA/Microsoft/WinGet/Links (as
@@ -245,15 +370,13 @@ err="$( PATH="$NOGL"; LOCALAPPDATA="$(cygpath -w "$EMPTY_LA")"; export PATH LOCA
   && ok "hook_fails_open_without_gitleaks" || bad "hook_fails_open_without_gitleaks: rc=$rc err=$err"
 
 echo "== real gitleaks =="
-# The real binary, found the way the step finds it (PATH, then the WinGet Links directory).
-REALGL="$(command -v gitleaks 2>/dev/null)"
-[ -z "$REALGL" ] && [ -n "${LOCALAPPDATA:-}" ] && [ -x "$LOCALAPPDATA/Microsoft/WinGet/Links/gitleaks.exe" ] \
-  && REALGL="$LOCALAPPDATA/Microsoft/WinGet/Links/gitleaks.exe"
+# The real binary, found by the step's own resolver (never a re-derived copy of it).
+REALGL="$( . "$SKILL_DIR/lib/common.sh"; . "$SKILL_DIR/lib/secretscan.sh"; _ss_gitleaks )"
 if [ -z "$REALGL" ]; then
-  echo "  SKIP: proof_real (gitleaks not found)"
-  echo "  SKIP: hook_blocks_real_commit (gitleaks not found)"
-  echo "  SKIP: hook_passes_clean_real_commit (gitleaks not found)"
-  echo "  SKIP: no_leaks_in_source_per_gitleaks (gitleaks not found)"
+  for t in proof_real hook_blocks_real_commit hook_names_leak_location hook_passes_clean_real_commit \
+    r41_allowlisting_config_is_failed r43_real_bad_config_blocks no_leaks_in_source_per_gitleaks; do
+    echo "  SKIP: $t (gitleaks not found)"
+  done
 else
   r="$(bd_repo)"
   bash "$RITUAL" fix secret-scan "$r" >/dev/null
@@ -264,13 +387,32 @@ else
   h0="$(git -C "$r" rev-parse HEAD)"
   printf 'aws_access_key_id = %s\n' "$KEY" > "$r/creds.txt"; git -C "$r" add creds.txt
   err="$(git -C "$r" commit -q -m leak 2>&1)"; rc=$?
-  [ "$rc" != 0 ] && [ "$(git -C "$r" rev-parse HEAD)" = "$h0" ] && [[ "$err" == *gitleaks* ]] \
+  [ "$rc" != 0 ] && [ "$(git -C "$r" rev-parse HEAD)" = "$h0" ] && [[ "$err" == *"gitleaks found secrets"* ]] \
     && ok "hook_blocks_real_commit" || bad "hook_blocks_real_commit: rc=$rc $err"
+  # --verbose: the blocked user sees where the leak is; --redact: never the secret itself
+  [[ "$err" == *creds.txt* ]] && [[ "$err" == *aws-access-token* ]] && [[ "$err" != *"$KEY"* ]] \
+    && ok "hook_names_leak_location" || bad "hook_names_leak_location: $err"
   git -C "$r" rm -q --cached creds.txt; rm -f "$r/creds.txt"
   echo ok > "$r/benign.txt"; git -C "$r" add benign.txt
   git -C "$r" commit -q -m benign 2>/dev/null && [ "$(git -C "$r" rev-parse HEAD)" != "$h0" ] \
     && [ "$(nmark "$r/.beads/hooks/pre-commit" '# >>> ritual secret-scan')" = 1 ] \
     && ok "hook_passes_clean_real_commit" || bad "hook_passes_clean_real_commit"
+
+  # R41 with the real tool: a repo config allowlisting the proof file means the scan cannot fire;
+  # check and fix are both failed (never absent/already), naming the cause.
+  printf '[extend]\nuseDefault = true\n\n[allowlist]\npaths = [%s]\n' "'''\.ritual-secret-scan-proof\..*'''" > "$r/.gitleaks.toml"
+  out="$(bash "$RITUAL" check secret-scan "$r")"; out2="$(bash "$RITUAL" fix secret-scan "$r")"
+  [ "$(st "$out")" = failed ] && [[ "$(dt "$out")" == *"did not fire"* ]] && [[ "$(dt "$out")" == *"no leaks found"* ]] \
+    && [ "$(st "$out2")" = failed ] && [ "$(proof_leftovers "$r")" = 0 ] \
+    && ok "r41_allowlisting_config_is_failed" || bad "r41_allowlisting_config_is_failed: $out / $out2"
+
+  # R43 with the real tool: a malformed .gitleaks.toml blocks the commit as "failed to run".
+  printf 'garbage[[[\n' > "$r/.gitleaks.toml"
+  echo ok2 > "$r/benign2.txt"; git -C "$r" add benign2.txt; h1="$(git -C "$r" rev-parse HEAD)"
+  err="$(git -C "$r" commit -q -m benign2 2>&1)"; rc=$?
+  [ "$rc" != 0 ] && [ "$(git -C "$r" rev-parse HEAD)" = "$h1" ] && [[ "$err" == *"failed to run"* ]] \
+    && [[ "$err" != *"found secrets"* ]] && ok "r43_real_bad_config_blocks" || bad "r43_real_bad_config_blocks: rc=$rc $err"
+  rm -f "$r/.gitleaks.toml"
 
   # the source of this skill (lib and tests) must not trip gitleaks itself (it is committed publicly)
   gout="$("$REALGL" dir "$SKILL_DIR" --no-banner --redact 2>&1)"; rc=$?

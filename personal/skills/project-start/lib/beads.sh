@@ -55,9 +55,6 @@ _beads_cfg_get() {
   printf '%s' "$v"
 }
 
-# _beads_join <item...> -> the items joined with "; ".
-_beads_join() { local IFS=$'\x1f' s; s="$*"; printf '%s' "${s//$'\x1f'/; }"; }
-
 # _beads_has_line <file> <line>:the file holds <line> exactly (CRs ignored).
 _beads_has_line() { [ -f "$1" ] && tr -d '\r' < "$1" | grep -qxF -- "$2"; }
 
@@ -65,23 +62,6 @@ _beads_has_marker() { [ -f "$1" ] && grep -q "$_BEADS_MARKER" "$1"; }
 
 # _beads_rules <house-file> -> its non-blank, non-comment lines.
 _beads_rules() { tr -d '\r' < "$1" | grep -v -e '^[[:space:]]*$' -e '^#'; }
-
-# _beads_norm <path> -> one canonical form for comparing paths on Windows: absolute, forward
-# slashes, 8.3 short names expanded (git reports the long form, mktemp the short one), then the
-# unix form. cygpath only expands names that exist, so the longest existing ancestor is expanded
-# and the rest re-appended. Without cygpath the path is returned as given.
-_beads_norm() {
-  local p="$1" rest=""
-  if command -v cygpath >/dev/null 2>&1; then
-    p="$(cygpath -m -a "$p" 2>/dev/null || printf '%s' "$p")"
-    while [ ! -e "$p" ] && [ "$p" != "$(dirname "$p")" ]; do
-      rest="/$(basename "$p")$rest"; p="$(dirname "$p")"
-    done
-    p="$(cygpath -m -l -a "$p" 2>/dev/null || printf '%s' "$p")"
-    p="$(cygpath -u "${p%/}$rest" 2>/dev/null || printf '%s' "${p%/}$rest")"
-  fi
-  printf '%s' "${p%/}"
-}
 
 # _beads_hooks_state <top> -> ok | unset | other. ok when core.hooksPath, relative (to the work
 # tree) or absolute in any form, resolves to <top>/.beads/hooks. bd 1.2.2 writes an absolute
@@ -92,7 +72,7 @@ _beads_hooks_state() {
   [ -n "$hp" ] || { echo unset; return; }
   case "$hp" in /*|[A-Za-z]:*|\\*) abs="$hp" ;; *) abs="$top/$hp" ;; esac
   want="$top/.beads/hooks"
-  if [ "$(_beads_norm "$abs")" = "$(_beads_norm "$want")" ]; then echo ok
+  if [ "$(path_norm "$abs")" = "$(path_norm "$want")" ]; then echo ok
   elif [ -e "$want" ] && [ "$abs" -ef "$want" ]; then echo ok
   else echo other; fi
 }
@@ -131,7 +111,7 @@ check_beads() {
   if [ -z "$miss" ]; then emit beads present "house beads setup holds"
   else
     local -a ms; mapfile -t ms <<<"$miss"
-    emit beads absent "$(_beads_join "${ms[@]}")"
+    emit beads absent "$(join_by '; ' "${ms[@]}")"
   fi
 }
 
@@ -390,7 +370,7 @@ fix_beads() {
     fi
   fi
   if [ "${#fails[@]}" -gt 0 ]; then
-    emit beads failed "$(_beads_join "${fails[@]}" "${notes[@]}")"
+    emit beads failed "$(join_by '; ' "${fails[@]}" "${notes[@]}")"
     return 0
   fi
 
@@ -450,21 +430,21 @@ fix_beads() {
   local -a w=()
   end="$(preflight "$top")" || die "preflight failed in $top"
   if ! wrote="$(_beads_changed "$mid" "$end")"; then
-    emit beads failed "could not work out which paths the house steps changed (the comparison failed), so none can be listed; $(_beads_join "${late[@]}" "${notes[@]}")"
+    emit beads failed "could not work out which paths the house steps changed (the comparison failed), so none can be listed; $(join_by '; ' "${late[@]}" "${notes[@]}")"
     return 0
   fi
   mapfile -t w < <(jq -r '.[]' <<<"$wrote" | tr -d '\r')   # jq.exe ends lines with CRLF
   [ -n "$head0" ] && notes+=("bd commits: $(git -C "$top" rev-list --count "$head0..$head1" 2>/dev/null)")
   head2="$(git -C "$top" rev-parse -q --verify HEAD 2>/dev/null)"
   if [ "$head2" != "$head1" ]; then
-    emit beads failed "a commit was made during the house steps (HEAD $head1 -> $head2); check it did not take staged changes; $(_beads_join "${late[@]}" "${notes[@]}")" "${w[@]}"
+    emit beads failed "a commit was made during the house steps (HEAD $head1 -> $head2); check it did not take staged changes; $(join_by '; ' "${late[@]}" "${notes[@]}")" "${w[@]}"
     return 0
   fi
   fin="$(check_beads "$top")"
   [ "$(jq -r .status <<<"$fin")" = present ] || late+=("after setup: $(jq -r .detail <<<"$fin")")
   if [ "${#late[@]}" -eq 0 ]; then
-    emit beads fixed "$(_beads_join "${notes[@]}")" "${w[@]}"
+    emit beads fixed "$(join_by '; ' "${notes[@]}")" "${w[@]}"
   else
-    emit beads failed "$(_beads_join "${late[@]}" "${notes[@]}")" "${w[@]}"
+    emit beads failed "$(join_by '; ' "${late[@]}" "${notes[@]}")" "${w[@]}"
   fi
 }

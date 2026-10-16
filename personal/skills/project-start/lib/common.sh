@@ -36,6 +36,26 @@ require_repo() {
   local g; g="$(git_common_dir "$1" 2>/dev/null)" && [ -n "$g" ] || die "not a git repository: $1"
 }
 
+# join_by <sep> <item...> -> the items joined with <sep> (nothing for no items).
+join_by() { local sep="$1" IFS=$'\x1f' s; shift; s="$*"; printf '%s' "${s//$'\x1f'/"$sep"}"; }
+
+# path_norm <path> -> one canonical form for comparing paths on Windows: absolute, forward
+# slashes, 8.3 short names expanded (git reports the long form, mktemp the short one), then the
+# unix form. cygpath only expands names that exist, so the longest existing ancestor is expanded
+# and the rest re-appended. Without cygpath the path is returned as given.
+path_norm() {
+  local p="$1" rest=""
+  if command -v cygpath >/dev/null 2>&1; then
+    p="$(cygpath -m -a "$p" 2>/dev/null || printf '%s' "$p")"
+    while [ ! -e "$p" ] && [ "$p" != "$(dirname "$p")" ]; do
+      rest="/$(basename "$p")$rest"; p="$(dirname "$p")"
+    done
+    p="$(cygpath -m -l -a "$p" 2>/dev/null || printf '%s' "$p")"
+    p="$(cygpath -u "${p%/}$rest" 2>/dev/null || printf '%s' "${p%/}$rest")"
+  fi
+  printf '%s' "${p%/}"
+}
+
 # eol_of <file> -> crlf|lf. crlf iff the first line ends in CR; empty/missing -> lf.
 eol_of() {
   # byte-level on purpose: under Git Bash, grep does not see the CR in $'\r$'
