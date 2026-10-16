@@ -454,6 +454,11 @@ r="$(mkrepo "Wrote Fails")"; logclear
 out="$(STUB_JQ_FAIL_ON=changed RJ fix beads "$r")"
 [ "$(st "$out")" = failed ] && dt "$out" | grep -q 'changed' && grep -q '^init ' "$LOG" \
   && ok "fix_wrote_jq_failure_fails_the_step" || bad "wrote jq failure: $out"
+# the same call answering garbage with exit 0: _beads_snaps' own validator must refuse it, or the
+# step reports fixed with an empty `wrote` (jq -r '.[]' over garbage yields nothing)
+r="$(mkrepo "Wrote Garbage")"; logclear
+out="$(STUB_JQ_GARBAGE_ON=changed RJ fix beads "$r")"
+[ "$(st "$out")" = failed ] && dt "$out" | grep -q 'changed' && grep -q '^init ' "$LOG"   && ok "fix_wrote_unparseable_compare_fails_the_step" || bad "wrote jq garbage: $out"
 
 # --- a previous run's stash still held: refuse before running anything
 r="$(mkrepo "Held Stash")"; echo held >> "$r/README.md"; git -C "$r" stash push -q -m ritual-beads
@@ -461,8 +466,16 @@ hsha="$(git -C "$r" rev-parse refs/stash)"; logclear
 out="$(R fix beads "$r" --stash)"
 [ "$(st "$out")" = failed ] && dt "$out" | grep -q 'stash@{0}' && dt "$out" | grep -q "$hsha" \
   && dt "$out" | grep -qF "core.autocrlf=false -c core.eol=lf -c core.safecrlf=false -c core.attributesFile=/dev/null --attr-source=" \
-  && dt "$out" | grep -qF "stash apply --index $hsha\`" && dt "$out" | grep -qF 'git stash drop stash@{0}' && [ "$(logn)" = 0 ] \
+  && dt "$out" | grep -qF "stash apply --index $hsha\`" && dt "$out" | grep -qF 'git stash drop "stash@{0}"' && [ "$(logn)" = 0 ] \
   && [ "$(git -C "$r" stash list | grep -c '')" = 1 ] && ok "fix_refuses_while_ritual_stash_held (prints the raw-mode apply)" || bad "held stash: $out; log=$(cat "$LOG")"
+
+# a user's own stash (no -m) made while HEAD's subject mentions ritual-beads is "WIP on <branch>: <sha>
+# <subject>", not the ritual's "On <branch>: ritual-beads": it must not be refused as the ritual's
+r="$(mkrepo "User Stash")"; echo mine >> "$r/README.md"; git -C "$r" add README.md; git -C "$r" commit -q -m 'notes about ritual-beads'
+echo more >> "$r/README.md"; git -C "$r" stash push -q; logclear
+git -C "$r" stash list | grep -q '^stash@{0}: WIP on .*ritual-beads' || bad "user stash fixture: $(git -C "$r" stash list)"
+out="$(R fix beads "$r")"
+[ "$(st "$out")" = fixed ] && ! dt "$out" | grep -q 'still held' && grep -q '^init ' "$LOG"   && [ "$(git -C "$r" stash list | grep -c '')" = 1 ] && ok "fix_ignores_users_own_wip_stash_naming_ritual_beads" || bad "user wip stash: $out"
 
 # the printed recovery command, run literally, gives back the exact bytes under core.autocrlf=true,
 # where a plain `git stash apply --index` does not (control, on a copy of the same repo)

@@ -186,7 +186,7 @@ _BEADS_ENT='def ent($s; $p): ($s.dirty | map(select(.path == $p)) | .[0]) as $d
 # Windows program, so a command line past ~32 KB (about 95 dirty files per snapshot) fails with
 # "Argument list too long" and prints nothing. Status 1 and no output unless jq exits 0 AND answers
 # exactly one JSON array; callers treat that as "could not compare", never as "identical".
-# <label> names the call in jq's error message.
+# <label> names the call; the test shim matches it to fail one call and not the others.
 _beads_snaps() {
   local why="$1" f="$2" out; shift 2
   out="$(printf '%s\n' "$@" | jq -sc --arg why "$why" --argjson n "$#" "$_BEADS_ENT"'
@@ -279,13 +279,14 @@ fix_beads() {
   command -v bd >/dev/null 2>&1 || { emit beads unknown "bd not on PATH"; return 0; }
   local top; top="$(git -C "$repo" rev-parse --show-toplevel)" || die "cannot resolve repo root: $repo"
   # An interrupted earlier run can leave the user's work only in its stash; nothing may run on top
-  # of that. Matched on the stash subject ("On <branch>: <message>"; a branch name holds no ':').
+  # of that. Matched on the stash message alone ("On <branch>: <message>"; a branch name holds no
+  # ':'), so a user's own "WIP on <branch>: <sha> <subject>" stash is never mistaken for it.
   local held
   held="$(git -C "$top" stash list --format='%gd %H %gs' 2>/dev/null | awk '{ s = $0; sub(/^[^ ]+ [^ ]+ /, "", s); sub(/^[^:]*: /, "", s) }
-    index(s, "ritual-beads") { printf "%s%s (%s)", sep, $1, $2; sep = ", " }')"
+    s == "ritual-beads" { printf "%s%s (%s)", sep, $1, $2; sep = ", " }')"
   if [ -n "$held" ]; then
     local href="${held%% *}" hsha="${held%%)*}"; hsha="${hsha##*(}"
-    emit beads failed "a previous run's stash is still held: $held; apply it in raw mode, exactly as the ritual does, with \`$(_beads_raw_apply_cmd "$top" "$hsha")\` (a plain \`git stash apply\` can change line endings), then \`git stash drop $href\` (nothing was run)"
+    emit beads failed "a previous run's stash is still held: $held; apply it in raw mode, exactly as the ritual does, with \`$(_beads_raw_apply_cmd "$top" "$hsha")\` (a plain \`git stash apply\` can change line endings), then \`git stash drop \"$href\"\` (the double quotes keep the braces intact in Git Bash, PowerShell and cmd; nothing was run)"
     return 0
   fi
   if [ "$(check_beads "$top" | jq -r .status)" = present ]; then
