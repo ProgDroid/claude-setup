@@ -102,22 +102,40 @@ _ss_tail() {
   printf '%s' "${t:0:300}"
 }
 
-# _ss_sweep <top> -> a note (empty when there was nothing to do). Removes proof files an interrupted
-# run left behind: staged ones are unstaged, files on disk deleted. Only the proof's own name
-# pattern, only at the top of the work tree.
-_ss_sweep() {
-  local top="$1" f n=0
-  local -A seen=()
-  while IFS= read -r -d '' f; do seen["$f"]=1; done \
+# _ss_proof_files <top> -> one "staged<TAB>name" or "disk<TAB>name" line per proof file present:
+# the proof's own name pattern only, at the top of the work tree only. The sweep and the
+# interrupt report both read this, so they agree on what a leftover is.
+_ss_proof_files() {
+  local top="$1" f
+  while IFS= read -r -d '' f; do printf 'staged\t%s\n' "$f"; done \
     < <(git -C "$top" ls-files -z --cached -- ":(glob)$_SS_PROOF_PREFIX*" 2>/dev/null)
   for f in "$top/$_SS_PROOF_PREFIX"*; do
-    { [ -e "$f" ] || [ -L "$f" ]; } && seen["${f##*/}"]=1
+    { [ -e "$f" ] || [ -L "$f" ]; } && printf 'disk\t%s\n' "${f##*/}"
   done
+  return 0
+}
+
+# _ss_sweep <top> -> a note (empty when there was nothing to do). Removes proof files an interrupted
+# run left behind: staged ones are unstaged, files on disk deleted.
+_ss_sweep() {
+  local top="$1" f kind n=0
+  local -A seen=()
+  while IFS=$'\t' read -r kind f; do [ -n "$f" ] && seen["$f"]=1; done < <(_ss_proof_files "$top")
   for f in "${!seen[@]}"; do
     git --literal-pathspecs -C "$top" rm -q --cached --ignore-unmatch -- "$f" >/dev/null 2>&1
     rm -f "$top/$f"; n=$((n + 1))
   done
   [ "$n" -eq 0 ] || printf 'removed %d leftover proof file(s) from an interrupted run; ' "$n"
+}
+
+# _ss_interrupt_detail <sig> <top> <proof result json, may be empty> <where> -> the detail of an
+# interrupted run. Whether the proof file is gone is CHECKED here, never assumed.
+_ss_interrupt_detail() {
+  local sig="$1" top="$2" res="$3" where="$4" left r
+  left="$(_ss_proof_files "$top" | awk -F '\t' '{ printf "%s%s (%s)", (NR > 1 ? ", " : ""), $2, ($1 == "disk" ? "on disk" : "staged") }')"
+  if [ -z "$left" ]; then left="the proof file was removed"; else left="proof file still present: $left"; fi
+  r="$(jq -r 'select(type == "object" and has("status")) | "\(.status): \(.detail)"' <<<"$res" 2>/dev/null | tr -d '\r')"
+  printf 'interrupted by SIG%s %s; %s; proof result: %s' "$sig" "$where" "$left" "${r:-none}"
 }
 
 # check secret-scan <repo>: present = PROVED: with a fake AWS-style key staged in the real repo,
@@ -153,7 +171,7 @@ check_secret_scan() {
   trap - INT TERM HUP
   sig="$_SS_SIG"
   if [ -n "$sig" ]; then
-    emit secret-scan failed "interrupted by SIG$sig during the proof; the proof file was removed; proof result: $(jq -r '"\(.status): \(.detail)"' <<<"$res" 2>/dev/null | tr -d '\r' || echo none)"
+    emit secret-scan failed "$(_ss_interrupt_detail "$sig" "$top" "$res" "during the proof")"
     case "$sig" in INT) exit 130 ;; HUP) exit 129 ;; *) exit 143 ;; esac
   fi
   [ "$rc" -eq 0 ] && [ -n "$res" ] || { emit secret-scan failed "${swept}the proof ended without a result (exit $rc); check git status"; return 0; }
@@ -234,19 +252,26 @@ _ss_restore_index() {
 # whose dirty status, bytes or index entry differ between two preflight snapshots.
 #   unstaged: only those with nothing staged before (clean, worktree-only change, or untracked);
 #             for them the index before equals HEAD, so `git reset -- <path>` restores it exactly.
-#   staged: the others, as "<path>\x1f<index blob before>".
-#   all-with-index: every path, staged ones followed by " (index was <blob>)" so the user's staged
-#             version can be recovered by hand.
+#   staged: the others, as "<path>\x1f<index blob before>", EXCEPT paths that were unmerged
+#             (DD AU UD UA DU AA UU): preflight records only stage 0, so their "ABSENT" means
+#             "conflicted", and writing it back would turn a conflict into a staged deletion.
+#             They are never written; the ritual reports them and the user decides.
+#   all-with-index: every path; staged ones followed by " (index was <blob>)" so the user's staged
+#             version can be recovered by hand, unmerged ones with the command that restores the
+#             conflict (`git update-index --unresolve`, measured to bring back all 3 stages).
 _ss_changed() {
   jq -rn --slurpfile b "$1" --slurpfile a "$2" --arg mode "${3:-}" '
     $b[0] as $b | $a[0] as $a
     | def xy($x; $p): $x.dirty | map(select(.path == $p)) | .[0].xy;
       def st($x; $p): [xy($x; $p), $x.bytes[$p], $x.index[$p]];
+      def unmerged($p): (xy($b; $p) // "  ") | IN("DD", "AU", "UD", "UA", "DU", "AA", "UU");
       def unstaged($p): (xy($b; $p) // "  ") | .[0:1] | IN(" ", "?");
     ([$b.dirty[].path] + [$a.dirty[].path] | unique)[] | select(st($b; .) != st($a; .))
     | if $mode == "unstaged" then select(unstaged(.))
-      elif $mode == "staged" then select(unstaged(.) | not) | "\(.)\u001f\($b.index[.] // "ABSENT")"
-      elif $mode == "all-with-index" then (if unstaged(.) then . else "\(.) (index was \($b.index[.] // "ABSENT"))" end)
+      elif $mode == "staged" then select((unstaged(.) or unmerged(.)) | not) | "\(.)\u001f\($b.index[.] // "ABSENT")"
+      elif $mode == "all-with-index" then
+        (if unmerged(.) then "\"\(.)\" was unmerged before the proof; the hook changed it; restore the conflict with `git update-index --unresolve -- \"\(.)\"`"
+         elif unstaged(.) then . else "\(.) (index was \($b.index[.] // "ABSENT"))" end)
       else . end' | tr -d '\r'
 }
 
@@ -271,18 +296,17 @@ fix_secret_scan() {
     trap '_SS_SIG=INT' INT; trap '_SS_SIG=TERM' TERM; trap '_SS_SIG=HUP' HUP
     res="$(check_secret_scan "$repo")"; rc=$?
     trap - INT TERM HUP
-    if [ "$rc" -ge 128 ]; then   # check itself was interrupted and has reported it
-      if [ -n "$res" ]; then printf '%s\n' "$res"
-      else emit secret-scan failed "interrupted while proving the existing block"; fi
-      exit "$rc"
-    elif [ -n "$_SS_SIG" ]; then
-      emit secret-scan failed "interrupted by SIG$_SS_SIG while proving the existing block; proof result: $(jq -r '"\(.status): \(.detail)"' <<<"$res" 2>/dev/null | tr -d '\r')"
-      case "$_SS_SIG" in INT) exit 130 ;; HUP) exit 129 ;; *) exit 143 ;; esac
+    # check, interrupted itself, exits 128+n (its JSON then becomes the proof result here)
+    if [ "$rc" -ge 128 ] || [ -n "$_SS_SIG" ]; then
+      local sig="$_SS_SIG"
+      [ -n "$sig" ] || case "$rc" in 130) sig=INT ;; 129) sig=HUP ;; *) sig=TERM ;; esac
+      emit secret-scan failed "${swept}$(_ss_interrupt_detail "$sig" "$top" "$res" "while proving the existing block")"
+      case "$sig" in INT) exit 130 ;; HUP) exit 129 ;; *) exit 143 ;; esac
     fi
     st="$(jq -r .status <<<"$res" 2>/dev/null | tr -d '\r')"; dt="$(jq -r .detail <<<"$res" 2>/dev/null | tr -d '\r')"
     case "$st" in
       present) emit secret-scan already "${swept}ritual block already in $hook; $dt" ;;
-      unknown) emit secret-scan unknown "${swept}not proved: $dt" ;;
+      unknown) emit secret-scan unknown "not proved: $dt${swept:+; ${swept%; }}" ;;   # always starts "not proved:"
       *)       emit secret-scan failed "${swept}ritual block already in $hook, but ${dt:-the proof gave no result}" ;;
     esac
     return 0

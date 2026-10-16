@@ -312,6 +312,83 @@ done
 [ "$(proof_leftovers "$r")" = 0 ] && [ "$(git -C "$r" status --porcelain=v1 --untracked-files=all)" = "$p0" ] \
   && ok "term_leaves_no_key" || bad "term_leaves_no_key: $(git -C "$r" status --porcelain)"
 
+# fix_term_waits_for_cleanup: the same, sent to `fix` while it proves the block that is already there.
+p0="$(git -C "$r" status --porcelain=v1 --untracked-files=all)"; rm -f "$mark"
+set -m
+( stub_path "$SLOW"; export SLOW_MARK="$mark"; exec bash "$RITUAL" fix secret-scan "$r" > "$TMPROOT/fterm.out" 2>/dev/null ) &
+pid=$!
+set +m
+for i in $(seq 1 150); do [ -e "$mark" ] && break; sleep 0.2; done
+mid="$(git -C "$r" ls-files -- '.ritual-secret-scan-proof.*' | wc -l | tr -d ' ')"
+kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid"
+wait "$pid"; trc=$?
+fo="$(cat "$TMPROOT/fterm.out")"
+now_left="$(proof_leftovers "$r")"; now_idx="$(git -C "$r" ls-files -- '.ritual-secret-scan-proof.*' | wc -l | tr -d ' ')"
+[ -e "$mark" ] && [ "$mid" = 1 ] && [ "$trc" != 0 ] && [ "$now_left" = 0 ] && [ "$now_idx" = 0 ] \
+  && [ "$(git -C "$r" status --porcelain=v1 --untracked-files=all)" = "$p0" ] && [ "$(st "$fo")" = failed ] \
+  && [[ "$(dt "$fo")" == *"interrupted by SIGTERM while proving the existing block"* ]] \
+  && [[ "$(dt "$fo")" == *"the proof file was removed"* ]] \
+  && ok "fix_term_waits_for_cleanup" || bad "fix_term_waits_for_cleanup: mid=$mid rc=$trc left=$now_left idx=$now_idx out=$fo"
+
+# interrupt_detail_*: unit calls on the helper that words an interrupted run. Whether a proof
+# file remains is checked, never assumed; an empty or unparsable proof result reads "none".
+idet() { ( . "$SKILL_DIR/lib/common.sh"; . "$SKILL_DIR/lib/workspace.sh"; . "$SKILL_DIR/lib/secretscan.sh"; _ss_interrupt_detail "$@" ); }
+d1="$(idet TERM "$r" "" "during the proof")"; d2="$(idet INT "$r" "not json" "during the proof")"
+d3="$(idet HUP "$r" '{"id":"secret-scan","status":"present","detail":"proved"}' "while proving the existing block")"
+[ "$d1" = "interrupted by SIGTERM during the proof; the proof file was removed; proof result: none" ] \
+  && [ "$d2" = "interrupted by SIGINT during the proof; the proof file was removed; proof result: none" ] \
+  && [ "$d3" = "interrupted by SIGHUP while proving the existing block; the proof file was removed; proof result: present: proved" ] \
+  && ok "interrupt_detail_result_none_when_empty_or_unparsable" || bad "interrupt_detail: [$d1] [$d2] [$d3]"
+lo=".ritual-secret-scan-proof.LEFT02"
+printf 'x\n' > "$r/$lo"; git -C "$r" add -f "$lo"; printf 'y\n' > "$r/.ritual-secret-scan-proof.LEFT03"
+d4="$(idet TERM "$r" "" "during the proof")"
+[[ "$d4" == *"proof file still present: "* ]] && [[ "$d4" == *"$lo (staged)"* ]] && [[ "$d4" == *"$lo (on disk)"* ]] \
+  && [[ "$d4" == *".ritual-secret-scan-proof.LEFT03 (on disk)"* ]] && [[ "$d4" != *"was removed"* ]] \
+  && ok "interrupt_detail_names_what_remains" || bad "interrupt_detail_names_what_remains: $d4"
+
+# r45_detail_starts_not_proved: with a leftover swept by the same run, the unknown detail still
+# starts "not proved:" and carries the sweep note after the cause.
+out="$(N fix secret-scan "$r")"; d="$(dt "$out")"
+[ "$(st "$out")" = unknown ] && [[ "$d" == "not proved: "* ]] && [[ "$d" == *"; removed 2 leftover proof file(s) from an interrupted run" ]] \
+  && [ "$(proof_leftovers "$r")" = 0 ] && [ -z "$(git -C "$r" ls-files -- "$lo")" ] \
+  && ok "r45_detail_starts_not_proved" || bad "r45_detail_starts_not_proved: $out"
+
+# restore_absent_branch_staged_deletion: the user's `git rm --cached del.txt`, re-added by the hook,
+# is put back as a staged deletion; the step fails only for the R41 cause (the proof did not fire).
+r="$(bd_repo)"; D fix secret-scan "$r" >/dev/null
+echo d > "$r/del.txt"; git -C "$r" add del.txt; git -C "$r" commit -q --no-verify -m del -- del.txt
+git -C "$r" rm -q --cached del.txt
+p0="$(git -C "$r" status --porcelain=v1 --untracked-files=all)"
+out="$( export SHIM_STAGE=del.txt; P check secret-scan "$r" )"
+[[ "$p0" == *"D  del.txt"* ]] && [ "$(st "$out")" = failed ] && [[ "$(dt "$out")" == *"did not fire"* ]] \
+  && [[ "$(dt "$out")" != *"could not be undone"* ]] && [ -z "$(git -C "$r" ls-files -s -- del.txt)" ] \
+  && [ "$(git -C "$r" status --porcelain=v1 --untracked-files=all)" = "$p0" ] \
+  && ok "restore_absent_branch_staged_deletion" || bad "restore_absent_branch_staged_deletion: $out / $(git -C "$r" status --porcelain)"
+
+# restore_skips_unmerged_path (R46): mid-merge, f.txt is UU with 3 stages; the hook (past a proof
+# that does not fire) runs `git add -- f.txt`, which resolves it. The ritual must not write that
+# path back (its recorded "ABSENT" means conflicted, not untracked): failed, naming the path and
+# the --unresolve remedy. The index stays exactly as the hook left it (stage 0 = the work tree).
+r="$(mkrepo merge)"
+echo base > "$r/f.txt"; git -C "$r" add f.txt; git -C "$r" commit -q -m base
+git -C "$r" checkout -q -b other; echo theirs > "$r/f.txt"; git -C "$r" commit -q -am theirs
+git -C "$r" checkout -q main; echo ours > "$r/f.txt"; git -C "$r" commit -q -am ours
+git -C "$r" merge -q other >/dev/null 2>&1
+h="$r/.git/hooks/pre-commit"; printf '%s\n' '#!/usr/bin/env sh' 'git --literal-pathspecs add -- f.txt' > "$h"
+D fix secret-scan "$r" >/dev/null
+u0="$(git -C "$r" ls-files -u -- f.txt | wc -l | tr -d ' ')"; x0="$(git -C "$r" status --porcelain=v1 -- f.txt)"
+out="$(P check secret-scan "$r")"; d="$(dt "$out")"
+want_blob="$(git -C "$r" hash-object -- f.txt)"
+[ "$u0" = 3 ] && [ "$x0" = "UU f.txt" ] && [ "$(st "$out")" = failed ] && [[ "$d" == *'"f.txt" was unmerged before the proof'* ]] \
+  && [[ "$d" == *'git update-index --unresolve -- "f.txt"'* ]] && [[ "$d" != *"index was ABSENT"* ]] \
+  && [ -z "$(git -C "$r" ls-files -u -- f.txt)" ] && [ "$(git -C "$r" ls-files -s -- f.txt)" = "100644 $want_blob 0	f.txt" ] \
+  && [ "$(proof_leftovers "$r")" = 0 ] \
+  && ok "restore_skips_unmerged_path" || bad "restore_skips_unmerged_path: u0=$u0 x0=$x0 $out / $(git -C "$r" ls-files -s -- f.txt)"
+# the remedy the detail names really brings the conflict back (all 3 stages)
+git -C "$r" update-index --unresolve -- f.txt
+[ "$(git -C "$r" ls-files -u -- f.txt | wc -l | tr -d ' ')" = 3 ] && [ "$(git -C "$r" status --porcelain=v1 -- f.txt)" = "UU f.txt" ] \
+  && ok "unmerged_remedy_restores_conflict" || bad "unmerged_remedy_restores_conflict: $(git -C "$r" ls-files -u -- f.txt)"
+
 # proof_cleans_up: a dirty tree (staged, unstaged, untracked) is exactly as it was after the proof.
 r="$(bd_repo)"; D fix secret-scan "$r" >/dev/null; git -C "$r" add .beads; git -C "$r" commit -q -m scan
 echo more >> "$r/README.md"; echo s > "$r/staged.txt"; git -C "$r" add staged.txt; echo u > "$r/untracked.txt"
