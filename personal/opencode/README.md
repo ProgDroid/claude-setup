@@ -116,6 +116,9 @@ Re-check these when deciding. Any one of 1-3 makes a move worth re-evaluating, a
 ## Known gaps
 
 - **Plugin language servers are not translated.** `lspServers` (in `plugin.json` or inline in the marketplace entry, as `gopls-lsp` and `typescript-lsp` do) is reported once (like every parity item); OC has its own LSP configuration. Inline `mcpServers` in a marketplace entry (as `qmd` does) *is* enumerated, when the plugin has no `plugin.json`, as CC does.
+- **A command's `allowed-tools` is not carried.** In CC it pre-approves those tools while the
+  command runs; OC has no per-command grant, so they prompt per the session's permissions instead.
+  Stricter only, so it is documented here rather than reported in the parity line.
 - **No PowerShell tool** on the OC side, so CC hooks and rules that target it have no counterpart.
 - **OC auto mode has no classifier.** CC's auto-mode behaviour is not reproduced.
 - **A hook `ask` blocks.** OC cannot prompt from a hook, so an `ask` decision denies.

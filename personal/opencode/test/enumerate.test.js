@@ -155,9 +155,11 @@ describe("HANDLED and IGNORED invariants", () => {
       expect(HANDLED.hookFields).toContain(f);
     }
   });
-  test("those hook fields are never in ignored.json", () => {
+  test("those hook fields are never in ignored.json; ignored hook fields are ones CC does not read", () => {
     const all = JSON.stringify(IGNORED);
-    expect(Object.keys(IGNORED).includes("hookFields")).toBe(false);
+    // IGNORED.hookFields holds only fields CC itself has no reader for (verified against the
+    // CC binary); releasenotes keeps them novel so a CC release that adds one still alarms.
+    expect(Object.keys(IGNORED.hookFields)).toEqual(["commandWindows"]);
     for (const f of ["if", "asyncRewake", "rewakeMessage", "rewakeSummary", "onFailure", "statusMessage"]) {
       for (const cat of Object.keys(IGNORED)) expect(Object.hasOwn(IGNORED[cat], f)).toBe(false);
     }

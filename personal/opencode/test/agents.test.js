@@ -218,12 +218,12 @@ test("a nested command commands/git/cm.md -> git:cm (row 2: colon accepted); $AR
   h = makeHome({ ".claude/commands/git/cm.md": `---\ndescription: Commit\nallowed-tools: Bash(git add:*), Bash(git commit:*)\nmodel: sonnet\n---\n${body}` });
   const r = collectAgents({ home: h.home, projectDir: h.projectDir });
   expect(r.command["git:cm"]).toEqual({ description: "Commit", template: body, model: "anthropic/claude-sonnet-5-5" });
-  expect(r.unknown).toEqual([
-    { where: path.join(h.home, ".claude", "commands", "git", "cm.md"), key: "command:git:cm", note: "allowed-tools has no OC command equivalent" },
-  ]);
+  // allowed-tools only pre-approves tools in CC; OC has no per-command grant, so it prompts per its
+  // permission config instead: stricter, never looser, and documented rather than reported.
+  expect(r.unknown).toEqual([]);
 });
 
-test("allowed-tools written as a YAML list is also reported; a command without frontmatter is all template", () => {
+test("allowed-tools written as a YAML list is not reported either; a command without frontmatter is all template", () => {
   h = makeHome({
     ".claude/commands/a.md": "---\nallowed-tools:\n  - Read\n  - Edit\n---\nX",
     ".claude/commands/b.md": "no frontmatter $ARGUMENTS",
@@ -231,7 +231,7 @@ test("allowed-tools written as a YAML list is also reported; a command without f
   const r = collectAgents({ home: h.home, projectDir: h.projectDir });
   expect(r.command.a.template).toBe("X");
   expect(r.command.b).toEqual({ template: "no frontmatter $ARGUMENTS" });
-  expect(r.unknown.map((u) => u.key)).toEqual(["command:a"]);
+  expect(r.unknown).toEqual([]);
 });
 
 test("unparseable frontmatter is reported as unknown and the item is still added", () => {

@@ -23,7 +23,12 @@ export function knownSet() {
   const known = new Set();
   for (const v of Object.values(HANDLED)) if (Array.isArray(v)) v.forEach((k) => known.add(k));
   for (const table of [IGNORED, NOT_TRANSLATED]) {
-    for (const cat of Object.values(table)) if (cat && typeof cat === "object") Object.keys(cat).forEach((k) => known.add(k));
+    for (const [name, cat] of Object.entries(table)) {
+      // An ignored hook field is one CC does not read TODAY; a release that starts reading it is
+      // exactly what this detector exists to catch, so it stays novel.
+      if (table === IGNORED && name === "hookFields") continue;
+      if (cat && typeof cat === "object") Object.keys(cat).forEach((k) => known.add(k));
+    }
   }
   HANDLED.hookEvents.forEach((e) => known.add(e));
   // CC tool names (Bash, Edit, ...): nearly every hook line names one, and the tool map owns them.

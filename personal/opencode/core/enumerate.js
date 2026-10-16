@@ -93,7 +93,8 @@ export function enumerate({ sources = [], plugins = [], claudeJson, ocTools = []
         for (const h of Array.isArray(g.hooks) ? g.hooks : []) {
           if (!isObj(h)) continue;
           for (const k of Object.keys(h)) {
-            if (!HANDLED.hookFields.includes(k)) report(where, `hooks.field.${k}`, "unknown hook field");
+            if (HANDLED.hookFields.includes(k) || Object.hasOwn(IGNORED.hookFields, k)) continue;
+            report(where, `hooks.field.${k}`, "unknown hook field");
           }
           if (h.type !== undefined && !HANDLED.hookTypes.includes(h.type)) {
             report(where, `hooks.type=${String(h.type).slice(0, 40)}`, "unknown hook handler type");

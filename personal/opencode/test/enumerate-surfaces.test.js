@@ -35,6 +35,12 @@ describe("plugin hooks/hooks.json is inside the alarm (C1)", () => {
     expect(keys(r)).toEqual(["hooks.event.NewEvent", "hooks.field.brandNew", "hooks.group.weird", "hooks.type=prompt"]);
     expect(r.every((u) => u.where === "plugin:p")).toBe(true);
   });
+  test("commandWindows is silent: CC has no reader for it on hooks and runs `command` on Windows", () => {
+    const p = plug("p", { "hooks/hooks.json": hookFile({ type: "command", command: "x", commandWindows: "& x.exe" }) });
+    expect(enumerate({ plugins: [p] })).toEqual([]);
+    const s = { scope: "user", path: "S", data: { hooks: { Stop: [{ hooks: [{ type: "command", command: "x", commandWindows: "y" }] }] } } };
+    expect(enumerate({ sources: [s] })).toEqual([]);
+  });
   test("an unknown hooks.json top-level key is reported; description is silent", () => {
     const r = enumerate({ plugins: [plug("p", { "hooks/hooks.json": hookFile(okHandler, { newTop: 1 }) })] });
     expect(keys(r)).toEqual(["hooks.json:newTop"]);
@@ -131,6 +137,12 @@ describe("per-plugin entries (R17, R18)", () => {
     const other = plug("not-superpowers", { ".opencode/x": "1", "index.js": "1" });
     const r = enumerate({ plugins: [sp, other] });
     expect(r.map((u) => `${u.where}|${u.key}`).sort()).toEqual(["plugin:not-superpowers|.opencode", "plugin:not-superpowers|index.js"]);
+  });
+  test("personal's own opencode/ (this adapter) and semgrep's .codex-plugin are silent; another plugin's are reported", () => {
+    const mine = [plug("personal", { "opencode/adapter.js": "1" }), plug("semgrep", { ".codex-plugin/plugin.json": "{}" })];
+    const other = plug("not-personal", { "opencode/adapter.js": "1", ".codex-plugin/plugin.json": "{}" });
+    const r = enumerate({ plugins: [...mine, other] });
+    expect(r.map((u) => `${u.where}|${u.key}`).sort()).toEqual(["plugin:not-personal|.codex-plugin", "plugin:not-personal|opencode"]);
   });
   test("global repo-metadata names stay global", () => {
     expect(enumerate({ plugins: [plug("z", { "README.md": "1", LICENSE: "1", ".github/x": "1", docs: {} })] })).toEqual([]);

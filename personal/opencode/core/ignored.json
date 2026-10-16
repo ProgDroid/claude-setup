@@ -188,8 +188,10 @@
     "claude-md-management:claude-md-improver-example.png": "documentation or repository metadata inside a plugin; not a load surface",
     "claude-md-management:revise-claude-md-example.png": "documentation or repository metadata inside a plugin; not a load surface",
     "explanatory-output-style:hooks-handlers": "plugin payload (scripts, templates, data) reached through CLAUDE_PLUGIN_ROOT by its hooks or commands; not itself a load surface",
+    "personal:opencode": "this adapter itself; loaded by the user's OC config loader, not a CC load surface",
     "qmd:qmd": "qmd skill directories (spec 5.3); loaded through the skills path",
     "qmd:release": "qmd skill directories (spec 5.3); loaded through the skills path",
+    "semgrep:.codex-plugin": "manifest for another agent harness shipped in the same repo; not read by CC or by this adapter",
     "semgrep:scripts": "plugin payload (scripts, templates, data) reached through CLAUDE_PLUGIN_ROOT by its hooks or commands; not itself a load surface",
     "starship-claude:starship-claude": "plugin payload (scripts, templates, data) reached through CLAUDE_PLUGIN_ROOT by its hooks or commands; not itself a load surface",
     "starship-claude:templates": "plugin payload (scripts, templates, data) reached through CLAUDE_PLUGIN_ROOT by its hooks or commands; not itself a load surface",
@@ -211,5 +213,8 @@
   },
   "pluginHooksFile": {
     "description": "hooks.json description text; no behaviour"
+  },
+  "hookFields": {
+    "commandWindows": "not a CC hook field: the CC 2.1.300 binary reads commandWindows only for the inference credential helper, so CC runs `command` on Windows, as the bridge does (semgrep ships it for other harnesses)"
   }
 }

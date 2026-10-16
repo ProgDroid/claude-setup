@@ -317,9 +317,9 @@ function translateCommand(file, rel, prefix, ctx) {
   const model = mapModel(fm.model);
   if (model.value) command.model = model.value;
   if (model.unknown) unknown.push({ where: file, key, note: model.unknown });
-  if (fm["allowed-tools"] !== undefined) {
-    unknown.push({ where: file, key, note: "allowed-tools has no OC command equivalent" });
-  }
+  // allowed-tools is not carried: in CC it only pre-approves tools while the command runs, and OC
+  // has no per-command grant, so OC prompts per its permission config instead (stricter, never
+  // looser; README Known gaps).
   return { name, command, unknown };
 }
 

@@ -82,6 +82,12 @@ test("knownSet covers every HANDLED key, ignored, not-translated and hook events
   expect(known.has("plantedSettingKey")).toBe(false);
 });
 
+test("an ignored hook field (CC does not read it today) stays novel, so a CC release adding it still fires", () => {
+  expect(known.has("commandWindows")).toBe(false);
+  const e = [{ version: "9.9.9", lines: ["Hooks: added `commandWindows`, run instead of `command` on Windows"] }];
+  expect(novelLines(e, null, null, known)).toHaveLength(1);
+});
+
 test("lines that only mention plain words or a removed identifier are not returned", () => {
   expect(novelLines(entries, "2.1.3", "2.1.4", known).join("\n")).not.toContain("legacyPlantedHookKey"); // Removed ... line mentions hook
   expect(novelLines(entries, "2.1.1", "2.1.2", known)).toEqual([]); // `git` is a plain word, not an identifier shape
