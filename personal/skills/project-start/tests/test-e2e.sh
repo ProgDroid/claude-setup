@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # End-to-end tests: `ritual.sh auto` (the scripted auto steps) and whole-ritual properties on fixture
 # repos: fresh, fully set up, nested-workspace, no-tools environment and a spaced relative path.
-# Every external tool the ritual calls (bd, gh, gitleaks, cargo) is a stub here; the real ones on
-# this machine are never run.
+# Every external tool the ritual calls (bd, gh, gitleaks, cargo) is a stub here. Anything that can
+# reach one, including a git commit through a hook the ritual installed, runs inside S() or N().
+# A logging shadow of each tool sits first on this suite's own PATH, so a call that escapes them is
+# caught rather than reaching the real tool (no_test_reached_an_unstubbed_tool).
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 AUTO_IDS='["stack","traps","stack-checks","oracle","parking-lot","beads-metrics"]'
@@ -39,12 +41,25 @@ printf '%s\n' "$*" >> "${E2E_LOGS:?}/cargo"
 exit 0
 STUB
 chmod +x "$STUBS"/* "$CARGO_STUB/cargo"
+# shadows: first on this suite's PATH, so an unstubbed call logs here instead of running the real tool
+SHADOW="$TMPROOT/shadow tools"; SHADOW_LOG="$TMPROOT/shadow calls.log"; mkdir -p "$SHADOW"
+for t in bd gh gitleaks cargo; do
+  printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" %q "$*" >> %q\nexit 0\n' "$t" "$SHADOW_LOG" > "$SHADOW/$t"
+  chmod +x "$SHADOW/$t"
+done
+PATH="$SHADOW:$PATH"; export PATH
+gitleaks shadow-control >/dev/null 2>&1
+[ "$(cat "$SHADOW_LOG" 2>/dev/null)" = 'gitleaks shadow-control' ] && ok "shadow_control_an_unstubbed_call_is_logged" \
+  || bad "shadow control: [$(cat "$SHADOW_LOG" 2>/dev/null)]"
+: > "$SHADOW_LOG"
 
 NOTOOLS="$(PATH="$(path_without bd)"; PATH="$(path_without gh)"; PATH="$(path_without gitleaks)"; printf '%s' "$PATH")"
 # S = every tool stubbed; N = no bd, gh or gitleaks by any route (cargo stays stubbed in both)
 S() { ( stub_path "$CARGO_STUB"; stub_path "$STUBS"; export E2E_LOGS="$LOGS" RITUAL_RUST_INCLUDE="$INC"; bash "$RITUAL" "$@" ); }
 N() { ( PATH="$CARGO_STUB:$NOTOOLS"; LOCALAPPDATA="$(cygpath -w "$EMPTY_LA")"
         export PATH LOCALAPPDATA E2E_LOGS="$LOGS" RITUAL_RUST_INCLUDE="$INC"; bash "$RITUAL" "$@" ); }
+# SC <cmd...>: any other command in the stub environment (a git commit runs the installed hooks)
+SC() { ( stub_path "$CARGO_STUB"; stub_path "$STUBS"; export E2E_LOGS="$LOGS" RITUAL_RUST_INCLUDE="$INC"; "$@" ); }
 
 logclear() { rm -f "$LOGS"/*; }
 logof() { if [ -f "$LOGS/$1" ]; then tr -d '\r' < "$LOGS/$1"; fi; }
@@ -84,7 +99,7 @@ full_fixture() {
   S auto "$r" >/dev/null
   S fix secret-scan "$r" >/dev/null
   S fix handoff "$r" >/dev/null
-  commit_all "$r" 'chore: ritual setup'
+  SC commit_all "$r" 'chore: ritual setup'   # the pre-commit hook now runs gitleaks
   S handoff-commit "$r" >/dev/null
   printf '%s\n' "$r"
 }
@@ -127,7 +142,9 @@ out="$(bash "$RITUAL" auto "$TMPROOT/not a repo" 2>&1)"; rc=$?
 echo "== fresh repo =="
 r="$(fresh_fixture)"; h0="$(git -C "$r" rev-parse HEAD)"
 logclear
-out="$(S auto "$r")"; rc=$?
+TRACE="$TMPROOT/detect trace.log"; : > "$TRACE"
+out="$(RITUAL_TRACE="$TRACE" S auto "$r")"; rc=$?
+tcount() { if [ -f "$TRACE" ]; then grep -cx "$1" "$TRACE"; else echo 0; fi; }
 [ "$rc" = 0 ] && [ "$(j "$out" 'keys')" = '["results","wrote"]' ] && ok "auto_prints_one_object_results_and_wrote_exit_0" || bad "shape: rc=$rc $out"
 [ "$(j "$out" '[.results[].id]')" = "$AUTO_IDS" ] && ok "auto_runs_exactly_the_six_scripted_steps" || bad "ids: $(j "$out" '[.results[].id]')"
 [ "$(jq -c '[.steps[].id | select(IN("stack","traps","stack-checks","oracle","parking-lot","beads-metrics"))]' "$SKILL_DIR/steps.json" | tr -d '\r')" = "$AUTO_IDS" ] \
@@ -156,6 +173,19 @@ miss=""; while IFS= read -r p; do git -C "$r" status --porcelain -- "$p" | grep 
   && ok "auto_calls_bd_only_for_the_metrics_read_never_gh_or_gitleaks" || bad "tool calls: bd=[$(logof bd)] gh=[$(logof gh)] gitleaks=[$(logof gitleaks)]"
 [ "$(jq -c --argjson a "$AUTO_IDS" '[.steps[] | select(.id as $i | $a | index($i)) | select(.kind == "ask") | .id]' "$SKILL_DIR/steps.json" | tr -d '\r')" = '["stack-checks"]' ] \
   && ok "the_only_ask_kind_step_in_auto_is_stack_checks" || bad "ask kinds in auto list"
+
+echo "== detection runs once per auto run =="
+# RITUAL_TRACE: each language scan logs "stack_json", each oracle scan "oracle_json"
+[ "$(tcount stack_json)|$(tcount oracle_json)" = '1|1' ] && ok "auto_scans_languages_once_and_the_oracle_once" \
+  || bad "auto scans: stack_json=$(tcount stack_json) oracle_json=$(tcount oracle_json)"
+: > "$TRACE"; RITUAL_TRACE="$TRACE" S fix stack-checks "$r" >/dev/null
+[ "$(tcount stack_json)|$(tcount oracle_json)" = '1|0' ] && ok "standalone_fix_stack_checks_scans_languages_itself_no_oracle" \
+  || bad "fix stack-checks scans: stack_json=$(tcount stack_json) oracle_json=$(tcount oracle_json)"
+: > "$TRACE"; RITUAL_TRACE="$TRACE" S stack "$r" >/dev/null
+[ "$(tcount stack_json)|$(tcount oracle_json)" = '1|1' ] && ok "standalone_stack_still_runs_the_oracle_for_testing_md" \
+  || bad "stack scans: stack_json=$(tcount stack_json) oracle_json=$(tcount oracle_json)"
+# after auto, the oracle step sees the lint command stack-checks just added (oracle runs after it)
+[[ "$(res "$out" oracle detail)" == *"cargo clippy"* ]] && ok "oracle_step_sees_what_stack_checks_wrote" || bad "oracle lint: $(res "$out" oracle detail)"
 
 echo "== stack and oracle wrapping =="
 [ "$(res "$out" stack status)" = present ] && [[ "$(res "$out" stack detail)" == *"rust (.)"* ]] \
@@ -231,7 +261,9 @@ of="$( ( stub_path "$GITSTUB"; S auto "$f" ) 2>/dev/null)"; rc=$?
 [ "$(res "$of" parking-lot status)" = fixed ] && ok "steps_before_the_crash_keep_their_results" || bad "crash others: $of"
 
 echo "== fully set up repo =="
+: > "$SHADOW_LOG"
 full="$(full_fixture)"
+[ ! -s "$SHADOW_LOG" ] && ok "full_fixture_never_runs_an_unstubbed_tool" || bad "full_fixture reached: $(cat "$SHADOW_LOG")"
 [ -z "$(git -C "$full" status --porcelain)" ] || bad "full fixture premise: tree not clean: $(git -C "$full" status --porcelain)"
 ofu="$(S auto "$full")"; rc=$?
 [ "$rc" = 0 ] && [ "$(j "$ofu" .wrote)" = '[]' ] && [ -z "$(git -C "$full" status --porcelain)" ] \
@@ -240,6 +272,11 @@ ofu="$(S auto "$full")"; rc=$?
 echo "== open_steps invariant =="
 chk="$TMPROOT/full checks.jsonl"; : > "$chk"
 for id in $CHECK_IDS; do S check "$id" "$full" >> "$chk"; done
+# the fixture's premise: everything set up. public-sweep and untracked-docs are absent when nothing
+# is due (a private repo; nothing untracked under docs/): present there would mean pending work.
+prem="$(jq -rs 'map("\(.id)=\(.status)") | join(" ")' "$chk" | tr -d '\r')"
+[ "$prem" = 'beads=present beads-metrics=present ci=present handoff=present parking-lot=present public-sweep=absent secret-scan=present stack-checks=present traps=present untracked-docs=absent' ] \
+  && ok "full_fixture_premise_every_check_set_up" || bad "full premise: $prem"
 S preflight "$full" >/dev/null; pfrc=$?
 to_record "$ofu" "$chk" "$pfrc" > "$TMPROOT/full results.json"
 rec="$(S record-write "$full" "$TMPROOT/full results.json")"
@@ -258,8 +295,16 @@ rec2="$(S record-write "$full" "$TMPROOT/flipped results.json")"
 echo "== no-tools environment =="
 # controls: the stripped environment still finds git and jq, and finds none of bd/gh/gitleaks
 ctl="$(N_PATH="$CARGO_STUB:$NOTOOLS"; PATH="$N_PATH"; for t in git jq bd gh gitleaks; do command -v "$t" >/dev/null 2>&1 && printf '%s ' "$t"; done)"
-[ "$ctl" = 'git jq ' ] && [ ! -e "$EMPTY_LA/Microsoft/WinGet/Links/gitleaks.exe" ] \
-  && ok "no_tools_control_git_and_jq_found_tools_hidden" || bad "no-tools control: found [$ctl]"
+[ "$ctl" = 'git jq ' ] && ok "no_tools_control_git_and_jq_found_tools_hidden" || bad "no-tools control: found [$ctl]"
+# the second gitleaks route (LOCALAPPDATA/Microsoft/WinGet/Links), asked of the ritual's own resolver:
+# open with a gitleaks.exe there, closed with N's empty LOCALAPPDATA
+OPEN_LA="$TMPROOT/open localappdata"; mkdir -p "$OPEN_LA/Microsoft/WinGet/Links"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$OPEN_LA/Microsoft/WinGet/Links/gitleaks.exe"; chmod +x "$OPEN_LA/Microsoft/WinGet/Links/gitleaks.exe"
+resolve_gl() { ( PATH="$CARGO_STUB:$NOTOOLS"; LOCALAPPDATA="$(cygpath -w "$1")"; export PATH LOCALAPPDATA
+  bash -c '. "$1/lib/common.sh"; . "$1/lib/secretscan.sh"; _ss_gitleaks' _ "$SKILL_DIR" ); }
+gl_open="$(resolve_gl "$OPEN_LA")"; gl_closed="$(resolve_gl "$EMPTY_LA")"
+[[ "$gl_open" == *WinGet/Links/gitleaks.exe ]] && [ -z "$gl_closed" ] \
+  && ok "no_tools_control_winget_route_open_vs_closed" || bad "winget route: open=[$gl_open] closed=[$gl_closed]"
 # the list of steps with a check_ function is the list this test walks
 [ "$(grep -ho '^check_[a-z_]*()' "$SKILL_DIR"/lib/*.sh | sed 's/^check_//; s/()$//; s/_/-/g' | LC_ALL=C sort | paste -sd' ' -)" = "$CHECK_IDS" ] \
   && ok "no_tools_walks_every_check_function" || bad "check_ functions: $(grep -ho '^check_[a-z_]*()' "$SKILL_DIR"/lib/*.sh | paste -sd' ' -)"
@@ -297,5 +342,50 @@ for id in traps stack-checks parking-lot; do
   [ "$(st "$(S check "$id" "$sp")")" = present ] || notp="$notp $id:$(st "$(S check "$id" "$sp")")"
 done
 [ -z "$notp" ] && ok "spaced_repo_auto_steps_present_after" || bad "spaced checks not present:$notp"
+
+echo "== a path inside the repo means the repo root =="
+subrepo() { local r; r="$(fresh_fixture "$1")"; mkdir -p "$r/sub dir"; echo n > "$r/sub dir/notes.txt"; commit_all "$r" 'sub dir'; printf '%s\n' "$r"; }
+a="$(subrepo subdir-auto)"
+osub="$( cd "$a/sub dir" && S auto . )"; rc=$?
+[ "$rc" = 0 ] && [ "$(j "$osub" '[.results[] | {id, status, wrote}]')" = "$(j "$out" '[.results[] | {id, status, wrote}]')" ] \
+  && [ "$(j "$osub" .wrote)" = "$(j "$out" .wrote)" ] && ok "auto_from_a_subdirectory_equals_auto_at_the_root" || bad "subdir auto: $osub"
+[ "$(ls -A "$a/sub dir")" = notes.txt ] && [ -f "$a/docs/parking-lot.md" ] && [ -f "$a/CLAUDE.md" ] \
+  && ok "auto_from_a_subdirectory_creates_nothing_under_it" || bad "subdir contents: $(ls -A "$a/sub dir")"
+bb="$(subrepo subdir-fix)"
+ofp="$( cd "$bb" && S fix parking-lot "sub dir" )"
+[ "$(j "$ofp" .wrote)" = '["docs/parking-lot.md","CLAUDE.md"]' ] && [ -f "$bb/docs/parking-lot.md" ] && [ -f "$bb/CLAUDE.md" ] \
+  && [ "$(ls -A "$bb/sub dir")" = notes.txt ] && ok "fix_parking_lot_given_a_subdirectory_writes_at_the_root" || bad "subdir fix: $ofp / $(ls -A "$bb/sub dir")"
+[ "$(S oracle "$bb/sub dir" | jq -cS . | tr -d '\r')" = "$(S oracle "$bb" | jq -cS . | tr -d '\r')" ] \
+  && [ "$(S oracle "$bb" | jq -r .status | tr -d '\r')" = present ] && ok "oracle_given_a_subdirectory_scans_the_root" || bad "subdir oracle: $(S oracle "$bb/sub dir")"
+
+echo "== a step that exits 0 without a result =="
+# a jq wrapper that turns beads-metrics' own `present` result into non-JSON; every other call is real
+JQW="$TMPROOT/jq wrap"; mkdir -p "$JQW"
+{ printf '#!/usr/bin/env bash\nREAL_JQ=%q\n' "$(command -v jq)"; cat <<'WRAP'
+if [ "${1:-}" = -nRc ] && [ "${4:-}" = beads-metrics ] && [ "${7:-}" = present ]; then echo 'not json'; exit 0; fi
+exec "$REAL_JQ" "$@"
+WRAP
+} > "$JQW/jq"; chmod +x "$JQW/jq"
+[ "$( ( stub_path "$JQW"; S check beads-metrics "$b" ) )" = 'not json' ] || bad "jq wrapper premise: check beads-metrics did not print 'not json'"
+ojq="$( ( stub_path "$JQW"; S auto "$b" ) 2>/dev/null)"; rc=$?
+[ "$rc" = 0 ] && [ "$(j "$ojq" '[.results[].id]')" = "$AUTO_IDS" ] && [ "$(res "$ojq" beads-metrics status)" = unknown ] \
+  && [[ "$(res "$ojq" beads-metrics detail)" == *"(exit 0)"* ]] && ok "step_with_exit_0_and_no_result_is_unknown" || bad "no-result step: rc=$rc $ojq"
+
+echo "== an interrupted auto leaves no temp file =="
+IT="$TMPROOT/auto tmpdir"; mkdir -p "$IT"
+ir="$(fresh_fixture interrupt)"
+( stub_path "$CARGO_STUB"; stub_path "$STUBS"; export E2E_LOGS="$LOGS" RITUAL_RUST_INCLUDE="$INC" TMPDIR="$IT"
+  exec bash "$RITUAL" auto "$ir" ) >/dev/null 2>&1 &
+pid=$!; seen=0
+for _ in $(seq 1 300); do [ -n "$(ls -A "$IT")" ] && { seen=1; break; }; sleep 0.1; done
+kill -TERM "$pid" 2>/dev/null; wait "$pid"; irc=$?
+[ "$seen" = 1 ] && [ "$irc" != 0 ] && [ -z "$(ls -A "$IT")" ] && ok "interrupted_auto_removes_its_temp_file" \
+  || bad "interrupt: seen=$seen rc=$irc left=[$(ls -A "$IT")]"
+rm -rf "$IT"; mkdir -p "$IT"
+( stub_path "$CARGO_STUB"; stub_path "$STUBS"; export E2E_LOGS="$LOGS" RITUAL_RUST_INCLUDE="$INC" TMPDIR="$IT"
+  bash "$RITUAL" auto "$ir" ) >/dev/null 2>&1
+[ -z "$(ls -A "$IT")" ] && ok "completed_auto_removes_its_temp_file" || bad "temp left: $(ls -A "$IT")"
+
+[ ! -s "$SHADOW_LOG" ] && ok "no_test_reached_an_unstubbed_tool" || bad "unstubbed calls: $(cat "$SHADOW_LOG")"
 
 finish

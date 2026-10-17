@@ -113,7 +113,14 @@ _clippy_table() {
        on { print }'
 }
 
-_stack_dirs() { stack_json "$1" | jq -r '.stacks[] | "\(.lang)\t\(.dir)"' | tr -d '\r'; }
+# _stack_dirs <repo> -> "lang<TAB>dir" lines. Languages only, so no oracle scan. `auto` hands over
+# the scan it already made in _RITUAL_STACK_MEMO (for the repo in _RITUAL_MEMO_REPO only).
+_stack_dirs() {
+  local s
+  if [ -n "${_RITUAL_STACK_MEMO:-}" ] && [ "${_RITUAL_MEMO_REPO:-}" = "$1" ]; then s="$_RITUAL_STACK_MEMO"
+  else s="$(stack_json "$1" -)" || return $?; fi
+  printf '%s' "$s" | jq -r '.stacks[] | "\(.lang)\t\(.dir)"' | tr -d '\r'
+}
 
 # _stackcheck_one <repo> <lang> <dir> -> "present<TAB>" or "absent<TAB>detail"
 _stackcheck_one() {

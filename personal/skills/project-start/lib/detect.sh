@@ -8,6 +8,9 @@
 
 # --- internals (all run with cwd = the repo) -------------------------------------------------
 
+# _det_trace <name>: when RITUAL_TRACE names a file, log one line per scan (tests count scans with it)
+_det_trace() { [ -z "${RITUAL_TRACE:-}" ] || printf '%s\n' "$1" >> "$RITUAL_TRACE"; }
+
 _det_path() { if [ "$1" = . ]; then printf '%s\n' "$2"; else printf '%s/%s\n' "$1" "$2"; fi; }
 
 # Cargo workspace members declared in the root Cargo.toml, expanded, one per line.
@@ -234,6 +237,7 @@ _det_shell() {
 # oracle_json <repo>: {"status","test","lint"}. Never runs a found command.
 oracle_json() {
   local repo="$1" entries members d m skip
+  _det_trace oracle_json
   if [ ! -d "$repo" ] || [ ! -r "$repo" ] || ! cd "$repo" 2>/dev/null; then
     printf '%s\n' '{"status":"unknown","test":[],"lint":[]}'; return 0
   fi
@@ -256,10 +260,13 @@ oracle_json() {
       + (if ($u | length) > 0 then {detail: ("could not parse: " + ($u | join(", ")))} else {} end)'
 }
 
-# stack_json <repo>: {"stacks":[{lang,dir}],"includes":[...]}
+# stack_json <repo> [oracle-status]: {"stacks":[{lang,dir}],"includes":[...]}. testing.md is
+# included when the oracle's status is present. A caller that already knows that status, or that
+# needs only the languages ("-"), passes it, and the oracle is not scanned again.
 stack_json() {
   local repo="$1" lines="" d l p status
-  status="$(oracle_json "$repo" | jq -r .status)"
+  _det_trace stack_json
+  if [ $# -ge 2 ]; then status="$2"; else status="$(oracle_json "$repo" | jq -r .status | tr -d '\r')"; fi
   # An unscannable repo must not look like "no stacks": fail loudly (exit 2).
   { [ -d "$repo" ] && [ -r "$repo" ] && [ -x "$repo" ]; } || die "cannot scan: $repo"
   lines="$(cd "$repo" || exit 1; while IFS= read -r d; do
