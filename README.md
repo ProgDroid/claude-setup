@@ -18,6 +18,8 @@ So anything that should work both locally and in a cloud session lives here rath
 |---|---|
 | `.claude-plugin/marketplace.json` | Marketplace catalog |
 | `personal/` | The one plugin: agents, commands, working-style skill |
+| `personal/skills/project-start/` | Project-start ritual: a script that sets a repo up the house way, and a record of what it did |
+| `personal/skills/handoff/` | The NEXT.md handoff routine, with the hooks that enforce it |
 | `snippets/project-settings.json` | Block declaring marketplaces + plugins in any repo |
 | `snippets/README.md` | What is included, what is excluded, and why |
 
