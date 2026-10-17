@@ -220,6 +220,14 @@ chk_scan 'git pushy' '|' "a_longer_word_is_not_push"
 chk_scan 'mygit push' '|' "a_longer_command_is_not_git"
 chk_scan 'gh pr view' '|' "gh_pr_view_is_not_create"
 chk_scan '& git push origin main; Write-Host done' ' push|' "powershell_call_operator"
+chk_scan 'timeout 60 git push' ' push|' "timeout_wrapper"
+chk_scan 'timeout -k 5 60s git push origin main' ' push|' "timeout_wrapper_with_options"
+chk_scan 'env X=1 git push' ' push|' "env_wrapper"
+chk_scan 'env -i X=1 git -C "a dir" push' ' push|a dir' "env_wrapper_then_dash_C"
+chk_scan 'gh pr merge 5 --squash' ' prmerge|' "gh_pr_merge"
+chk_scan 'echo "gh pr merge"' '|' "quoted_gh_pr_merge_is_not_a_command"
+chk_scan 'timeout 60 echo git push' '|' "wrapped_echo_is_not_git"
+chk_scan 'envy git push' '|' "a_longer_word_is_not_the_env_wrapper"
 
 echo "== SessionStart: silence =="
 
@@ -289,11 +297,11 @@ run "$SS" "$(p_ss startup "$s4")"
 has "ended without a handoff" && has "git log ${a4:0:12}..HEAD" && ok "startup_missed_handoff_names_the_reconstruct_range" || bad "missed: $(show)"
 
 # paths diff: includes an uncommitted change; excludes non-matching paths
-s5="$(mkrepo ss-paths)"; mark "$s5" '{"paths":["*.dat","levels/*.map"]}'
-cm "$s5" "content" "" "a.dat=old-a" "levels/l1.map=old-l1" "code.rs=old-code"
+s5="$(mkrepo ss-paths)"; mark "$s5" '{"paths":["data/*.csv","config/*.toml"]}'
+cm "$s5" "content" "" "data/a.csv=old-a" "config/app.toml=old-cfg" "code.rs=old-code"
 cm "$s5" "handoff: first" "$AGENT" "NEXT.md=# NEXT"
-echo "UNCOMMITTED-EDIT" > "$s5/a.dat"
-cm "$s5" "level tweak" "" "levels/l1.map=COMMITTED-EDIT"
+echo "UNCOMMITTED-EDIT" > "$s5/data/a.csv"
+cm "$s5" "config tweak" "" "config/app.toml=COMMITTED-EDIT"
 echo "CODE-EDIT" > "$s5/code.rs"
 run "$SS" "$(p_ss startup "$s5")"
 has "+UNCOMMITTED-EDIT" && has "+COMMITTED-EDIT" && ok "startup_paths_diff_shows_committed_and_uncommitted" || bad "paths diff: $(show)"
@@ -326,8 +334,16 @@ for i in $(seq 1 25); do cm "$s8" "dev-$i" ""; done
 run "$SS" "$(p_ss startup "$s8")"
 c="$(printf '%s\n' "$CTX" | grep -c '^  \[other\]')"
 [ "$c" = 20 ] && has "+5 more" && ok "startup_commit_listing_capped_at_20" || bad "listing cap: $c"
-# total line budget outside the diff
-[ "$(printf '%s\n' "$CTX" | wc -l)" -le 60 ] && ok "startup_listing_context_within_60_lines" || bad "lines: $(printf '%s\n' "$CTX" | wc -l)"
+# total line budget outside the diff. The fixture must overflow BOTH caps (50 commits, 45 dirty
+# files under a paths glob), or an uncapped listing would still fit in 60 lines and the test
+# could not fail. Untracked files show in the status list only, so the diff adds no lines.
+s8b="$(std_repo ss-lines '{"paths":["*.csv"]}')"
+for i in $(seq 1 50); do cm "$s8b" "dev-$i" ""; done
+for i in $(seq -w 1 45); do echo x > "$s8b/dirty-$i.csv"; done
+run "$SS" "$(p_ss startup "$s8b")"
+nl="$(printf '%s\n' "$CTX" | wc -l | tr -d ' ')"
+[ "$EVT" = SessionStart ] && has "+30 more" && has "+25 more" && [ "$nl" -le 60 ] \
+  && ok "startup_listing_context_within_60_lines" || bad "lines: $nl $(printf '%s' "$CTX" | tail -n 3)"
 # malformed marker -> defaults, and says so
 s9="$(std_repo ss-badmarker)"; printf 'not json\n' > "$s9/.claude/handoff.json"
 run "$SS" "$(p_ss startup "$s9")"
@@ -411,6 +427,12 @@ cb="$(std_repo pt-both)"; cm "$cb" "agent work" "$AGENT"; cm "$cb" "handoff: wid
 run "$PT" "$(p_cmd Bash 'git commit -m "handoff: wide" && git push' "$cb")"
 has "x.txt" && ok "commit_and_push_together_runs_the_commit_check" || bad "both: $(show)"
 run "$PT" 'not json'; silent && ok "post_tool_silent_on_malformed_input" || bad "post junk spoke"
+# wrapped and PR-merge shipping commands (each a reminder), and a quoted mention (silent)
+sp2="$(std_repo pt-ship-wrapped)"; cm "$sp2" "agent work" "$AGENT"
+run "$PT" "$(p_cmd Bash 'timeout 60 git push' "$sp2")"; has "hand off now" && ok "timeout_git_push_reminds" || bad "timeout push: $(show)"
+run "$PT" "$(p_cmd Bash 'env GIT_TRACE=0 git push' "$sp2")"; has "hand off now" && ok "env_git_push_reminds" || bad "env push: $(show)"
+run "$PT" "$(p_cmd Bash 'gh pr merge 5 --squash' "$sp2")"; has "hand off now" && ok "gh_pr_merge_reminds" || bad "gh pr merge: $(show)"
+run "$PT" "$(p_cmd Bash 'echo "gh pr merge"' "$sp2")"; silent && ok "quoted_gh_pr_merge_is_silent" || bad "echo gh pr merge spoke: $(show)"
 
 echo "== PostToolUse: NEXT.md edits =="
 
@@ -428,6 +450,121 @@ run "$PT" "$(p_edit Edit "$et/docs/NEXT.md" "$et")"; silent && ok "nested_next_m
 run "$PT" "$(p_edit Edit "$et/README.md" "$et")"; silent && ok "other_file_in_worktree_is_silent" || bad "README spoke"
 en="$(mkrepo pt-edit-nomark)"; ent="$FIX/edit nomark wt"; git -C "$en" worktree add -q -b feat "$ent" 2>/dev/null
 run "$PT" "$(p_edit Edit "$ent/NEXT.md" "$ent")"; silent && ok "next_md_edit_silent_without_marker" || bad "no-marker edit spoke"
+
+echo "== fix round 1: tags, merges, long histories, shallow clones, worktrees, big payloads =="
+
+# [agent] needs "Claude" as a whole word: generic (R48), model-name and bare forms are agent; a
+# person whose name starts "Claude" is not
+ct="$(std_repo fr-claude-word)"
+cm "$ct" "generic" "$AGENT"
+cm "$ct" "model name" "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+cm "$ct" "bare value" "Co-Authored-By: Claude"
+cm "$ct" "a person named Claudette" "Co-Authored-By: Claudette Person <c@example.com>"
+d="$(git -C "$ct" log -1 --date=short --format=%ad)"
+out="$( . "$LIB"; ho_commits_since "$ct" "$(sha "$ct" HEAD~4)" )"
+exp="[other] $d a person named Claudette
+[agent] $d bare value
+[agent] $d model name
+[agent] $d generic"
+[ "$out" = "$exp" ] && ok "ho_commits_since_claude_as_a_whole_word_claudette_is_other" || bad "claude word:"$'\n'"$out"
+
+# a --no-ff handoff: merge bringing in other files: compared with its FIRST parent, so it warns
+mg="$(std_repo fr-merge)"
+git -C "$mg" checkout -q -b feat
+cm "$mg" "feature one" "$AGENT" "feat1.rs=1"; cm "$mg" "feature two" "$AGENT" "feat2.rs=2"
+git -C "$mg" checkout -q main
+printf 'handoff: merge feat\n\n%s\n' "$AGENT" > "$TMPROOT/msg"
+git -C "$mg" merge -q --no-ff -F "$TMPROOT/msg" feat >/dev/null 2>&1
+np="$(git -C "$mg" rev-list --parents -n 1 HEAD | wc -w | tr -d ' ')"
+run "$PT" "$(p_cmd Bash 'git merge --no-ff feat' "$mg")"
+[ "$np" = 3 ] && has "HANDOFF COMMIT HOLDS MORE THAN NEXT.md" && has "feat1.rs" && has "feat2.rs" \
+  && ok "commit_check_on_a_no_ff_handoff_merge_names_the_merged_files" || bad "merge (parents+1=$np): $(show)"
+
+# a history long enough that git outlives grep -m 1 (SIGPIPE, 141): the anchor is still found,
+# and the ritual's twin (which reads the whole log) agrees
+lh="$(mkrepo fr-long)"; mark "$lh"
+cm "$lh" "handoff: deep anchor" "$AGENT"
+for i in $(seq 1 3000); do
+  printf 'commit refs/heads/main\ncommitter T <t@example.com> %d +0000\ndata <<E\nwork %d, a subject long enough to fill the pipe buffer before the log ends\nE\n' $((1700000000 + i)) "$i"
+  [ "$i" = 1 ] && printf 'from %s\n' "$(sha "$lh")"
+  printf '\n'
+done | git -C "$lh" fast-import --quiet
+git -C "$lh" reset -q --hard main
+cm "$lh" "handoff: newest" "$AGENT"
+an="$(sha "$lh")"
+st="$(git -C "$lh" log --format='%H %s' | grep -m 1 -E '^[0-9a-f]+ handoff:' >/dev/null; echo "${PIPESTATUS[0]}")"
+out_h="$( . "$LIB"; ho_anchor "$lh"; echo "rc=$?" )"
+out_r="$( RITUAL_SKILL_DIR="$PLUGIN/skills/project-start"; . "$RITUAL_LIB/common.sh"; . "$RITUAL_LIB/handoff.sh"; _handoff_anchor "$lh"; echo "rc=$?" )"
+[ "$st" = 141 ] && [ "$out_h" = "$an handoff: newest"$'\n'"rc=0" ] && [ "$out_h" = "$out_r" ] \
+  && ok "ho_anchor_tolerates_sigpipe_on_a_long_history_and_agrees_with_the_twin" || bad "long history (git status $st): [$out_h] vs ritual [$out_r]"
+
+# shallow clone: the anchor sits 3 commits behind HEAD, beyond a depth-1 cut-off -> UNKNOWN
+sh_src="$(std_repo fr-shallow-src)"
+for i in 1 2 3; do cm "$sh_src" "agent work $i" "$AGENT"; done
+sh_dst="$FIX/fr shallow clone"
+git clone -q --depth 1 "file://$(cygpath -m "$sh_src")" "$sh_dst" 2>/dev/null
+shl="$(git -C "$sh_dst" rev-parse --is-shallow-repository 2>/dev/null)"
+out="$( . "$LIB"; ho_anchor "$sh_dst"; echo "rc=$?" )"
+[ "$shl" = true ] && [ "$out" = "rc=3" ] && ok "ho_anchor_shallow_clone_without_anchor_returns_3" || bad "shallow anchor (shallow=$shl): $out"
+run "$SS" "$(p_ss startup "$sh_dst")"
+[ "$EVT" = SessionStart ] && has "SHALLOW" && has "unknown, not absent" && has "PICK" && has "agent work 3" \
+  && ! has "No handoff: commit was found" && ! has "nothing to diff from" \
+  && ok "startup_shallow_clone_says_unknown_and_asks_to_pick" || bad "shallow startup: $(show)"
+has "reminders cannot tell" && has "stay OFF" && ok "startup_shallow_clone_says_the_reminders_are_off" || bad "shallow reminders note: $(show)"
+# the choice made: in the shallow clone the reminders stay off (startup said so above) ...
+run "$SS" "$(p_ss compact "$sh_dst")"; c_sil=0; silent && c_sil=1
+run "$PT" "$(p_cmd Bash 'git push' "$sh_dst")"; p_sil=0; silent && p_sil=1
+# ... while the same history cloned in full does remind (control: the silence is the cut-off)
+sh_full="$FIX/fr full clone"; git clone -q "file://$(cygpath -m "$sh_src")" "$sh_full" 2>/dev/null
+run "$PT" "$(p_cmd Bash 'git push' "$sh_full")"
+[ "$c_sil" = 1 ] && [ "$p_sil" = 1 ] && has "3 agent commit(s)" \
+  && ok "shallow_clone_reminders_off_but_full_clone_reminds" || bad "shallow reminders: compact_silent=$c_sil push_silent=$p_sil full=$(show)"
+
+# R51: in a linked worktree, agent commits after the anchor are expected -> counted, never MISSED
+lw="$(std_repo fr-wt-count)"; lwt="$FIX/fr wt count"; git -C "$lw" worktree add -q -b feat "$lwt" 2>/dev/null
+cm "$lwt" "agent task one" "$AGENT"; cm "$lwt" "agent task two" "$AGENT"
+run "$SS" "$(p_ss startup "$lwt")"
+[ "$EVT" = SessionStart ] && has "2 agent commit(s) since the last handoff: commit; hand off after the merge, in the main checkout" \
+  && ! has "MISSED" && ! has "ended without a handoff" && ! has "before starting new work" \
+  && ok "startup_in_linked_worktree_counts_agent_commits_without_missed_label" || bad "R51: $(show)"
+
+# R50: when git cannot tell where it is (a shim fails `rev-parse --git-dir`), fail closed toward
+# silence: no "hand off now", no main-checkout duty, no NEXT.md edit warning
+SHIM="$TMPROOT/git shim"; mkdir -p "$SHIM"
+printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = --git-dir ] && exit 1; done\nexec "%s" "$@"\n' "$(command -v git)" > "$SHIM/git"
+chmod +x "$SHIM/git"
+uk="$(std_repo fr-unknown)"; cm "$uk" "agent work" "$AGENT"
+shim_gd=0; PATH="$SHIM:$PATH" git -C "$uk" rev-parse --git-dir >/dev/null 2>&1 || shim_gd=1
+shim_log=0; PATH="$SHIM:$PATH" git -C "$uk" log -1 >/dev/null 2>&1 && shim_log=1
+[ "$shim_gd" = 1 ] && [ "$shim_log" = 1 ] && ok "control_the_git_shim_fails_only_git_dir" || bad "shim: git-dir failed=$shim_gd log ok=$shim_log"
+out="$( PATH="$SHIM:$PATH"; . "$LIB"; ho_worktree "$uk"; printf '%s' "$HO_WT" )"
+[ "$out" = unknown ] && ok "ho_worktree_unknown_when_git_dir_fails" || bad "ho_worktree under shim: $out"
+PATH="$SHIM:$PATH" run "$SS" "$(p_ss startup "$uk")"
+[ "$EVT" = SessionStart ] && has "git could not tell whether this is a linked worktree" && has "after the merge, in the main checkout" \
+  && ! has "commit it ALONE, in the same turn" && ! has "MISSED" \
+  && ok "startup_when_worktree_unknown_uses_after_merge_duty" || bad "R50 startup: $(show)"
+PATH="$SHIM:$PATH" run "$SS" "$(p_ss compact "$uk")"
+has "HANDOFF PENDING" && has "after the merge, in the main checkout" && ! has "in the same turn" \
+  && ok "compact_when_worktree_unknown_uses_after_merge_wording" || bad "R50 compact: $(show)"
+PATH="$SHIM:$PATH" run "$PT" "$(p_cmd Bash 'git push' "$uk")"
+has "HAND OFF AFTER THE MERGE" && ! has "hand off now" && ok "push_when_worktree_unknown_says_after_the_merge" || bad "R50 push: $(show)"
+uw="$(std_repo fr-unknown-wt)"; uwt="$FIX/fr unknown wt"; git -C "$uw" worktree add -q -b feat "$uwt" 2>/dev/null
+run "$PT" "$(p_edit Edit "$uwt/NEXT.md" "$uwt")"; ctl=0; has "linked worktree" && ctl=1
+PATH="$SHIM:$PATH" run "$PT" "$(p_edit Edit "$uwt/NEXT.md" "$uwt")"
+[ "$ctl" = 1 ] && silent && ok "next_md_edit_silent_when_worktree_unknown" || bad "R50 edit (control warned=$ctl): $(show)"
+
+# I1: a 1 MB payload in a repo without the marker must not be read a byte at a time
+head -c 1000000 /dev/zero | tr '\0' 'x' > "$TMPROOT/big.txt"
+for tool in Bash Write; do
+  if [ "$tool" = Bash ]; then
+    big="$(jq -nc --arg d "$n" --rawfile o "$TMPROOT/big.txt" '{session_id:"t", cwd:$d, hook_event_name:"PostToolUse", tool_name:"Bash", tool_input:{command:"git status -C x"}, tool_response:{stdout:$o, stderr:""}}' | tr -d '\r')"
+  else
+    big="$(jq -nc --arg d "$n" --rawfile o "$TMPROOT/big.txt" '{session_id:"t", cwd:$d, hook_event_name:"PostToolUse", tool_name:"Write", tool_input:{file_path:($d + "/NEXT.md"), content:$o}, tool_response:{filePath:($d + "/NEXT.md")}}' | tr -d '\r')"
+  fi
+  t0="$(date +%s%N)"; run "$PT" "$big"; t1="$(date +%s%N)"
+  ms=$(( (t1 - t0) / 1000000 ))
+  [ "${#big}" -gt 1000000 ] && [ "$ms" -lt 2000 ] && silent && ok "large_payload_is_fast_${tool} (${ms} ms)" || bad "large $tool payload: ${ms} ms, ${#big} bytes, out=${#OUT}"
+done
 
 echo "== hooks.json registration =="
 

@@ -110,11 +110,23 @@ All three exit silently in a repo without `.claude/handoff.json`.
 |---|---|---|
 | SessionStart, source `startup` | a new session | the question; the commits since the anchor, the uncommitted changes and the `paths` diff (or, with no anchor, the last 10 commits to PICK from); "the last session ended without a handoff" when agent commits follow the anchor; the end-of-session duty |
 | SessionStart, source `compact` | after a compaction | the handoff reminder, only when agent commits follow the anchor |
-| PostToolUse, Bash/PowerShell | after a `git commit` | a warning when the new `handoff:` commit holds files other than `NEXT.md` |
-| PostToolUse, Bash/PowerShell | after `git push`, `gh pr create`, `git merge` | "hand off now" when agent commits follow the anchor and HEAD is not a `handoff:` commit |
+| PostToolUse, Bash/PowerShell | after a `git commit` or `git merge` | a warning when the new `handoff:` commit holds files other than `NEXT.md` (a merge is compared with its first parent) |
+| PostToolUse, Bash/PowerShell | after `git push`, `gh pr create`, `gh pr merge`, `git merge` | "hand off now" when agent commits follow the anchor and HEAD is not a `handoff:` commit |
 | PostToolUse, Edit/Write/MultiEdit | after an edit of the repo-root `NEXT.md` | a warning in a linked worktree |
 
-`[agent]` means a `Co-Authored-By:` trailer whose value starts `Claude`, or a subject starting
+Two situations change what they say:
+
+- **A shallow clone** with no `handoff:` commit in reach: the anchor may lie beyond the cut-off,
+  so startup says the history is shallow (unknown, not "no anchor") and offers the PICK list or
+  `git fetch --unshallow`. The compact and shipping reminders cannot tell whether a handoff is
+  pending there, so they stay off, and startup says so: the end-of-session duty is yours alone.
+- **A linked worktree, or a folder git cannot place:** agent commits after the anchor are expected
+  there (handing off is not allowed), so startup counts them without calling the handoff missed,
+  and every reminder says "hand off after the merge, in the main checkout". The `NEXT.md` edit
+  warning needs a worktree git can confirm as linked.
+
+`[agent]` means a `Co-Authored-By:` trailer whose value is `Claude` followed by a space, `<` or
+nothing (the generic trailer and a model-name one alike), or a subject starting
 `chore: auto-commit`. Everything else is `[other]`. It is a listing, not an authorship claim:
 other tools commit without the trailer too.
 
@@ -140,7 +152,7 @@ silently overwrite the first.
 The marker's keys are both optional:
 
 ```json
-{"ask": "Did the new build run well?", "paths": ["config/*.toml", "levels/*.json"]}
+{"ask": "Did the new build run well?", "paths": ["config/*.toml", "data/*.csv"]}
 ```
 
 `"ask"` replaces the default question. `"paths"` lists hand-edited globs whose diff since the

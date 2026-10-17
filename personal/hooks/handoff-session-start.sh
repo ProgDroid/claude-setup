@@ -12,6 +12,10 @@
 #                   commits since the anchor, tagged [agent]/[other], the uncommitted changes and
 #                   the marker's `paths` diff; plus "the last session ended without a handoff"
 #                   when agent commits sit after the anchor; plus the end-of-session duty.
+#                   A shallow clone with no anchor in reach says so (unknown, never "no anchor"),
+#                   and says the compact and shipping reminders cannot work in it.
+#                   In a linked worktree (or one git cannot place) agent commits after the anchor
+#                   are the expected state: counted, with "hand off after the merge", never MISSED.
 #   source compact  only the handoff reminder, and only when agent commits sit after the anchor:
 #                   a compaction means a long session is about to lose its working memory.
 #   anything else   (resume, clear, fork) silent. The matcher should already keep them out; the
@@ -24,7 +28,7 @@
 
 set -uo pipefail
 
-IFS= read -r -d '' json || true
+json="$(</dev/stdin)"   # one read; `read -d ''` takes a pipe a byte at a time (~5 s per MB)
 case "$0" in */*) here="${0%/*}" ;; *) here=. ;; esac
 . "$here/handoff-lib.sh" 2>/dev/null || exit 0
 
@@ -41,12 +45,13 @@ anchor_line="$(ho_anchor "$root")"; arc=$?
 anchor=""; asubj=""
 [ "$arc" = 0 ] && { anchor="${anchor_line%% *}"; asubj="${anchor_line#* }"; }
 linked=0; ho_in_linked_worktree "$root" && linked=1
+ho_wt_phrase   # HO_WT_PHRASE: "this is a linked worktree" or "git could not tell ..."
 
 if [ "$src" = compact ]; then
   [ "$arc" = 0 ] && ho_pending "$root" "$anchor" || exit 0
   msg="HANDOFF PENDING: $HO_PENDING_N agent commit(s) since the last handoff: commit (${anchor:0:12} $asubj)."
   if [ "$linked" = 1 ]; then
-    msg+=" This is a linked worktree: never edit NEXT.md here; hand off after the merge, in the main checkout (the handoff skill)."
+    msg+=" Never edit NEXT.md here ($HO_WT_PHRASE): hand off after the merge, in the main checkout (the handoff skill)."
   else
     msg+=" Before this session ends, update NEXT.md for the developer and commit it ALONE, in the same turn, with a subject starting \"handoff:\" (the handoff skill)."
   fi
@@ -93,6 +98,12 @@ case "$arc" in
     mapfile -t C < <(ho_commits_since "$root" "" 10)
     cap 10 "${C[@]}"
     ;;
+  3)
+    L+=("2. This clone's history is SHALLOW and no handoff: commit is within reach, so the last handoff may lie beyond the cut-off: what changed since it is unknown, not absent. Either deepen the clone (git fetch --unshallow) and look for the newest handoff: commit, or show the developer these last commits (newest first) and ask them to PICK the one to diff from (never ask for a SHA):")
+    mapfile -t C < <(ho_commits_since "$root" "" 10)
+    cap 10 "${C[@]}"
+    L+=("While no handoff: commit is in reach, the compact and shipping reminders cannot tell whether a handoff is pending, so they stay OFF in this clone: the end-of-session duty below is on you alone.")
+    ;;
   2)
     L+=("2. Could not read this repo's git history, so what changed since the last handoff is unknown. Say so to the developer.")
     ;;
@@ -106,10 +117,11 @@ case "$arc" in
     L+=("Uncommitted changes (git status --short):")
     cap 20 "${S[@]}"
     n=0; for c in "${C[@]}"; do [[ $c == "[agent]"* ]] && n=$((n + 1)); done
-    if [ "$n" -gt 0 ]; then
-      m="MISSED HANDOFF: the last session ended without a handoff: $n agent commit(s) after the anchor. Reconstruct NEXT.md from \`git log ${anchor:0:12}..HEAD\` and hand off before starting new work."
-      [ "$linked" = 1 ] && m+=" (This is a linked worktree: do that after the merge, in the main checkout.)"
-      L+=("$m")
+    if [ "$n" -gt 0 ] && [ "$linked" = 1 ]; then
+      # handing off is forbidden here, so agent commits after the anchor are the expected state
+      L+=("$n agent commit(s) since the last handoff: commit; hand off after the merge, in the main checkout ($HO_WT_PHRASE).")
+    elif [ "$n" -gt 0 ]; then
+      L+=("MISSED HANDOFF: the last session ended without a handoff: $n agent commit(s) after the anchor. Reconstruct NEXT.md from \`git log ${anchor:0:12}..HEAD\` and hand off before starting new work.")
     fi
     if [ "${#paths[@]}" -gt 0 ]; then
       L+=("Diff of the hand-edited paths since the handoff, committed and uncommitted; new untracked files show only in the status list (git diff ${anchor:0:12} -- ${paths[*]}):")
@@ -120,7 +132,7 @@ case "$arc" in
 esac
 
 if [ "$linked" = 1 ]; then
-  duty="End of session: this is a linked worktree, so never edit NEXT.md here; hand off after the merge, in the main checkout (the handoff skill has the routine)."
+  duty="End of session: $HO_WT_PHRASE, so never edit NEXT.md here; hand off after the merge, in the main checkout (the handoff skill has the routine)."
 else
   duty="End of session: update NEXT.md for the developer, in plain words, and commit it ALONE, in the same turn, with a subject starting \"handoff:\" (the handoff skill has the routine)."
 fi
