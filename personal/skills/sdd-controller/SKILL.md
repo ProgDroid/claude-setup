@@ -40,6 +40,17 @@ detect that its own premise is false.
   Make a deliberately broken test file and confirm the suite fails. Add a guard that compares the
   number of scripts the runner ran with the number of test files on disk. (wickilibrium,
   2026-10-06.)
+- **When a task's output has an external oracle, run it on real data before you close the task.**
+  Don't wait for the acceptance task. In switchboard (2026-10-14), the beads `ready` rule passed 9
+  fixture tests and a clean review. Then a throwaway `examples/` binary on the real export gave 53,
+  where `bd` itself had reported 49. The 4 extras shared one property, a blocked parent, so the
+  PLAN's rule was wrong. The plan had deferred real data to acceptance, six tasks later. Fixtures
+  encode the plan's understanding, and only the oracle can disagree with it.
+- **A config file that sets a value explicitly pins the old behaviour past a code fix.** In
+  switchboard (2026-10-15), moving the ritual version source from the source clone to the
+  installed plugin was correct in code. But the repo's `config/sb.toml` named the clone path
+  explicitly, and would have overridden the fix on the one machine that mattered. When a default
+  moves, grep every config file for the key, and put deleting the stale line in the brief.
 
 ## 2. What goes in every dispatch
 

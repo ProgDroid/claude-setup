@@ -1,0 +1,21 @@
+{
+  "ocTools": {},
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "gives the CC model agent-team tools; OC has no counterpart",
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "changes when CC compacts; OC compaction settings are not mapped faithfully",
+    "ENABLE_LSP_TOOL": "enables CC's model-callable LSP tool; OC's lsp tool is gated by OPENCODE_EXPERIMENTAL_LSP_TOOL, which the adapter does not set",
+    "ENABLE_LSP_TOOLS": "enables CC's model-callable LSP tools; OC's lsp tool is gated by OPENCODE_EXPERIMENTAL_LSP_TOOL, which the adapter does not set"
+  },
+  "settings": {
+    "autoCompactWindow": "changes CC's compaction window; not mapped to OC compaction settings",
+    "effortLevel": "CC reasoning effort; maps to OC agent variant but unverified against 1.19.0, so OC runs at its default effort",
+    "modelSettings": "per-model CC effort/context settings; not mapped, OC runs at its default"
+  },
+  "claudeJson": {
+    "claudeAiMcpEverConnected": "claude.ai connector MCP servers are not available in OC"
+  },
+  "claudeJsonProject": {},
+  "pluginManifest": {
+    "lspServers": "CC plugin language servers (declared in plugin.json or inline in the marketplace entry); OC has its own LSP configuration, so none are started from the plugin"
+  }
+}
