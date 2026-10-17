@@ -10,13 +10,16 @@ _HANDOFF_MARK='- **Handoff.**'   # opening of the house section's first bullet; 
 _HANDOFF_SUBJECT='handoff: NEXT.md created by the project-start ritual'
 _HANDOFF_TRAILER='Co-Authored-By: Claude <noreply@anthropic.com>'
 _HANDOFF_WORKTREE='linked worktree; run the handoff step from the main checkout'
+_HANDOFF_WT_UNKNOWN='could not tell whether this is a linked worktree (git rev-parse failed); nothing written'
 
-# _handoff_linked <top>: true when <top> is a linked worktree (its git dir is not the common dir).
+# _handoff_linked <top> -> status 0 linked, 1 main checkout, 2 cannot tell. A safety guard fails
+# CLOSED (Ruling R49): a rev-parse that fails, or prints nothing, is 2, never "not linked".
 # Spec: NEXT.md is never edited in a linked worktree.
 _handoff_linked() {
   local g c
-  g="$(git -C "$1" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || return 1
-  c="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  g="$(git -C "$1" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || return 2
+  c="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 2
+  [ -n "$g" ] && [ -n "$c" ] || return 2
   [ "$g" != "$c" ]
 }
 
@@ -79,6 +82,7 @@ _handoff_ignored() {
   case "$rc" in 0) echo yes ;; 1) echo no ;; *) echo unknown ;; esac
 }
 
+# Twin: ho_anchor in personal/hooks/handoff-lib.sh carries this subject-only anchor rule; change both together.
 # _handoff_anchor <top> -> prints "<sha> <subject>" of the newest commit whose SUBJECT starts
 # "handoff:" (never --grep, which also matches body lines). Returns 0 found, 1 none (an unborn
 # branch has none), 2 history unreadable (including a HEAD that is neither valid nor unborn).
@@ -141,9 +145,14 @@ fix_handoff() {
       *) die "fix handoff: unknown argument: $1" ;;
     esac
   done
-  local top ign scan n note tmp changed=0 different="" wrote=() notes=()
+  local top ign scan n note tmp rc changed=0 different="" wrote=() notes=()
   top="$(git -C "$repo" rev-parse --show-toplevel)" || die "cannot resolve repo root: $repo"
-  if _handoff_linked "$top"; then emit handoff unknown "$_HANDOFF_WORKTREE"; return 0; fi
+  _handoff_linked "$top"; rc=$?
+  case "$rc" in
+    0) emit handoff unknown "$_HANDOFF_WORKTREE"; return 0 ;;
+    1) ;;
+    *) emit handoff unknown "$_HANDOFF_WT_UNKNOWN"; return 0 ;;
+  esac
 
   if [ -e "$top/NEXT.md" ]; then notes+=("NEXT.md kept")
   else
@@ -198,7 +207,12 @@ fix_handoff() {
 handoff_commit() {
   local repo="$1" top anchor rc raw p tracked=0 added=0 st msg out kind head files others=()
   top="$(git -C "$repo" rev-parse --show-toplevel)" || die "cannot resolve repo root: $repo"
-  if _handoff_linked "$top"; then emit handoff failed "$_HANDOFF_WORKTREE"; return 0; fi
+  _handoff_linked "$top"; rc=$?
+  case "$rc" in
+    0) emit handoff failed "$_HANDOFF_WORKTREE"; return 0 ;;
+    1) ;;
+    *) emit handoff failed "$_HANDOFF_WT_UNKNOWN"; return 0 ;;
+  esac
   anchor="$(_handoff_anchor "$top")"; rc=$?
   case "$rc" in
     0) emit handoff already "a handoff: commit exists: ${anchor:0:7} ${anchor#* }"; return 0 ;;

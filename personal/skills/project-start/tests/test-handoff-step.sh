@@ -433,6 +433,46 @@ snap "$r" > "$TMPROOT/main.after"; snap "$wt" > "$TMPROOT/wt.after"
 out="$(R fix handoff "$r")"
 [ "$(st "$out")" = fixed ] && [ -f "$r/NEXT.md" ] && ok "main_checkout_with_a_linked_worktree_is_not_refused" || bad "main with wt: $out"
 
+# --- R49: the guard fails CLOSED. A git whose rev-parse fails (or prints nothing) for one of the
+# guard's two flags is "cannot tell": unknown/failed, nothing written, nothing committed, in a linked
+# worktree AND in a main checkout. The shim passes everything else through. --git-common-dir is also
+# asked for by ritual.sh's own repo check (which would reject first), so that variant arms only after
+# the shim has seen --git-dir, which only the guard asks for.
+GSHIM="$TMPROOT/guard shim"; mkdir -p "$GSHIM"
+{ printf '#!/usr/bin/env bash\nREAL_GIT=%q\nARMED=%q\n' "$(command -v git)" "$TMPROOT/guard.armed"; cat <<'WRAP'
+for a in "$@"; do
+  [ "$a" = --git-dir ] && : > "$ARMED"
+  if [ "$a" = "${GUARD_FLAG:-}" ] && { [ "$a" = --git-dir ] || [ -e "$ARMED" ]; }; then
+    case "${GUARD_MODE:-}" in
+      fail) echo "shim: rev-parse $a fails" >&2; exit 128 ;;
+      empty) exit 0 ;;
+    esac
+  fi
+done
+exec "$REAL_GIT" "$@"
+WRAP
+} > "$GSHIM/git"; chmod +x "$GSHIM/git"
+RG() { ( stub_path "$GSHIM"; export GUARD_FLAG="$1" GUARD_MODE="$2"; shift 2; rm -f "$TMPROOT/guard.armed"; bash "$RITUAL" "$@" ); }
+gsnap() { snap "$1"; git -C "$1" rev-list --count HEAD; git -C "$1" log -1 --format=%H; }
+UNK='could not tell whether this is a linked worktree (git rev-parse failed); nothing written'
+for case_ in "--git-dir fail guard_fails_closed_git_dir" "--git-common-dir fail guard_fails_closed_common_dir" "--git-dir empty guard_fails_closed_empty_output"; do
+  set -- $case_; flag="$1"; mode="$2"; name="$3"; good=1; why=""
+  r="$(mkrepo)"; wt="$TMPROOT/g fixtures/$name wt"; mkdir -p "$TMPROOT/g fixtures"
+  git -C "$r" worktree add -q -b "side-$name" "$wt" >/dev/null 2>&1 || { good=0; why="premise: worktree add failed"; }
+  for where in "$wt" "$r"; do
+    cp "$HOUSE_NEXT" "$where/NEXT.md"
+    gsnap "$r" > "$TMPROOT/gm.before"; gsnap "$wt" > "$TMPROOT/gw.before"
+    out="$(RG "$flag" "$mode" fix handoff "$where" --ask q)"
+    if [ "$(st "$out")" != unknown ] || [ "$(det "$out")" != "$UNK" ] || [ "$(jq -c .wrote <<<"$out")" != '[]' ]; then good=0; why="$why fix@$where: $out;"; fi
+    out="$(RG "$flag" "$mode" handoff-commit "$where")"
+    if [ "$(st "$out")" != failed ] || [ "$(det "$out")" != "$UNK" ]; then good=0; why="$why commit@$where: $out;"; fi
+    gsnap "$r" > "$TMPROOT/gm.after"; gsnap "$wt" > "$TMPROOT/gw.after"
+    cmp -s "$TMPROOT/gm.before" "$TMPROOT/gm.after" && cmp -s "$TMPROOT/gw.before" "$TMPROOT/gw.after" || { good=0; why="$why changed after $where;"; }
+    rm -f "$where/NEXT.md"
+  done
+  [ "$good" = 1 ] && ok "$name" || bad "$name: $why"
+done
+
 # --- run from a subdirectory: paths resolve at the repo root
 r="$(mkrepo)"; mkdir -p "$r/sub dir"
 out="$(R fix handoff "$r/sub dir")"
