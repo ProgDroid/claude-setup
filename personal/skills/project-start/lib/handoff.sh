@@ -85,7 +85,9 @@ _handoff_ignored() {
 # Twin: ho_anchor in personal/hooks/handoff-lib.sh carries this subject-only anchor rule; change both together.
 # _handoff_anchor <top> -> prints "<sha> <subject>" of the newest commit whose SUBJECT starts
 # "handoff:" (never --grep, which also matches body lines). Returns 0 found, 1 none (an unborn
-# branch has none), 2 history unreadable (including a HEAD that is neither valid nor unborn).
+# branch has none), 2 history unreadable (including a HEAD that is neither valid nor unborn),
+# 3 none IN REACH: the clone is shallow, so the anchor may lie beyond its cut-off (unknown, never
+# "none"; the hook twin returns the same 3).
 _handoff_anchor() {
   local log
   if ! git -C "$1" rev-parse -q --verify HEAD >/dev/null 2>&1; then
@@ -93,9 +95,17 @@ _handoff_anchor() {
     return 2
   fi
   log="$(git -C "$1" log --format='%H %s' 2>/dev/null)" || return 2
-  log="$(grep -m 1 -E '^[0-9a-f]+ handoff:' <<<"$log")" || return 1
+  log="$(grep -m 1 -E '^[0-9a-f]+ handoff:' <<<"$log")" || {
+    case "$(git -C "$1" rev-parse --is-shallow-repository 2>/dev/null)" in
+      true) return 3 ;;
+      false) return 1 ;;
+      *) return 2 ;;
+    esac
+  }
   printf '%s\n' "$log"
 }
+
+_HANDOFF_SHALLOW="shallow clone: no handoff: commit within reach (run git fetch --unshallow to check)"
 
 _handoff_ignore_note() {
   case "$1" in
@@ -122,6 +132,7 @@ check_handoff() {
   case "$rc" in
     1) miss+=("no handoff: commit") ;;
     2) unk="could not read the history for a handoff: commit" ;;
+    3) unk="$_HANDOFF_SHALLOW" ;;
   esac
   note="$(_handoff_ignore_note "$(_handoff_ignored "$top")")"
   if [ "${#miss[@]}" -gt 0 ]; then emit handoff absent "$(join_by '; ' "${miss[@]}" ${unk:+"$unk"} ${note:+"$note"})"
@@ -217,6 +228,7 @@ handoff_commit() {
   case "$rc" in
     0) emit handoff already "a handoff: commit exists: ${anchor:0:7} ${anchor#* }"; return 0 ;;
     2) emit handoff unknown "could not read the history for a handoff: commit"; return 0 ;;
+    3) emit handoff failed "$_HANDOFF_SHALLOW"; return 0 ;;
   esac
   [ -f "$top/NEXT.md" ] || { emit handoff failed "NEXT.md does not exist; run fix handoff first"; return 0; }
   # --no-renames: a staged rename into NEXT.md also stages a deletion, which must count as other

@@ -473,6 +473,51 @@ for case_ in "--git-dir fail guard_fails_closed_git_dir" "--git-common-dir fail 
   [ "$good" = 1 ] && ok "$name" || bad "$name: $why"
 done
 
+# --- R52: a shallow clone with no handoff: commit in reach is UNKNOWN, not absent
+# shallow_fixture <anchor-depth> -> prints a depth-1 file:// clone of a source whose handoff: commit
+# sits <anchor-depth> commits below HEAD (0 = the anchor is HEAD). All house parts are committed.
+shallow_fixture() {
+  local src dst n="$1" i
+  src="$(mkrepo shallow-src)"; R fix handoff "$src" --ask q >/dev/null
+  git -C "$src" add -A && git -C "$src" commit -q -m 'handoff: first anchor'
+  for ((i = 0; i < n; i++)); do git -C "$src" commit -q --allow-empty -m "chore: later $i"; done
+  dst="$TMPROOT/ritual fixtures/shallow-dst-$RANDOM$RANDOM"
+  git clone -q --depth 1 "file://$src" "$dst" 2>/dev/null || return 1
+  git -C "$dst" config user.email t@example.com; git -C "$dst" config user.name Test; git -C "$dst" config commit.gpgsign false
+  printf '%s\n' "$dst"
+}
+SHALLOW_DETAIL='shallow clone: no handoff: commit within reach (run git fetch --unshallow to check)'
+sh="$(shallow_fixture 2)" && [ "$(git -C "$sh" rev-parse --is-shallow-repository)" = true ] && [ "$(git -C "$sh" rev-list --count HEAD)" = 1 ] \
+  || bad "shallow fixture not shallow depth 1"
+out="$(R check handoff "$sh")"
+[ "$(st "$out")" = unknown ] && [ "$(det "$out")" = "$SHALLOW_DETAIL" ] \
+  && ok "check_shallow_no_anchor_in_reach_is_unknown" || bad "shallow check: $out"
+h1="$(head_of "$sh")"; idx "$sh" > "$TMPROOT/sh.idx.before"
+out="$(R handoff-commit "$sh")"
+idx "$sh" > "$TMPROOT/sh.idx.after"
+[ "$(st "$out")" = failed ] && [ "$(det "$out")" = "$SHALLOW_DETAIL" ] && [ "$(head_of "$sh")" = "$h1" ] \
+  && cmp -s "$TMPROOT/sh.idx.before" "$TMPROOT/sh.idx.after" && [ "$(git -C "$sh" rev-list --count HEAD)" = 1 ] \
+  && ok "handoff_commit_refuses_in_shallow_clone" || bad "shallow commit: $out"
+# a missing part still beats the unknown shallow history
+rm -f "$sh/NEXT.md"; out="$(R check handoff "$sh")"
+[ "$(st "$out")" = absent ] && det "$out" | grep -qF 'NEXT.md missing' && det "$out" | grep -qF "$SHALLOW_DETAIL" \
+  && ok "shallow_clone_missing_part_is_absent_and_names_the_shallow_history" || bad "shallow absent: $out"
+
+# control: a FULL clone of the same shape finds the anchor
+src="$(mkrepo full-src)"; R fix handoff "$src" --ask q >/dev/null
+git -C "$src" add -A && git -C "$src" commit -q -m 'handoff: first anchor'; git -C "$src" commit -q --allow-empty -m 'chore: later'
+full="$TMPROOT/ritual fixtures/full-dst"; git clone -q "file://$src" "$full" 2>/dev/null
+out="$(R check handoff "$full")"; h1="$(head_of "$full")"
+[ "$(git -C "$full" rev-parse --is-shallow-repository)" = false ] && [ "$(st "$out")" = present ] \
+  && [ "$(st "$(R handoff-commit "$full")")" = already ] && [ "$(head_of "$full")" = "$h1" ] \
+  && ok "control_full_clone_finds_the_anchor" || bad "full clone: $out"
+
+# control: a shallow clone whose anchor IS within reach (HEAD) finds it
+sh="$(shallow_fixture 0)" && [ "$(git -C "$sh" rev-parse --is-shallow-repository)" = true ] || bad "shallow-0 fixture"
+out="$(R check handoff "$sh")"; h1="$(head_of "$sh")"
+[ "$(st "$out")" = present ] && [ "$(st "$(R handoff-commit "$sh")")" = already ] && [ "$(head_of "$sh")" = "$h1" ] \
+  && ok "control_shallow_clone_with_anchor_in_reach_finds_it" || bad "shallow in reach: $out"
+
 # --- run from a subdirectory: paths resolve at the repo root
 r="$(mkrepo)"; mkdir -p "$r/sub dir"
 out="$(R fix handoff "$r/sub dir")"
