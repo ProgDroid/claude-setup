@@ -23,6 +23,14 @@ now, I won't return to this much."* For a tool he will run but not revisit, a de
 phase that never ships. Pull the out-of-scope list back in and plan the finished version, rather than
 proposing a phased roadmap he would have to remember to resume. (ds-job-analysis, 2026-10-02)
 
+**A date-gated follow-up is the same failure.** Twice in one session: *"I'd rather not have date
+gated stuff"* and *"settle it as keep today, I don't want date-gated stuff that I will forget."*
+(aegyptvault/dotfiles, 2026-10-17). When something is "blocked until <date>", first look for the
+route that un-gates it today. A live check waiting for a budget reset ran the same afternoon on
+another provider's key, and cost $0.05. When a measurement window is what gates it, score it now on
+the evidence in hand, state how strong that evidence is, and replace the calendar date with an event
+that reopens the decision by itself (e.g. a new `recurred:` date). Never leave him a date to remember.
+
 **Passion projects are the exception: there the scope growth is the risk.** For a project he cares
 about (wickilibrium, a game, 2026-10-06), he named his own stall pattern: *"I put too much baggage
 in them and then get too stuck to finish them"*. Asked to be specific, he pointed to setup and
