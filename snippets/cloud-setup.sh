@@ -81,9 +81,7 @@ context7@claude-plugins-official
 serena@claude-plugins-official
 commit-commands@claude-plugins-official
 claude-md-management@claude-plugins-official
-skill-creator@claude-plugins-official
 security-guidance@claude-plugins-official
-code-simplifier@claude-plugins-official
 frontend-design@claude-plugins-official
 "
 
