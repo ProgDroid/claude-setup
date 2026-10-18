@@ -8,7 +8,36 @@
 //   defaults    packages/opencode/src/agent/agent.ts:119-135 (whitelisted dirs omitted)
 //   build/plan  packages/opencode/src/agent/agent.ts:138-177 (built-ins, then the user ruleset)
 //   schema      packages/core/src/v1/config/permission.ts:5-35, as a plain validator
+//   commandText SessionPrompt.command (packages/opencode/src/session/prompt.ts), its template
+//               steps up to the trim, read from the 1.19.0 binary's bundle; the `!`...`` shell
+//               step is left out (tests never run a shell)
 import path from "node:path";
+
+const Gy = /(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi;
+const Ca = /\$(\d+)/g;
+const Xy = /^["']|["']$/g;
+// The text OC 1.19.0 renders from a command template and its argument string, as handed to
+// command.execute.before.
+export function commandText(C, args) {
+  const Q = (args.match(Gy) ?? []).map((A) => A.replace(Xy, ""));
+  const X = C.match(Ca) ?? [];
+  let j = 0;
+  for (const A of X) {
+    const I = Number(A.slice(1));
+    if (I > j) j = I;
+  }
+  const ae = C.replaceAll(Ca, (A, I) => {
+    const le = Number(I);
+    const he = le - 1;
+    if (he >= Q.length) return "";
+    if (le === j) return Q.slice(he).join(" ");
+    return Q[he];
+  });
+  const Ge = C.includes("$ARGUMENTS");
+  let se = ae.replaceAll("$ARGUMENTS", args);
+  if (X.length === 0 && !Ge && args.trim()) se = se + "\n\n" + args;
+  return se.trim();
+}
 
 export function match(input, pattern) {
   const normalized = input.replaceAll("\\", "/");

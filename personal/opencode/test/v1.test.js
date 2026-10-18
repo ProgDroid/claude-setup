@@ -9,7 +9,9 @@ import { projectKey } from "../core/mcp.js";
 import { UNTRUSTED_NOTE } from "../core/settings.js";
 import { PATCH_BLOCK_REASON } from "../core/toolmap.js";
 import { parseChangelog, hookDigest, knownSet } from "../core/releasenotes.js";
-import { evaluate, fromConfig, defaults, planRuleset } from "./oc-matcher.js";
+import { evaluate, fromConfig, defaults, planRuleset, commandText } from "./oc-matcher.js";
+import { oracle } from "./cc-oracle.js";
+import { SHELL_NOTE } from "../core/agents.js";
 import * as adapter from "../adapter.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -391,6 +393,157 @@ describe("tool.execute.after", () => {
     await v1["tool.execute.after"]({ tool: "bash", sessionID: "s", callID: "c9", args: { command: "git commit -m q" } }, out);
     expect(out.output).toContain("PRE-CTX");
     expect(out.output).toContain("POST-CTX");
+  });
+});
+
+// clean_gone.md: commit-commands plugin (claude-plugins-official), copied byte for byte; Apache-2.0,
+// see THIRD_PARTY_NOTICES. Its `awk '{print $1}'` is the case OC 1.19.0 rendered as `awk '{print }'`.
+const CLEAN_GONE = fs.readFileSync(path.join(here, "fixtures", "commit-commands", "clean_gone.md"), "utf8");
+const bodyOf = (md) => md.replace(/^---\n[\s\S]*?\n---\n/, "");
+
+describe("command.execute.before", () => {
+  const CG = "commit-commands:clean_gone";
+  // A harness whose CC home also has the commit-commands plugin enabled, with clean_gone plus `extra`
+  // commands. Returns the plugin root, the OC config the adapter produced and a `run` that feeds the
+  // hook what OC 1.19.0 would: input {command, sessionID, arguments}, output {parts} holding OC's own
+  // rendered text (oc-matcher commandText) unless `parts` is given.
+  async function setup({ extra = {}, ocVersion = () => "1.19.0" } = {}) {
+    const H = harness({
+      settings: {
+        hooks: HOOKS,
+        enabledPlugins: { "semgrep@claude-plugins-official": true, "superpowers@superpowers-dev": true, "commit-commands@claude-plugins-official": true },
+      },
+    });
+    const root = path.join(H.h.home, ".claude", "plugins", "cache", "official", "commit-commands", "1.0.0");
+    const ip = path.join(H.h.home, ".claude", "plugins", "installed_plugins.json");
+    const installed = JSON.parse(fs.readFileSync(ip, "utf8"));
+    installed.plugins["commit-commands@claude-plugins-official"] = [{ scope: "user", version: "1.0.0", installPath: root }];
+    H.h.w(ip, installed);
+    H.h.w(path.join(root, ".claude-plugin", "plugin.json"), { name: "commit-commands" });
+    H.h.w(path.join(root, "commands", "clean_gone.md"), CLEAN_GONE);
+    for (const [f, body] of Object.entries(extra)) H.h.w(path.join(root, "commands", f), body);
+    const v1 = await H.make({ ocVersion });
+    const cfg = {};
+    await v1.config(cfg);
+    const run = async (command, args, parts) => {
+      const ps = parts ?? [{ id: "prt_t", type: "text", text: commandText(cfg.command[command].template, args) }];
+      const output = { parts: ps };
+      await v1["command.execute.before"]({ command, sessionID: "ses_c", arguments: args }, output);
+      return { output, parts: ps };
+    };
+    return { H, v1, cfg, root, run };
+  }
+  // CC's text for a command body (the oracle), then the adapter's ${CLAUDE_*} pass; OC trims.
+  const cc = (body, args, root) => oracle.ccCommand(body, args).replaceAll("${CLAUDE_PLUGIN_ROOT}", root).trim();
+  const awk = (t) => t.split("\n").filter((l) => l.includes("awk '{print"));
+
+  test.skipIf(!oracle.ok)("T1 clean_gone's real body: '' and 'x' keep awk '{print $1}', 'x y' gives awk '{print y}'; each equals the CC oracle", async () => {
+    const { run, root, cfg } = await setup();
+    for (const [args, want] of [["", "$1"], ["x", "$1"], ["x y", "y"]]) {
+      const { parts } = await run(CG, args);
+      expect(parts[0].text).toBe(cc(bodyOf(CLEAN_GONE), args, root));
+      const lines = awk(parts[0].text);
+      expect(lines).toHaveLength(2);
+      for (const l of lines) expect(l).toContain(`awk '{print ${want}}'`);
+    }
+    // control: OC's own render, which the hook replaced, is the broken one
+    expect(awk(commandText(cfg.command[CG].template, ""))[0]).toContain("awk '{print }'");
+  });
+
+  test.skipIf(!oracle.ok)("T2 one argument: $0 is filled and $1 stays literal, as the oracle", async () => {
+    const body = "Compare $0 with $1 before merging.";
+    const { run, root } = await setup({ extra: { "cmp.md": `---\ndescription: d\n---\n${body}` } });
+    const { parts } = await run("commit-commands:cmp", "main");
+    expect(parts[0].text).toBe("Compare main with $1 before merging.");
+    expect(parts[0].text).toBe(cc(body, "main", root));
+  });
+
+  test.skipIf(!oracle.ok)("T3 $ARGUMENTS, $ARGUMENTS[N], \\$1, $1abc and ${CLAUDE_PLUGIN_ROOT} render as the oracle", async () => {
+    const body = "all=$ARGUMENTS first=$ARGUMENTS[0] third=$ARGUMENTS[2] second=$1 esc=\\$1 word=$1abc root=${CLAUDE_PLUGIN_ROOT}/bin";
+    const { run, root } = await setup({ extra: { "mix.md": body } });
+    const { parts } = await run("commit-commands:mix", "a b");
+    expect(parts[0].text).toBe(`all=a b first=a third=$ARGUMENTS[2] second=b esc=$1 word=$1abc root=${root}/bin`);
+    expect(parts[0].text).toBe(cc(body, "a b", root));
+  });
+
+  test("T4 a body with an OC shell block and $N is left as OC rendered it, and reported unknown", async () => {
+    const { run, H, v1 } = await setup({ extra: { "sh.md": "Branch: !`git branch --show-current`\nTarget: $0" } });
+    const { parts } = await run("commit-commands:sh", "main", [{ type: "text", text: "Branch: feat\nTarget:" }]);
+    expect(parts[0].text).toBe("Branch: feat\nTarget:");
+    await say(v1, "ses_c");
+    const lines = H.logs.filter((l) => l.startsWith("  parity [unknown] command:commit-commands:sh "));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(SHELL_NOTE);
+  });
+
+  test.skipIf(!oracle.ok)("T5 the rendered text part is corrected IN PLACE: OC keeps its own parts array", async () => {
+    const { run, cfg, root } = await setup();
+    const part = { id: "prt_t", type: "text", text: commandText(cfg.command[CG].template, "") };
+    const file = { id: "prt_f", type: "file", url: "file:///x", filename: "x", mime: "text/plain" };
+    const parts = [part, file];
+    expect(part.text).not.toBe(cc(bodyOf(CLEAN_GONE), "", root)); // OC's render differs, so the check discriminates
+    const { output } = await run(CG, "", parts);
+    expect(output.parts).toBe(parts);
+    expect(parts[0]).toBe(part);
+    expect(part.text).toBe(cc(bodyOf(CLEAN_GONE), "", root));
+    expect(parts[1]).toEqual({ id: "prt_f", type: "file", url: "file:///x", filename: "x", mime: "text/plain" });
+  });
+
+  test.skipIf(!oracle.ok)("T6 a subtask part: its .prompt is corrected in place", async () => {
+    const { run, cfg, root } = await setup();
+    // "x", not "x y": for "x y" OC's own render of clean_gone already equals CC's, so it cannot discriminate
+    const sub = { type: "subtask", agent: "general", description: "", command: CG, prompt: commandText(cfg.command[CG].template, "x") };
+    expect(sub.prompt).not.toBe(cc(bodyOf(CLEAN_GONE), "x", root));
+    const parts = [sub];
+    await run(CG, "x", parts);
+    expect(parts[0]).toBe(sub);
+    expect(sub.prompt).toBe(cc(bodyOf(CLEAN_GONE), "x", root));
+    expect("text" in sub).toBe(false);
+  });
+
+  test("T7 a body with no $ passes through; a command the adapter did not bridge is untouched", async () => {
+    const { run } = await setup({ extra: { "plain.md": "Just tidy up." } });
+    expect((await run("commit-commands:plain", "x", [{ type: "text", text: "Just tidy up.\n\nx" }])).parts[0].text).toBe("Just tidy up.\n\nx");
+    expect((await run("my-oc-command", "a b", [{ type: "text", text: "keep $1 and \\$2 as OC gave them" }])).parts[0].text).toBe("keep $1 and \\$2 as OC gave them");
+  });
+
+  test("T8 OC outside 1.19.x, or unknown: no rewrite; reported once; the per-command unknowns still show", async () => {
+    for (const v of ["1.20.0", null]) {
+      const { run, cfg, H, v1 } = await setup({ ocVersion: () => v });
+      const oc = commandText(cfg.command[CG].template, "");
+      expect((await run(CG, "")).parts[0].text).toBe(oc);
+      const line = parityOf(await say(v1, "ses_c"))[0].text;
+      expect(line).toContain(`command $N uncorrected (OC ${v ?? "?"})`);
+      expect(H.logs.filter((l) => l.startsWith(`  parity [unknown] command:${CG} `))).toHaveLength(1);
+      expect(H.logs.some((l) => l.startsWith("  parity [problem]") && l.includes(CG))).toBe(true);
+      // once: the next session does not repeat it
+      const again = parityOf(await say(await H.make({ ocVersion: () => v }), "ses_d"));
+      expect(again.map((p) => p.text).join("")).not.toContain("uncorrected");
+    }
+  });
+
+  test("T9 on OC 1.19.x the parity line no longer reports clean_gone (the hook resolves it)", async () => {
+    const { H, v1 } = await setup();
+    const line = parityOf(await say(v1, "ses_c"))[0].text;
+    expect(line).not.toContain("clean_gone");
+    expect(line).not.toContain("uncorrected");
+    expect(H.logs.some((l) => l.includes(CG))).toBe(false);
+    // control: unknowns are still delivered, so the probe can see them
+    expect(H.logs.some((l) => l.startsWith("  parity [unknown]") && l.includes("brandNewSetting"))).toBe(true);
+  });
+
+  test("T10 an internal error is logged and counted, never thrown (OC fails the command on a throw)", async () => {
+    const { v1, H } = await setup();
+    const output = {
+      get parts() {
+        throw new Error("boom");
+      },
+    };
+    await v1["command.execute.before"]({ command: CG, sessionID: "ses_c", arguments: "" }, output);
+    await v1["command.execute.before"]({ command: CG, sessionID: "ses_c", arguments: "" }, { parts: [] });
+    expect(H.logs.filter((l) => l.startsWith("command.execute.before: "))).toHaveLength(2);
+    const line = parityOf(await say(v1, "ses_c"))[0].text;
+    expect(line).toContain("hook failures (adapter:command.execute.before x2)");
   });
 });
 

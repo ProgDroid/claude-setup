@@ -119,6 +119,20 @@ Re-check these when deciding. Any one of 1-3 makes a move worth re-evaluating, a
 - **A command's `allowed-tools` is not carried.** In CC it pre-approves those tools while the
   command runs; OC has no per-command grant, so they prompt per the session's permissions instead.
   Stricter only, so it is documented here rather than reported in the parity line.
+- **Command arguments get CC's rules on OC 1.19.x only.** OC numbers `$N` from 1, blanks an
+  index with no argument and gives the highest index the rest of the arguments; CC numbers from 0
+  and leaves an unfilled index literal, so a body such as commit-commands' `awk '{print $1}'` only
+  survives under CC's rules. The template OC receives is still remapped; then the
+  `command.execute.before` hook replaces OC's rendered text, in place, with the CC body rendered by
+  CC 2.1.302's rules (`$N`, `$ARGUMENTS[N]`, `$ARGUMENTS`, `\$` escapes, the `ARGUMENTS:` line CC
+  appends when nothing was filled, `!` defused in values). Limits: a body with an OC shell block
+  (`` !`cmd` ``) and `$N` keeps OC's rendering, because OC runs the block before the hook, and is
+  reported; on any OC outside 1.19.x, or when the version is unknown, the hook changes nothing
+  (it relies on OC firing it after rendering and reusing its own parts array), and the parity line
+  says so once per version; arguments are split like a shell for plain words and quotes, but shell
+  syntax in an argument (operators, `$VAR`, `VAR=x`) may split differently from CC's bash parse;
+  named arguments (`arguments:` frontmatter) are not substituted (reported as before); and the
+  `@file` attachments OC resolved from its own rendering are kept as they are.
 - **No PowerShell tool** on the OC side, so CC hooks and rules that target it have no counterpart.
 - **OC auto mode has no classifier.** CC's auto-mode behaviour is not reproduced.
 - **A hook `ask` blocks.** OC cannot prompt from a hook, so an `ask` decision denies.
