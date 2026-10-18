@@ -221,6 +221,11 @@ empty "verdict can_continue: nothing" "$out"
 P="$(mktemp -d)"; slugrepo "$P" "https://github.com/someone/else.git"; mkstate "$P" wait
 out="$(run_hook "$P/proj")"
 empty "verdict wait for ANOTHER slug: nothing" "$out"
+# Slug case: GitHub owner/repo is case-insensitive, so the tsv slug and the origin may differ in case.
+P="$(mktemp -d)"; slugrepo "$P" "https://github.com/progdroid/myrepo.git"; mkstate "$P" wait
+printf '# slug\tid\tverdict\treasons\nProgDroid/MyRepo\tabc\twait\tPC has 3 unpushed commits\n' > "$P/switchboard-state/verdicts.tsv"
+out="$(run_hook "$P/proj")"
+has "verdict wait: slug case differs (tsv ProgDroid/MyRepo, origin progdroid/myrepo)" "$out" "switchboard: wait (PC has 3 unpushed commits)"
 P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"
 out="$(run_hook "$P/proj")"
 empty "no switchboard-state sibling: nothing" "$out"

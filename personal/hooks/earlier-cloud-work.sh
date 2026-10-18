@@ -82,7 +82,7 @@ switchboard_line() {
   slug="$(printf '%s\n' "$url" | sed -e 's#/*$##' -e 's/\.git$//' -e 's#/*$##' \
     | awk -F'[/:]' 'NF >= 2 { print $(NF-1) "/" $NF }')"
   [ -n "$slug" ] || return 0
-  reasons="$(awk -F'\t' -v s="$slug" '$1 == s && $3 == "wait" { print $4; exit }' "$sib/verdicts.tsv")"
+  reasons="$(awk -F'\t' -v s="$slug" 'tolower($1) == tolower(s) && $3 == "wait" { print $4; exit }' "$sib/verdicts.tsv")"
   [ -n "$reasons" ] || return 0
   date="$(git -C "$sib" log -1 --date=short --format=%cd 2>/dev/null)"
   echo "switchboard: wait ($reasons), as of ${date:-an unknown date}."
