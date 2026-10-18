@@ -29,6 +29,18 @@ test.skipIf(!oracle.ok)("renderCcArgs equals CC's ZFe on every body x plain-word
   expect(n).toBe(BODIES.length * ARGS.length);
 });
 
+// Always runs: the oracle's own outputs for these inputs, recorded from CC 2.1.302, so the port is
+// pinned even where the CC binary is absent.
+test("renderCcArgs: CC 2.1.302's outputs, stated literally", () => {
+  const body = "awk '{print $1}' first $0 [$ARGUMENTS[1]] \\$1 $1abc all=$ARGUMENTS";
+  expect(agents.renderCcArgs?.(body, "")).toBe("awk '{print $1}' first $0 [$ARGUMENTS[1]] $1 $1abc all=");
+  expect(agents.renderCcArgs?.(body, "x")).toBe("awk '{print $1}' first x [$ARGUMENTS[1]] $1 $1abc all=x");
+  expect(agents.renderCcArgs?.(body, "x y")).toBe("awk '{print y}' first x [y] $1 $1abc all=x y");
+  expect(agents.renderCcArgs?.("no placeholders", "x")).toBe("no placeholders\n\nARGUMENTS: x");
+  expect(agents.renderCcArgs?.("v $0", "!x")).toBe("v \\!x");
+  expect(agents.renderCcArgs?.("v $0", undefined)).toBe("v $0");
+});
+
 test.skipIf(!oracle.ok)("the oracle is live: it fills $0, keeps an unfilled $1 and appends ARGUMENTS when nothing was filled", () => {
   expect(oracle.ccCommand("$0|$1", "a")).toBe("a|$1");
   expect(oracle.ccCommand("none", "a")).toBe("none\n\nARGUMENTS: a");

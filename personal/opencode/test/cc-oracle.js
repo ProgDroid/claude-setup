@@ -10,8 +10,9 @@
 //      (plugin and user commands alike: ZFe(body, args, true, nce(frontmatter.arguments), jP)).
 //   B  from `lmr=4000000,Abo=64,Obo=64,` through the end of ZFe: the constants, `mio` (the
 //      argument splitter), `nce`, `Vcs` and `ZFe` itself, as they sit in the bundle.
-// SHA-256 over A + "\n" + B is pinned below; a different CC build yields `ok: false` and the
-// oracle tests skip with the reason rather than compare against something else.
+// SHA-256 over A + "\n" + B is pinned below; a different CC build yields `ok: false`, and only the
+// assertions that compare against the oracle skip. Each test also states its expected text
+// literally, and those assertions always run.
 //
 // Not from the binary, supplied here:
 //   mw  CC's tree-sitter bash parse returning the first command's argv; it cannot be extracted as
@@ -21,6 +22,7 @@
 //   pT  the error class thrown past 4,000,000 characters; La, a regex escape reached only with
 //       named arguments, which no caller here passes.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 
@@ -31,9 +33,13 @@ const A_TAIL = ".replace(/(^|";
 const B_START = "lmr=4000000,Abo=64,Obo=64,";
 const B_END = 'return e.replaceAll(E1,"$").replaceAll(B9,"")}';
 
-// CC_ORACLE_BIN, else the first `claude.exe` / `claude` on PATH that is a real binary (not a shim).
+// CC_ORACLE_BIN alone when set (so a test run can force the oracle off); else the pinned version in
+// CC's own versions directory, which keeps old releases after an auto-update; else the first
+// `claude.exe` / `claude` on PATH that is a real binary (not a shim).
 function findBinary(env = process.env) {
   if (env.CC_ORACLE_BIN) return env.CC_ORACLE_BIN;
+  const pinned = path.join(os.homedir(), ".local", "share", "claude", "versions", CC_VERSION);
+  if (fs.existsSync(pinned)) return pinned;
   const key = Object.keys(env).find((k) => k.toLowerCase() === "path") ?? "PATH";
   for (const dir of String(env[key] ?? "").split(path.delimiter).filter(Boolean)) {
     for (const name of ["claude.exe", "claude"]) {

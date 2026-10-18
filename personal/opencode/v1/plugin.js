@@ -814,16 +814,17 @@ export async function createV1(ctx = {}, deps = {}) {
     // template with its own rules first (1-based, an unfilled index blanked, the highest taking the
     // rest), then fires this hook with output = { parts } and keeps using that same parts array, so
     // the rendered text (a subtask's prompt) is replaced IN PLACE on the part OC holds; output.parts
-    // is never reassigned. Only bridged commands whose raw body has an index ($N, $ARGUMENTS[N]);
-    // not a body with an OC shell block (OC ran it before this hook; reported at translation time);
-    // not on an OC outside ARGFIX_OC (reported in the parity line). Never throws: OC fails the
-    // command on a plugin throw, so an error leaves OC's render and is logged and counted.
+    // is never reassigned. Every bridged command, so an index-free body gets CC's "ARGUMENTS:" line
+    // and `\$ARGUMENTS` escape too; never one OC did not get from the adapter; not a body with an OC
+    // shell block (OC ran it before this hook; reported at translation time when it has $N); not on
+    // an OC outside ARGFIX_OC (reported in the parity line). Never throws: OC fails the command on
+    // a plugin throw, so an error leaves OC's render and is logged and counted.
     "command.execute.before": async (input, output) => {
       try {
         const name = input?.command;
         const sources = isObj(inv.commandSource) ? inv.commandSource : {};
         const src = typeof name === "string" && Object.hasOwn(sources, name) ? sources[name] : null;
-        if (!src?.indexed || src.shell) return;
+        if (!src || src.shell) return;
         const ocv = await ocVersionP;
         if (!argFixOn(ocv)) {
           log(`command.execute.before: OC ${ocv ?? "version unknown"} is outside ${ARGFIX_OC}; ${name} left as OC rendered it`);

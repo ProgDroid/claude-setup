@@ -436,34 +436,42 @@ describe("command.execute.before", () => {
   // CC's text for a command body (the oracle), then the adapter's ${CLAUDE_*} pass; OC trims.
   const cc = (body, args, root) => oracle.ccCommand(body, args).replaceAll("${CLAUDE_PLUGIN_ROOT}", root).trim();
   const awk = (t) => t.split("\n").filter((l) => l.includes("awk '{print"));
+  // Oracle equality is checked only where the pinned CC binary is present; every test also states
+  // its expected text literally, and those assertions always run.
+  const sameAsCc = (text, body, args, root) => {
+    if (oracle.ok) expect(text).toBe(cc(body, args, root));
+  };
+  const awkIs = (text, want) => {
+    expect(awk(text)).toHaveLength(2);
+    for (const l of awk(text)) expect(l).toContain(`awk '{print ${want}}'`);
+  };
 
-  test.skipIf(!oracle.ok)("T1 clean_gone's real body: '' and 'x' keep awk '{print $1}', 'x y' gives awk '{print y}'; each equals the CC oracle", async () => {
+  test("T1 clean_gone's real body: '' and 'x' keep awk '{print $1}', 'x y' gives awk '{print y}'; each equals the CC oracle", async () => {
     const { run, root, cfg } = await setup();
-    for (const [args, want] of [["", "$1"], ["x", "$1"], ["x y", "y"]]) {
+    for (const [args, want, tail] of [["", "$1", "no cleanup was needed."], ["x", "$1", "\n\nARGUMENTS: x"], ["x y", "y", "no cleanup was needed."]]) {
       const { parts } = await run(CG, args);
-      expect(parts[0].text).toBe(cc(bodyOf(CLEAN_GONE), args, root));
-      const lines = awk(parts[0].text);
-      expect(lines).toHaveLength(2);
-      for (const l of lines) expect(l).toContain(`awk '{print ${want}}'`);
+      awkIs(parts[0].text, want);
+      expect(parts[0].text.endsWith(tail)).toBe(true);
+      sameAsCc(parts[0].text, bodyOf(CLEAN_GONE), args, root);
     }
     // control: OC's own render, which the hook replaced, is the broken one
     expect(awk(commandText(cfg.command[CG].template, ""))[0]).toContain("awk '{print }'");
   });
 
-  test.skipIf(!oracle.ok)("T2 one argument: $0 is filled and $1 stays literal, as the oracle", async () => {
+  test("T2 one argument: $0 is filled and $1 stays literal, as the oracle", async () => {
     const body = "Compare $0 with $1 before merging.";
     const { run, root } = await setup({ extra: { "cmp.md": `---\ndescription: d\n---\n${body}` } });
     const { parts } = await run("commit-commands:cmp", "main");
     expect(parts[0].text).toBe("Compare main with $1 before merging.");
-    expect(parts[0].text).toBe(cc(body, "main", root));
+    sameAsCc(parts[0].text, body, "main", root);
   });
 
-  test.skipIf(!oracle.ok)("T3 $ARGUMENTS, $ARGUMENTS[N], \\$1, $1abc and ${CLAUDE_PLUGIN_ROOT} render as the oracle", async () => {
+  test("T3 $ARGUMENTS, $ARGUMENTS[N], \\$1, $1abc and ${CLAUDE_PLUGIN_ROOT} render as the oracle", async () => {
     const body = "all=$ARGUMENTS first=$ARGUMENTS[0] third=$ARGUMENTS[2] second=$1 esc=\\$1 word=$1abc root=${CLAUDE_PLUGIN_ROOT}/bin";
     const { run, root } = await setup({ extra: { "mix.md": body } });
     const { parts } = await run("commit-commands:mix", "a b");
     expect(parts[0].text).toBe(`all=a b first=a third=$ARGUMENTS[2] second=b esc=$1 word=$1abc root=${root}/bin`);
-    expect(parts[0].text).toBe(cc(body, "a b", root));
+    sameAsCc(parts[0].text, body, "a b", root);
   });
 
   test("T4 a body with an OC shell block and $N is left as OC rendered it, and reported unknown", async () => {
@@ -476,46 +484,61 @@ describe("command.execute.before", () => {
     expect(lines[0]).toContain(SHELL_NOTE);
   });
 
-  test.skipIf(!oracle.ok)("T5 the rendered text part is corrected IN PLACE: OC keeps its own parts array", async () => {
+  test("T5 the rendered text part is corrected IN PLACE: OC keeps its own parts array", async () => {
     const { run, cfg, root } = await setup();
     const part = { id: "prt_t", type: "text", text: commandText(cfg.command[CG].template, "") };
     const file = { id: "prt_f", type: "file", url: "file:///x", filename: "x", mime: "text/plain" };
     const parts = [part, file];
-    expect(part.text).not.toBe(cc(bodyOf(CLEAN_GONE), "", root)); // OC's render differs, so the check discriminates
+    awkIs(part.text, ""); // OC's render is the broken one, so the check discriminates
     const { output } = await run(CG, "", parts);
     expect(output.parts).toBe(parts);
     expect(parts[0]).toBe(part);
-    expect(part.text).toBe(cc(bodyOf(CLEAN_GONE), "", root));
+    awkIs(part.text, "$1");
+    sameAsCc(part.text, bodyOf(CLEAN_GONE), "", root);
     expect(parts[1]).toEqual({ id: "prt_f", type: "file", url: "file:///x", filename: "x", mime: "text/plain" });
   });
 
-  test.skipIf(!oracle.ok)("T6 a subtask part: its .prompt is corrected in place", async () => {
+  test("T6 a subtask part: its .prompt is corrected in place", async () => {
     const { run, cfg, root } = await setup();
     // "x", not "x y": for "x y" OC's own render of clean_gone already equals CC's, so it cannot discriminate
     const sub = { type: "subtask", agent: "general", description: "", command: CG, prompt: commandText(cfg.command[CG].template, "x") };
-    expect(sub.prompt).not.toBe(cc(bodyOf(CLEAN_GONE), "x", root));
+    awkIs(sub.prompt, "");
     const parts = [sub];
     await run(CG, "x", parts);
     expect(parts[0]).toBe(sub);
-    expect(sub.prompt).toBe(cc(bodyOf(CLEAN_GONE), "x", root));
+    awkIs(sub.prompt, "$1");
+    expect(sub.prompt.endsWith("\n\nARGUMENTS: x")).toBe(true);
+    sameAsCc(sub.prompt, bodyOf(CLEAN_GONE), "x", root);
     expect("text" in sub).toBe(false);
   });
 
-  test("T7 a body with no $ passes through; a command the adapter did not bridge is untouched", async () => {
-    const { run } = await setup({ extra: { "plain.md": "Just tidy up." } });
-    expect((await run("commit-commands:plain", "x", [{ type: "text", text: "Just tidy up.\n\nx" }])).parts[0].text).toBe("Just tidy up.\n\nx");
+  test("T7 an index-free body gets CC's rules too (ARGUMENTS: line, \\$ARGUMENTS); a command the adapter did not bridge is untouched", async () => {
+    const esc = "Echo \\$ARGUMENTS literally, then $ARGUMENTS.";
+    const { run, root } = await setup({ extra: { "plain.md": "Just tidy up.", "esc.md": esc } });
+    // OC appends the bare arguments; CC appends an "ARGUMENTS:" line
+    expect((await run("commit-commands:plain", "x", [{ type: "text", text: "Just tidy up.\n\nx" }])).parts[0].text).toBe("Just tidy up.\n\nARGUMENTS: x");
+    expect((await run("commit-commands:plain", "")).parts[0].text).toBe("Just tidy up.");
+    // OC substitutes after the backslash; CC keeps the escaped placeholder literal
+    expect(commandText(esc, "a b")).toBe("Echo \\a b literally, then a b."); // control: OC's own render
+    const fixed = (await run("commit-commands:esc", "a b")).parts[0].text;
+    expect(fixed).toBe("Echo $ARGUMENTS literally, then a b.");
+    sameAsCc(fixed, esc, "a b", root);
     expect((await run("my-oc-command", "a b", [{ type: "text", text: "keep $1 and \\$2 as OC gave them" }])).parts[0].text).toBe("keep $1 and \\$2 as OC gave them");
   });
 
   test("T8 OC outside 1.19.x, or unknown: no rewrite; reported once; the per-command unknowns still show", async () => {
     for (const v of ["1.20.0", null]) {
-      const { run, cfg, H, v1 } = await setup({ ocVersion: () => v });
+      const { run, cfg, H, v1 } = await setup({ ocVersion: () => v, extra: { "sh.md": "Branch: !`git branch --show-current`\nTarget: $0" } });
       const oc = commandText(cfg.command[CG].template, "");
       expect((await run(CG, "")).parts[0].text).toBe(oc);
       const line = parityOf(await say(v1, "ses_c"))[0].text;
       expect(line).toContain(`command $N uncorrected (OC ${v ?? "?"})`);
       expect(H.logs.filter((l) => l.startsWith(`  parity [unknown] command:${CG} `))).toHaveLength(1);
-      expect(H.logs.some((l) => l.startsWith("  parity [problem]") && l.includes(CG))).toBe(true);
+      const problem = H.logs.filter((l) => l.startsWith("  parity [problem]") && l.includes("is outside the verified"));
+      expect(problem).toHaveLength(1);
+      expect(problem[0]).toContain(CG);
+      // a shell-block command is not in the list: the hook never corrects it, on any version
+      expect(problem[0]).not.toContain("commit-commands:sh");
       // once: the next session does not repeat it
       const again = parityOf(await say(await H.make({ ocVersion: () => v }), "ses_d"));
       expect(again.map((p) => p.text).join("")).not.toContain("uncorrected");

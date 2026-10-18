@@ -122,17 +122,27 @@ Re-check these when deciding. Any one of 1-3 makes a move worth re-evaluating, a
 - **Command arguments get CC's rules on OC 1.19.x only.** OC numbers `$N` from 1, blanks an
   index with no argument and gives the highest index the rest of the arguments; CC numbers from 0
   and leaves an unfilled index literal, so a body such as commit-commands' `awk '{print $1}'` only
-  survives under CC's rules. The template OC receives is still remapped; then the
-  `command.execute.before` hook replaces OC's rendered text, in place, with the CC body rendered by
-  CC 2.1.302's rules (`$N`, `$ARGUMENTS[N]`, `$ARGUMENTS`, `\$` escapes, the `ARGUMENTS:` line CC
-  appends when nothing was filled, `!` defused in values). Limits: a body with an OC shell block
-  (`` !`cmd` ``) and `$N` keeps OC's rendering, because OC runs the block before the hook, and is
-  reported; on any OC outside 1.19.x, or when the version is unknown, the hook changes nothing
-  (it relies on OC firing it after rendering and reusing its own parts array), and the parity line
-  says so once per version; arguments are split like a shell for plain words and quotes, but shell
-  syntax in an argument (operators, `$VAR`, `VAR=x`) may split differently from CC's bash parse;
-  named arguments (`arguments:` frontmatter) are not substituted (reported as before); and the
-  `@file` attachments OC resolved from its own rendering are kept as they are.
+  survives under CC's rules. The template OC receives is still remapped; then, for every bridged
+  command, the `command.execute.before` hook replaces OC's rendered text, in place, with the CC body
+  rendered by CC 2.1.302's rules: `$N`, `$ARGUMENTS[N]`, `$ARGUMENTS`, `\$` escapes, and the
+  `ARGUMENTS: <args>` line CC appends when nothing was filled (OC appends the bare arguments).
+  **Not run live:** how OC fires this hook (after rendering, with the parts array it then sends)
+  was read from the 1.19.0 bundle (`docs/v1-capabilities.md` E20), not exercised in a live OC run.
+  Limits:
+  - A body with an OC shell block (`` !`cmd` ``) keeps OC's rendering entirely, because OC runs
+    the block before the hook. It is reported only when it has `$N`; its other differences (the
+    appended line, `\$ARGUMENTS`) are not.
+  - `!` in an argument is defused as CC does (`!x` becomes `\!x`), but that only changes the text
+    the model reads: OC 1.19 runs every `` !`cmd` `` in the rendered text, arguments included,
+    before the hook, and nothing here stops that.
+  - On any OC outside 1.19.x, or when the version is unknown, the hook changes nothing (it relies
+    on the two facts above), and the parity line says so once per version, naming the commands
+    with `$N` or `$ARGUMENTS[N]`.
+  - Arguments are split like a shell for plain words and quotes. CC parses them with a bash
+    parser and keeps only the first command's words, so shell syntax splits differently: `a | b`
+    is `["a"]` in CC and `["a", "|", "b"]` here, and `$VAR` or `VAR=x` differ too.
+  - Named arguments (`arguments:` frontmatter) are not substituted (reported as before), and the
+    `@file` attachments OC resolved from its own rendering are kept as they are.
 - **No PowerShell tool** on the OC side, so CC hooks and rules that target it have no counterpart.
 - **OC auto mode has no classifier.** CC's auto-mode behaviour is not reproduced.
 - **A hook `ask` blocks.** OC cannot prompt from a hook, so an `ask` decision denies.
