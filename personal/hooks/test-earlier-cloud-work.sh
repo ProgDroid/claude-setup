@@ -207,13 +207,13 @@ slugrepo() { # slugrepo <parent> <remote url>: a clean proj whose origin URL is 
 }
 P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"; mkstate "$P" wait
 out="$(run_hook "$P/proj")"
-has "verdict wait (https .git url): switchboard line" "$out" "switchboard: wait (PC has 3 unpushed commits), as of 2026-10-16."
+has "verdict wait (https .git url): switchboard line" "$out" "switchboard: o/r must wait for the PC (PC has 3 unpushed commits), as of 2026-10-16."
 # Every origin URL shape must resolve to the slug o/r (I1: cloud origins may be a local proxy)
 for url in "git@github.com:o/r.git" "https://github.com/o/r" "https://github.com/o/r/" \
            "http://local_proxy@127.0.0.1:43210/git/o/r" "http://local_proxy@127.0.0.1:43210/git/o/r.git/"; do
   P="$(mktemp -d)"; slugrepo "$P" "$url"; mkstate "$P" wait
   out="$(run_hook "$P/proj")"
-  has "verdict wait finds o/r for origin $url" "$out" "switchboard: wait (PC has 3 unpushed commits)"
+  has "verdict wait finds o/r for origin $url" "$out" "switchboard: o/r must wait for the PC (PC has 3 unpushed commits)"
 done
 P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r"; mkstate "$P" can_continue
 out="$(run_hook "$P/proj")"
@@ -225,7 +225,13 @@ empty "verdict wait for ANOTHER slug: nothing" "$out"
 P="$(mktemp -d)"; slugrepo "$P" "https://github.com/progdroid/myrepo.git"; mkstate "$P" wait
 printf '# slug\tid\tverdict\treasons\nProgDroid/MyRepo\tabc\twait\tPC has 3 unpushed commits\n' > "$P/switchboard-state/verdicts.tsv"
 out="$(run_hook "$P/proj")"
-has "verdict wait: slug case differs (tsv ProgDroid/MyRepo, origin progdroid/myrepo)" "$out" "switchboard: wait (PC has 3 unpushed commits)"
+has "verdict wait: slug case differs (tsv ProgDroid/MyRepo, origin progdroid/myrepo)" "$out" "switchboard: ProgDroid/MyRepo must wait for the PC (PC has 3 unpushed commits)"
+# Companions ride along in every session: named, short, no reason list.
+P="$(mktemp -d)"; slugrepo "$P" "https://github.com/ProgDroid/claude-setup.git"; mkstate "$P" wait
+printf '# slug\tid\tverdict\treasons\nProgDroid/claude-setup\tclaude-setup\twait\tbranch feat/x: 51 commits not on GitHub\n' > "$P/switchboard-state/verdicts.tsv"
+out="$(run_hook "$P/proj")"
+has   "companion wait: short named line" "$out" "switchboard: ProgDroid/claude-setup (companion) is waiting for the PC; don't change it in this session (state as of"
+lacks "companion wait: no reason list" "$out" "51 commits"
 P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"
 out="$(run_hook "$P/proj")"
 empty "no switchboard-state sibling: nothing" "$out"
@@ -236,7 +242,7 @@ git -C "$P/proj" config --unset-all "url.$P/.aux/proj.git.insteadOf"
 git -C "$P/proj" config "url.$P/nowhere.git.insteadOf" "https://github.com/o/r.git"
 out="$(run_hook "$P/proj")"
 has "unreachable origin + wait: the couldn't-check line" "$out" "couldn't check proj for earlier cloud branches (origin unreachable)"
-has "unreachable origin + wait: the switchboard line too" "$out" "switchboard: wait (PC has 3 unpushed commits)"
+has "unreachable origin + wait: the switchboard line too" "$out" "switchboard: o/r must wait for the PC (PC has 3 unpushed commits)"
 
 # 13. M5: the budget runs out at the FETCH step, after ls-remote succeeded.
 # Budget 3 s; the shim makes ls-remote take 2 s, leaving < 2 s for the fetch.

@@ -82,10 +82,19 @@ switchboard_line() {
   slug="$(printf '%s\n' "$url" | sed -e 's#/*$##' -e 's/\.git$//' -e 's#/*$##' \
     | awk -F'[/:]' 'NF >= 2 { print $(NF-1) "/" $NF }')"
   [ -n "$slug" ] || return 0
-  reasons="$(awk -F'\t' -v s="$slug" 'tolower($1) == tolower(s) && $3 == "wait" { print $4; exit }' "$sib/verdicts.tsv")"
-  [ -n "$reasons" ] || return 0
+  row="$(awk -F'\t' -v s="$slug" 'tolower($1) == tolower(s) && $3 == "wait" { print $1 "\t" $4; exit }' "$sib/verdicts.tsv")"
+  [ -n "$row" ] || return 0
+  local tab=$'\t'
+  slug="${row%%"$tab"*}"   # the PC's spelling of the slug
+  reasons="${row#*"$tab"}"
   date="$(git -C "$sib" log -1 --date=short --format=%cd 2>/dev/null)"
-  echo "switchboard: wait ($reasons), as of ${date:-an unknown date}."
+  # Every session carries the companions, so name the repo and keep theirs short.
+  case "$(printf '%s' "${slug#*/}" | tr '[:upper:]' '[:lower:]')" in
+    claude-setup)
+      echo "switchboard: $slug (companion) is waiting for the PC; don't change it in this session (state as of ${date:-an unknown date})."
+      return 0 ;;
+  esac
+  echo "switchboard: $slug must wait for the PC ($reasons), as of ${date:-an unknown date}."
 }
 
 # Network calls never prompt and never wait on ssh for input.
