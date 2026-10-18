@@ -280,8 +280,19 @@ _ss_changed() {
 # runs (before bd's block and any user content), creating the hook when it does not exist.
 # Idempotent by marker. Keeps the file's line endings and every existing byte. A block that is
 # already there is proved like check does: if the proof does not fire, fix fails with the cause.
+# --proved (Ruling R59): the caller asserts that this run's `check secret-scan` returned present,
+# so an existing block is not proved a second time (no gitleaks run, no fake key staged); the result
+# is `already`, with the hook in `wrote` while it differs from HEAD. With --proved and no block in
+# the hook git runs, the caller's claim is false: `failed`, and nothing is installed.
 fix_secret_scan() {
-  local repo="$1" top hook rel first interp eol=$'\n' tmp nb ne l lastc swept res rc st dt
+  local repo="$1" top hook rel first interp eol=$'\n' tmp nb ne l lastc swept res rc st dt proved=0
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --proved) proved=1; shift ;;
+      *) die "fix secret-scan: unknown argument: $1" ;;
+    esac
+  done
   top="$(git -C "$repo" rev-parse --show-toplevel)" || die "cannot resolve repo root: $repo"
   swept="$(_ss_sweep "$top")"
   hook="$(_ss_hook "$top")"
@@ -291,6 +302,10 @@ fix_secret_scan() {
   if [ "$nb" -gt 0 ] || [ "$ne" -gt 0 ]; then
     if [ "$nb" != 1 ] || [ "$ne" != 1 ]; then
       emit secret-scan failed "${swept}$hook has $nb begin and $ne end ritual secret-scan markers; fix it by hand"; return 0
+    fi
+    if [ "$proved" = 1 ]; then
+      emit_already secret-scan "$top" "${swept}ritual block already in $hook; proved by this run's check secret-scan" ${wrote[@]+"${wrote[@]}"}
+      return 0
     fi
     # same interrupt rule as check: wait for the proof to clean up, then report
     _SS_SIG=""
@@ -310,6 +325,10 @@ fix_secret_scan() {
       unknown) emit secret-scan unknown "not proved: $dt${swept:+; ${swept%; }}" ;;   # always starts "not proved:"
       *)       emit secret-scan failed "${swept}ritual block already in $hook, but ${dt:-the proof gave no result}" ;;
     esac
+    return 0
+  fi
+  if [ "$proved" = 1 ]; then
+    emit secret-scan failed "${swept}--proved, but $hook holds no ritual block: the hook changed since this run's check secret-scan; run check secret-scan again (nothing was written)"
     return 0
   fi
   if [ ! -s "$hook" ]; then

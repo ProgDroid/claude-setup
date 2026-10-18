@@ -143,16 +143,18 @@ cat "$RT"/chk/*.json
 bash "$R" candidates "$REPO" > "$RT/candidates.json"; cat "$RT/candidates.json"   # only when Beads is set up
 ```
 
-**A `present` check still gets its fix**, with no flags. There the fix writes nothing and returns
-`already`, and its `wrote` lists any of the step's files that an earlier run set up and never
-committed ("not yet committed" in its detail), so step 6 can offer them. Record the step `already`.
-`fix secret-scan` proves the existing block again (the same live proof, announced as above); a
-`failed` `fix beads` names a stash an earlier run still holds: show it as in step 2.
+**A `present` check still gets its fix**, with no flags (for `secret-scan`, only `--proved`).
+There the fix writes nothing and normally returns `already`, and its `wrote` lists any of the
+step's files that an earlier run set up and never committed ("not yet committed" in its detail), so
+step 6 can offer them. Record its status by the mapping table: `already` as `already`, `failed` as
+`failed` with its detail shown (a `failed` `fix beads` names a stash an earlier run still holds:
+show it as in step 2), `unknown` as `unknown`. `--proved` tells `fix secret-scan` that this run's
+`check secret-scan` already proved the block, so the live proof is not run a second time.
 
 ```bash
 pr() { [ "$(jq -r .status "$RT/chk/$1.json" 2>/dev/null | tr -d '\r')" = present ]; }
 pr beads && bash "$R" fix beads "$REPO" > "$RT/out/beads.json"
-pr secret-scan && bash "$R" fix secret-scan "$REPO" > "$RT/out/secret-scan.json"
+pr secret-scan && bash "$R" fix secret-scan "$REPO" --proved > "$RT/out/secret-scan.json"
 pr handoff && bash "$R" fix handoff "$REPO" > "$RT/out/handoff.json"
 cat "$RT"/out/*.json
 ```

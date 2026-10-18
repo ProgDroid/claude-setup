@@ -195,4 +195,26 @@ run_snippet '"$R" commit-plan' "$k" "$RK3" > "$RK3/plan.out" 2>&1
 jq -e '.ask | index(".claude/handoff.json")' "$RK3/plan.json" >/dev/null \
   && ok "r58_the_re_offered_commit_offers_the_marker" || bad "r58 run 3 plan: $(cat "$RK3/plan.json" 2>/dev/null)"
 
+echo "== N1: the R58 block's beads and secret-scan lines =="
+# beads set up by an earlier run and never committed; this run's check says present
+b="$(mkrepo "flow beads leftovers")"; S fix beads "$b" > /dev/null
+RB="$(newrt)"; S check beads "$b" > "$RB/chk/beads.json"
+run_snippet 'pr handoff &&' "$b" "$RB" > "$RB/r58.out" 2>&1
+ob="$(cat "$RB/out/beads.json" 2>/dev/null)"
+[ "$(jq -r .status "$RB/chk/beads.json" | tr -d '\r')" = present ] && [ "$(jr "$ob" .status)" = already ] \
+  && [ "$(jr "$ob" '.wrote | index(".beads/PRIME.md") != null')" = true ] && [ "$(jr "$ob" '.wrote | index("CLAUDE.md") != null')" = true ] \
+  && ok "n1_pr_beads_runs_fix_beads_on_present_and_lists_its_leftovers" || bad "n1 beads: [$ob] $(cat "$RB/r58.out")"
+# a secret-scan block in a custom hooks path inside the work tree, never committed; check present
+s="$(mkrepo "flow secret leftovers")"; git -C "$s" config core.hooksPath "tools/git hooks"; S fix secret-scan "$s" > /dev/null
+RS="$(newrt)"; S check secret-scan "$s" > "$RS/chk/secret-scan.json"
+n0="$(grep -c '^gitleaks ' "$LOG")"
+run_snippet 'pr handoff &&' "$s" "$RS" > "$RS/r58.out" 2>&1
+os="$(cat "$RS/out/secret-scan.json" 2>/dev/null)"
+[ "$(jq -r .status "$RS/chk/secret-scan.json" | tr -d '\r')" = present ] && [ "$(jr "$os" .status)" = already ] \
+  && [ "$(jr "$os" '.wrote | tostring')" = '["tools/git hooks/pre-commit"]' ] \
+  && ok "n1_pr_secret_scan_runs_its_fix_on_present_and_lists_the_hook" || bad "n1 secret-scan: [$os] $(cat "$RS/r58.out")"
+# R59: that fix reuses this run's proof: no second gitleaks run
+[ -n "$os" ] && [ "$(grep -c '^gitleaks ' "$LOG")" = "$n0" ] && [ "$n0" -ge 1 ] \
+  && ok "r59_the_block_reuses_this_runs_proof" || bad "r59: gitleaks calls before $n0, after $(grep -c '^gitleaks ' "$LOG"); [$os]"
+
 finish

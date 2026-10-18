@@ -198,6 +198,46 @@ out="$(D fix secret-scan "$r")"
 [ "$(st "$out")" = failed ] && [ "$(sha256sum "$h" | cut -d' ' -f1)" = "$s0" ] && ok "fix_refuses_unbalanced_markers" \
   || bad "fix_refuses_unbalanced_markers: $out"
 
+echo "== fix --proved (R59): this run's check already proved the block =="
+# a detecting gitleaks that logs every call, so "no second proof" is counted, not assumed
+LGD="$TMPROOT/stub logging"; mkdir -p "$LGD"; GL_CALLS="$TMPROOT/gitleaks calls.log"
+cat > "$LGD/gitleaks" <<'STUB'
+#!/usr/bin/env bash
+echo "gitleaks $*" >> "${GL_CALLS:?}"
+if git diff --cached | grep -qE 'AKIA[A-Z2-7]{16}'; then echo "WRN leaks found: 1" >&2; exit 1; fi
+echo "INF no leaks found" >&2; exit 0
+STUB
+chmod +x "$LGD/gitleaks"
+LG() { ( stub_path "$LGD"; export GL_CALLS; bash "$RITUAL" "$@" ); }
+ncalls() { if [ -f "$GL_CALLS" ]; then grep -c '' "$GL_CALLS"; else echo 0; fi; }
+# a custom core.hooksPath inside the work tree; the hook the fix creates there stays uncommitted
+r="$(mkrepo proved)"; git -C "$r" config core.hooksPath "tools/git hooks"
+out="$(LG fix secret-scan "$r")"
+[ "$(st "$out")" = fixed ] && [ "$(jq -c .wrote <<<"$out")" = '["tools/git hooks/pre-commit"]' ] \
+  && [ "$(st "$(LG check secret-scan "$r")")" = present ] && ok "proved_fixture_block_installed_and_proved" || bad "proved fixture: $out"
+: > "$GL_CALLS"; i0="$(stat -c %y "$r/.git/index")"; p0="$(git -C "$r" status --porcelain=v1 -z --untracked-files=all | sha256sum)"
+out="$(LG fix secret-scan "$r" --proved)"; rc=$?
+[ "$rc" = 0 ] && [ "$(st "$out")" = already ] && [ "$(ncalls)" = 0 ] && [ "$(stat -c %y "$r/.git/index")" = "$i0" ] \
+  && [ "$(git -C "$r" status --porcelain=v1 -z --untracked-files=all | sha256sum)" = "$p0" ] && [ "$(proof_leftovers "$r")" = 0 ] \
+  && ok "proved_makes_no_gitleaks_call_and_touches_no_index" || bad "proved: rc=$rc calls=$(ncalls) $out"
+[ "$(jq -c .wrote <<<"$out")" = '["tools/git hooks/pre-commit"]' ] && dt "$out" | grep -qF 'not yet committed' \
+  && dt "$out" | grep -qF "proved by this run's check secret-scan" && ok "proved_lists_the_uncommitted_hook" || bad "proved wrote: $out"
+git -C "$r" add -- "tools/git hooks/pre-commit" && git -C "$r" commit -q --no-verify -m hook
+out="$(LG fix secret-scan "$r" --proved)"
+[ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = '[]' ] && ok "proved_after_the_commit_lists_nothing" || bad "proved after commit: $out"
+# control: without the flag the fix still proves (R41/R45 unchanged), so gitleaks is called
+: > "$GL_CALLS"; out="$(LG fix secret-scan "$r")"
+[ "$(st "$out")" = already ] && [ "$(ncalls)" -ge 1 ] && dt "$out" | grep -qF 'proved:' \
+  && ok "control_without_proved_the_fix_still_proves" || bad "control unproved: calls=$(ncalls) $out"
+# --proved where the hook git runs holds no block: the caller's claim is false, so it fails and
+# writes nothing (it never installs from the R58 no-op path)
+r="$(mkrepo proved-absent)"; : > "$GL_CALLS"
+out="$(LG fix secret-scan "$r" --proved)"
+[ "$(st "$out")" = failed ] && [ ! -e "$r/.git/hooks/pre-commit" ] && [ "$(ncalls)" = 0 ] && dt "$out" | grep -qF 'check secret-scan' \
+  && ok "proved_without_a_block_fails_and_writes_nothing" || bad "proved absent: $out"
+bash "$RITUAL" fix secret-scan "$r" --bogus >/dev/null 2>"$TMPROOT/ss-arg.err"; rc=$?
+[ "$rc" = 2 ] && grep -qF 'unknown argument' "$TMPROOT/ss-arg.err" && ok "fix_secret_scan_rejects_an_unknown_argument" || bad "bogus arg: rc=$rc $(cat "$TMPROOT/ss-arg.err")"
+
 echo "== check: absent / proof =="
 r="$(bd_repo)"
 out="$(D check secret-scan "$r")"

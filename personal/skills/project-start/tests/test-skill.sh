@@ -161,6 +161,9 @@ grep -qF 'only when `fix handoff` returned `fixed` or `already`' <<<"$FLAT" \
 # I2: step 7 takes the block's printed status only when the block ran `fix handoff`
 grep -qF 'when the block ran `fix handoff`' <<<"$FLAT" && ok "step_7_qualifies_the_printed_handoff_status" \
   || bad "step_7_qualifies_the_printed_handoff_status: no 'when the block ran \`fix handoff\`'"
+# N4: a present check's no-flag fix is recorded by its own status, never an unconditional `already`
+grep -qF 'record its status by the mapping table' <<<"$FLAT" && ! grep -qF 'record the step `already`.' <<<"$FLAT" \
+  && ok "present_check_fix_is_recorded_by_its_status" || bad "present_check_fix_is_recorded_by_its_status: R58 paragraph still records an unconditional already"
 
 echo "== re-runs =="
 # I1: step 6's ask covers what an earlier, uncommitted run set up
