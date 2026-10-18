@@ -47,18 +47,13 @@ the checkout via git sparse-checkout, which would cut clone time on large market
 | `superpowers` | brainstorming / writing-plans / TDD workflow — the core process toolkit |
 | `personal` | own agents, commands, working-style skill |
 | `context7` | live library docs |
-| `serena` | semantic code navigation and editing (under evaluation, see below) |
 | `frontend-design`, `commit-commands`, `claude-md-management`, `security-guidance` | general-purpose, cheap to carry |
 
-### On `context7` and `serena` specifically
+### On `context7` specifically
 
-Locally both run as user-scope MCP servers in `~/.claude.json`, not as plugins. That route does not
+Locally it runs as a user-scope MCP server in `~/.claude.json`, not as a plugin. That route does not
 reach cloud sessions — `claude mcp add` writes to user config, not the repo — so the plugin form is
 enabled here instead.
-
-`serena` is on trial as of 2026-10-18: an 8-week transcript audit found 204 calls, last on 09-22, and
-184 of them were `replace_content`, an edit the built-in Edit tool already does; symbol navigation
-was used 6 times. A measured A/B against Grep plus native LSP decides whether it stays.
 
 **Do not read a `false` plugin flag as evidence a capability is unused.** Check `~/.claude.json`
 alongside `settings.json` before concluding anything is unused; this exact inference was made wrongly
@@ -75,6 +70,7 @@ each session for trigger matching, so a universal include list is a standing cos
 | `starship-claude` | Statusline — meaningless in a cloud session with no TUI. Its config is backed up separately as `starship/starship.toml`; the plugin payload is deliberately gitignored because it is refetchable from `martinemde/starship-claude` |
 | `typescript-lsp`, `gopls-lsp`, `rust-analyzer-lsp` | Add only to repos in that language |
 | `playwright` | Heavy install; add where actually used |
+| `serena` | Removed 2026-10-18 after a measured A/B (24 headless runs, 3 navigation questions in a 46k-line Rust repo): all arms equally correct, serena-only used 1.79x grep's context and was slowest, and when grep was also available the model chose serena in 1 run of 6 |
 | `code-simplifier`, `skill-creator` | Removed 2026-10-18: the built-in `/simplify` and `anthropic-skills:skill-creator` cover them |
 | `semgrep`, `android-skills`, `claude-code-setup`, `explanatory-output-style` | Removed from the whole setup 2026-10-18 (cost of keeping exceeded use). For the Insight boxes, use the built-in `/output-style Explanatory` per session |
 

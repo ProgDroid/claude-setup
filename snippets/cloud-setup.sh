@@ -78,7 +78,6 @@ PLUGINS="
 superpowers@superpowers-dev
 personal@progdroid
 context7@claude-plugins-official
-serena@claude-plugins-official
 commit-commands@claude-plugins-official
 claude-md-management@claude-plugins-official
 security-guidance@claude-plugins-official
