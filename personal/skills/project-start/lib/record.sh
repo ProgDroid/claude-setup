@@ -40,13 +40,15 @@ record_write() {
 }
 
 # due <repo> -> {"offer":[ids],"skip":[{id,reason}]}
-# Skipped only when recorded result is "declined" AND recorded version == current version.
+# Skipped only when recorded result is "declined" AND recorded version == current version. A step
+# marked "per_run": true in steps.json is never skipped: its question is about this run's content
+# (what to commit now), so an earlier "no" does not answer it.
 record_due() {
   local cur; cur="$(record_read "$1")"
   printf '%s' "$cur" | jq -c --slurpfile reg "$(steps_json)" '
     (.steps // {}) as $s
     | ($reg[0].steps) as $st
-    | ($st | map(select(($s[.id].result // "") == "declined" and ($s[.id].version // null) == .version))) as $skip
+    | ($st | map(select((.per_run != true) and ($s[.id].result // "") == "declined" and ($s[.id].version // null) == .version))) as $skip
     | {offer: ($st | map(select(. as $x | $skip | map(.id) | index($x.id) | not) | .id)),
        skip: ($skip | map({id, reason: ("declined at version " + (.version|tostring))}))}'
 }

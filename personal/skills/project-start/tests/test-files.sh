@@ -17,9 +17,15 @@ out="$(R check traps "$r")"
 [ "$(st "$out")" = present ] && ok "traps_fix_then_check_present" || bad "after fix: $out"
 cp "$r/.gitignore" "$TMPROOT/gi.before"; cp "$r/.gitattributes" "$TMPROOT/ga.before"
 out="$(R fix traps "$r")"
-[ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = "[]" ] \
+[ "$(st "$out")" = already ] \
   && cmp -s "$r/.gitignore" "$TMPROOT/gi.before" && cmp -s "$r/.gitattributes" "$TMPROOT/ga.before" \
   && ok "traps_fix_rerun_already" || bad "rerun: $out"
+# I1: the first fix was never committed, so the rerun lists both files again
+[ "$(jq -c '.wrote|sort' <<<"$out")" = '[".gitattributes",".gitignore"]' ] && jq -r .detail <<<"$out" | grep -qF 'not yet committed' \
+  && ok "traps_rerun_lists_the_uncommitted_files" || bad "traps rerun wrote: $out"
+git -C "$r" add .gitattributes .gitignore && git -C "$r" commit -q -m traps
+out="$(R fix traps "$r")"
+[ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = "[]" ] && ok "traps_rerun_after_the_commit_lists_nothing" || bad "traps after commit: $out"
 
 # --- global ignore must not count
 r="$(mkrepo)"; printf '*.sh text eol=lf\n' > "$r/.gitattributes"   # attr in place: only the ignores can make check absent
@@ -120,6 +126,11 @@ cp "$r/Cargo.toml" "$TMPROOT/cargo.fixed"
 out="$(PATH="$stubs:$PATH" R fix stack-checks "$r")"
 [ "$(st "$out")" = already ] && cmp -s "$r/Cargo.toml" "$TMPROOT/cargo.fixed" \
   && ok "clippy_fix_rerun_already" || bad "rerun: $out"
+[ "$(jq -c .wrote <<<"$out")" = '["Cargo.toml"]' ] && jq -r .detail <<<"$out" | grep -qF 'not yet committed' \
+  && ok "clippy_rerun_lists_the_uncommitted_manifest" || bad "clippy rerun wrote: $out"
+git -C "$r" add Cargo.toml && git -C "$r" commit -q -m clippy
+out="$(PATH="$stubs:$PATH" R fix stack-checks "$r")"
+[ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = '[]' ] && ok "clippy_rerun_after_the_commit_lists_nothing" || bad "clippy after commit: $out"
 
 # cargo metadata failure reverts
 r="$(mkrepo)"; printf '%s' "$cargo_single" > "$r/Cargo.toml"; cp "$r/Cargo.toml" "$TMPROOT/cargo.before"

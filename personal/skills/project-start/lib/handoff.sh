@@ -208,13 +208,15 @@ fix_handoff() {
   if [ -n "$different" ]; then emit handoff absent "$(join_by '; ' "$different" "${notes[@]}")" "${wrote[@]}"
   elif [ "$ign" = unknown ]; then emit handoff unknown "$(join_by '; ' "${notes[@]}")" "${wrote[@]}"
   elif [ "$changed" = 1 ]; then emit handoff fixed "$(join_by '; ' "${notes[@]}")" "${wrote[@]}"
-  else emit handoff already "$(join_by '; ' "${notes[@]}")"
+  else emit_already handoff "$top" "$(join_by '; ' "${notes[@]}")" "$_HANDOFF_MARKER" CLAUDE.md   # never NEXT.md
   fi
 }
 
 # handoff_commit <repo>: when no handoff: commit exists, make the first one holding NEXT.md alone.
 # NEXT.md untracked or changed -> commit it alone; tracked and clean -> an empty commit (the anchor
-# still holds no file but NEXT.md). Refuses, touching nothing, when any other path is staged.
+# still holds no file but NEXT.md). Refuses, touching nothing, when any other path is staged. A
+# hook that stages another file during the commit makes an anchor holding more than NEXT.md: that is
+# `failed` (spec 5b: NEXT.md alone), and the detail names the files and the undo.
 handoff_commit() {
   local repo="$1" top anchor rc raw p tracked=0 added=0 st msg out kind head files others=()
   top="$(git -C "$repo" rev-parse --show-toplevel)" || die "cannot resolve repo root: $repo"
@@ -270,7 +272,12 @@ handoff_commit() {
   rm -f "$msg"
 
   head="$(git -C "$top" log -1 --format='%H %s')"
-  files="$(git -C "$top" show --name-only --format= HEAD)"
+  files="$(git -C "$top" -c core.quotePath=false show --name-only --format= HEAD)"
+  if [[ "${head#* }" == handoff:* ]] && [ -n "$files" ] && [ "$files" != NEXT.md ]; then
+    local added; added="$(grep -vxF NEXT.md <<<"$files" | paste -sd ',' - | sed 's/,/, /g')"
+    emit handoff failed "committed, but a hook added $added: handoff: commit ${head:0:7} holds more than NEXT.md; \`git reset --soft HEAD~1\` undoes the commit and keeps its changes"
+    return 0
+  fi
   if [[ "${head#* }" != handoff:* ]] || { [ -n "$files" ] && [ "$files" != NEXT.md ]; }; then
     emit handoff failed "HEAD is not a NEXT.md-only handoff: commit after committing: ${head:0:7} ($files)"; return 0
   fi

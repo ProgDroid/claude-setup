@@ -39,6 +39,33 @@ require_repo() {
 # join_by <sep> <item...> -> the items joined with <sep> (nothing for no items).
 join_by() { local sep="$1" IFS=$'\x1f' s; shift; s="$*"; printf '%s' "${s//$'\x1f'/"$sep"}"; }
 
+# pending_paths <repo> <path>... -> those of <path>... that differ from HEAD, each ended by NUL:
+# modified or deleted in the index or the work tree, or untracked and not ignored. Asked of git
+# status, never guessed from names: paths are literal, a directory yields the files under it, and
+# renames are reported as their two halves. No paths -> nothing (never "every change"). Exit 1,
+# printing nothing, when git cannot answer.
+pending_paths() {
+  local repo="$1" out rec; shift
+  [ $# -gt 0 ] || return 0
+  out="$(git -C "$repo" --no-optional-locks --literal-pathspecs status --porcelain=v1 -z --no-renames \
+    --untracked-files=all -- "$@" 2>/dev/null | tr '\0' '\036'; exit "${PIPESTATUS[0]}")" || return 1
+  while IFS= read -r -d $'\036' rec; do printf '%s\0' "${rec:3}"; done <<<"$out"
+}
+
+# emit_already <id> <repo> <detail> <path>...: the result of a fix that had nothing to add. Those
+# of its own <path>... that still differ from HEAD (an earlier run set them up and was never
+# committed) go in `wrote`, so the commit step asks about them; a git that cannot answer that
+# makes the result `unknown`.
+emit_already() {
+  local id="$1" repo="$2" detail="$3" out; shift 3
+  local -a p=()
+  out="$(pending_paths "$repo" "$@" | tr '\0' '\036'; exit "${PIPESTATUS[0]}")" \
+    || { emit "$id" unknown "$detail; could not tell whether its files are committed (git status failed)"; return 0; }
+  [ -z "$out" ] || mapfile -d $'\036' -t p < <(printf '%s' "$out")
+  if [ "${#p[@]}" -gt 0 ]; then emit "$id" already "$detail; not yet committed: $(join_by ', ' "${p[@]}")" "${p[@]}"
+  else emit "$id" already "$detail"; fi
+}
+
 # path_norm <path> -> one canonical form for comparing paths on Windows: absolute, forward
 # slashes, 8.3 short names expanded (git reports the long form, mktemp the short one), then the
 # unix form. cygpath only expands names that exist, so the longest existing ancestor is expanded

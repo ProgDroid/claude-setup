@@ -47,6 +47,34 @@ repo="$(mkrepo)"
 g="$(git_common_dir "$repo")"
 [ -d "$g" ] && [ "$(basename "$g")" = .git ] && ok "git_common_dir is the absolute .git of a spaced repo" || bad "git_common_dir: $g"
 
+echo "== pending_paths =="
+# pp <repo> <path>... -> what pending_paths printed (NUL-separated), one path per line, sorted
+pp() { pending_paths "$@" | tr '\0' '\n' | LC_ALL=C sort | paste -sd'|' -; }
+r="$(mkrepo pend)"
+printf 'ign.txt\n' > "$r/.gitignore"
+for f in tracked kept gone staged moved; do echo "$f" > "$r/$f.txt"; done
+git -C "$r" add -A; git -C "$r" commit -q -m files
+echo more >> "$r/tracked.txt"; rm "$r/gone.txt"; echo s2 >> "$r/staged.txt"; git -C "$r" add staged.txt
+git -C "$r" mv moved.txt "re named.txt"
+mkdir -p "$r/sub dir"; echo n > "$r/sub dir/new file.txt"; echo i > "$r/ign.txt"
+got="$(pp "$r" tracked.txt kept.txt gone.txt staged.txt moved.txt "re named.txt" "sub dir" ign.txt missing.txt)"
+[ "$got" = "gone.txt|moved.txt|re named.txt|staged.txt|sub dir/new file.txt|tracked.txt" ] \
+  && ok "pending_paths_lists_modified_deleted_staged_renamed_and_untracked_files_only" || bad "pending_paths_lists_modified_deleted_staged_renamed_and_untracked_files_only: [$got]"
+# never a name pattern: '*.txt' is a literal path here (a glob would match six files), and an
+# ignored file is not pending even when named
+got="$(pp "$r" '*.txt' ign.txt)"
+[ -z "$got" ] && ok "pending_paths_takes_paths_literally_and_skips_ignored" || bad "pending_paths_takes_paths_literally_and_skips_ignored: [$got]"
+pending_paths "$r" > "$TMPROOT/pp-none.out"; rc=$?
+[ "$rc" = 0 ] && [ ! -s "$TMPROOT/pp-none.out" ] && ok "pending_paths_with_no_paths_prints_nothing_never_every_change" \
+  || bad "pending_paths_with_no_paths_prints_nothing_never_every_change: rc=$rc [$(tr '\0' '|' < "$TMPROOT/pp-none.out")]"
+c="$(mkrepo pend-clean)"; pending_paths "$c" README.md > "$TMPROOT/pp-clean.out"; rc=$?
+[ "$rc" = 0 ] && [ ! -s "$TMPROOT/pp-clean.out" ] && ok "pending_paths_committed_path_prints_nothing" || bad "pending_paths_committed_path_prints_nothing: rc=$rc"
+u="$TMPROOT/ritual fixtures/pend unborn"; mkdir -p "$u"; git -C "$u" init -q; echo a > "$u/a b.txt"
+[ "$(pp "$u" "a b.txt")" = "a b.txt" ] && ok "pending_paths_on_an_unborn_branch_lists_the_untracked_file" || bad "pending_paths unborn: [$(pp "$u" "a b.txt")]"
+mkdir -p "$TMPROOT/pend not a repo"
+pending_paths "$TMPROOT/pend not a repo" x > "$TMPROOT/pp-ng.out" 2>/dev/null; rc=$?
+[ "$rc" != 0 ] && [ ! -s "$TMPROOT/pp-ng.out" ] && ok "pending_paths_fails_when_git_cannot_answer" || bad "pending_paths_fails_when_git_cannot_answer: rc=$rc"
+
 echo "== tests/lib.sh helpers =="
 [ -d "$TMPROOT" ] && ok "TMPROOT exists" || bad "no TMPROOT"
 a="$(mkrepo x)"; b="$(mkrepo x)"

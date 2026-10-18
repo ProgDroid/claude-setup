@@ -89,9 +89,12 @@ out="$(R handoff-commit "$r")"
 [ "$(st "$out")" = already ] && [ "$(head_of "$r")" = "$h1" ] && [ "$(anchors "$r")" = 1 ] \
   && ok "rerun_handoff_commit_is_already_one_anchor" || bad "rerun handoff-commit: $out"
 r2="$(mkrepo)"; R fix handoff "$r2" >/dev/null; cp "$r2/NEXT.md" "$TMPROOT/n2"; cp "$r2/CLAUDE.md" "$TMPROOT/c2"
-out="$(R fix handoff "$r2")"   # a second fix BEFORE any commit is also a no-op
-[ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = '[]' ] && cmp -s "$r2/NEXT.md" "$TMPROOT/n2" && cmp -s "$r2/CLAUDE.md" "$TMPROOT/c2" \
-  && ok "rerun_fix_before_commit_is_already" || bad "rerun before commit: $out"
+out="$(R fix handoff "$r2")"   # a second fix BEFORE any commit writes nothing...
+# ...but lists the files the first run left uncommitted (I1), never NEXT.md (handoff-commit's)
+[ "$(st "$out")" = already ] && [ "$(jq -c '.wrote|sort' <<<"$out")" = '[".claude/handoff.json","CLAUDE.md"]' ] \
+  && cmp -s "$r2/NEXT.md" "$TMPROOT/n2" && cmp -s "$r2/CLAUDE.md" "$TMPROOT/c2" \
+  && ok "rerun_fix_before_commit_is_already_and_lists_the_uncommitted_files" || bad "rerun before commit: $out"
+det "$out" | grep -qF 'not yet committed' && ok "rerun_fix_before_commit_detail_says_not_yet_committed" || bad "rerun before commit detail: $out"
 
 # --- an existing NEXT.md and anchor are kept
 r="$(mkrepo)"
@@ -234,6 +237,9 @@ out="$(R check handoff "$r")"
 [ "$(st "$out")" = present ] && det "$out" | grep -qF 'git-ignored' && ok "marker_ignored_check_still_present_with_note" || bad "ignored present: $out"
 out="$(R fix handoff "$r")"
 [ "$(st "$out")" = already ] && det "$out" | grep -qF 'git-ignored' && ok "marker_ignored_rerun_already_with_note" || bad "ignored rerun: $out"
+# the ignored marker is on disk and uncommitted, yet never listed: it cannot be committed
+[ -f "$r/.claude/handoff.json" ] && [ "$(jq -c .wrote <<<"$out")" = '[]' ] && ! det "$out" | grep -qF 'not yet committed' \
+  && ok "marker_ignored_rerun_lists_nothing" || bad "ignored rerun wrote: $out"
 r="$(mkrepo)"
 out="$(R check handoff "$r")"
 ! det "$out" | grep -qF 'ignored' && ok "marker_not_ignored_no_note" || bad "spurious ignore note: $out"
@@ -271,6 +277,22 @@ out="$(R handoff-commit "$r")"
 idx "$r" > "$TMPROOT/idx.after"
 [ "$(st "$out")" = failed ] && [ "$(head_of "$r")" = "$h1" ] && cmp -s "$TMPROOT/idx.before" "$TMPROOT/idx.after" \
   && det "$out" | grep -qF 'README.md' && ok "staged_rename_into_next_md_is_refused" || bad "rename: $out"
+
+# --- M3: a pre-commit hook that stages another file: the commit is made, and is said so, with the undo
+r="$(mkrepo)"; echo 1 > "$r/x.jsonl"; git -C "$r" add x.jsonl; git -C "$r" commit -q -m x
+R fix handoff "$r" >/dev/null; git -C "$r" add CLAUDE.md .claude/handoff.json; git -C "$r" commit -q -m setup
+mkdir -p "$r/.git/hooks"; printf '#!/bin/sh\necho 2 >> x.jsonl\ngit add x.jsonl\n' > "$r/.git/hooks/pre-commit"; chmod +x "$r/.git/hooks/pre-commit"
+h1="$(head_of "$r")"
+out="$(R handoff-commit "$r")"
+files="$(git -C "$r" show --name-only --format= HEAD | LC_ALL=C sort | paste -sd'|' -)"
+[ "$(st "$out")" = failed ] && [ "$(git -C "$r" rev-parse HEAD~1)" = "$h1" ] && [ "$files" = "NEXT.md|x.jsonl" ] \
+  && det "$out" | grep -qF 'committed, but a hook added x.jsonl' && det "$out" | grep -qF 'git reset --soft HEAD~1' \
+  && ok "handoff_commit_names_the_file_a_hook_added_and_the_undo" || bad "staging hook: $out files=[$files]"
+det "$out" | grep -qF "$(git -C "$r" rev-parse --short=7 HEAD)" && ok "handoff_commit_hook_added_detail_names_the_commit" || bad "hook-added sha: $out"
+# the named undo really is one: HEAD goes back, NEXT.md stays staged, the hook's edit stays on disk
+git -C "$r" reset -q --soft HEAD~1
+[ "$(head_of "$r")" = "$h1" ] && git -C "$r" diff --cached --name-only | grep -qx NEXT.md && grep -qx 2 "$r/x.jsonl" \
+  && ok "the_named_undo_restores_head_and_keeps_the_changes" || bad "undo: head=$(head_of "$r") cached=$(git -C "$r" diff --cached --name-only | paste -sd'|' -)"
 
 # --- handoff-commit with unstaged and untracked work around it
 r="$(mkrepo)"; R fix handoff "$r" >/dev/null

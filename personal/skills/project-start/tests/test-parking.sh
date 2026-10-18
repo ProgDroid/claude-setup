@@ -33,10 +33,17 @@ r="$(mkrepo)"
 R fix parking-lot "$r" >/dev/null
 cp "$r/CLAUDE.md" "$TMPROOT/claude.run1"; cp "$r/docs/parking-lot.md" "$TMPROOT/lot.run1"
 out="$(R fix parking-lot "$r")"
-[ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = "[]" ] \
+[ "$(st "$out")" = already ] \
   && [ "$(count_rule "$r/CLAUDE.md")" = 1 ] && [ "$(find "$r" -name parking-lot.md -not -path '*/.git/*' | wc -l | tr -d ' ')" = 1 ] \
   && cmp -s "$r/CLAUDE.md" "$TMPROOT/claude.run1" && cmp -s "$r/docs/parking-lot.md" "$TMPROOT/lot.run1" \
   && ok "run_twice_no_duplicates" || bad "second run: $out; rules=$(count_rule "$r/CLAUDE.md")"
+# I1: run 1 was never committed, so run 2 lists both files again for the commit step to ask about
+[ "$(jq -c '.wrote|sort' <<<"$out")" = '["CLAUDE.md","docs/parking-lot.md"]' ] && jq -r .detail <<<"$out" | grep -qF 'not yet committed' \
+  && ok "rerun_lists_the_files_an_uncommitted_run_left" || bad "rerun wrote: $out"
+git -C "$r" add CLAUDE.md docs/parking-lot.md && git -C "$r" commit -q -m 'ritual'
+out="$(R fix parking-lot "$r")"
+[ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = "[]" ] && ! jq -r .detail <<<"$out" | grep -qF 'not yet committed' \
+  && ok "rerun_after_the_commit_lists_nothing" || bad "rerun after commit: $out"
 
 # --- existing parking lot is never touched
 r="$(mkrepo)"; mkdir -p "$r/docs"

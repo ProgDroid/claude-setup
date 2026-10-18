@@ -270,7 +270,9 @@ fix_beads() {
     return 0
   fi
   if [ "$(check_beads "$top" | jq -r .status)" = present ]; then
-    emit beads already "house beads setup already holds"; return 0
+    # what the house setup writes or removes; .beads/ also carries the issues export
+    emit_already beads "$top" "house beads setup already holds" .beads .gitattributes CLAUDE.md AGENTS.md .codex .agents/skills/beads
+    return 0
   fi
 
   local pre ndirty have_beads=0

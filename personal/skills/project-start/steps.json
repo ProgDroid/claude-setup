@@ -54,7 +54,8 @@
     {
       "id": "untracked-docs",
       "kind": "ask",
-      "version": 1
+      "version": 1,
+      "per_run": true
     },
     {
       "id": "parking-lot",
@@ -89,7 +90,8 @@
     {
       "id": "commit",
       "kind": "ask",
-      "version": 1
+      "version": 1,
+      "per_run": true
     },
     {
       "id": "record",

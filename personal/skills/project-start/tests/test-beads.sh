@@ -257,9 +257,36 @@ for p in .beads/config.yaml .beads/PRIME.md .beads/check-block.sh .beads/.gitign
 grep -qx 'dolt remote list' "$LOG" && ! dt "$out" | grep -q 'unverified' && ok "fix_dolt_no_remotes_answer_is_verified" || bad "no-remotes answer: $out"
 
 # rerun
+w1="$(jq -c '.wrote|sort' <<<"$out")"
+logclear; out="$(R fix beads "$r")"
+[ "$(st "$out")" = already ] && [ "$(logn)" = 0 ] \
+  && ok "fix_rerun_already" || bad "rerun: $out; log=$(cat "$LOG")"
+# I1: the fix was never committed, so the rerun lists exactly what the fix wrote, for the commit step
+[ "$(jq -c '.wrote|sort' <<<"$out")" = "$w1" ] && [ "$(jq length <<<"$w1")" = 10 ] && dt "$out" | grep -qF 'not yet committed' \
+  && ok "fix_rerun_lists_the_uncommitted_house_files" || bad "rerun wrote: $(jq -c '.wrote|sort' <<<"$out") vs fix $w1"
+git -C "$r" add -A && git -C "$r" commit -q --no-verify -m 'ritual'
 logclear; out="$(R fix beads "$r")"
 [ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = '[]' ] && [ "$(logn)" = 0 ] \
-  && ok "fix_rerun_already" || bad "rerun: $out; log=$(cat "$LOG")"
+  && ok "fix_rerun_after_the_commit_lists_nothing" || bad "rerun after commit: $out; log=$(cat "$LOG")"
+# R58: SKILL.md runs `fix beads` with no flags when check beads says present. On a set-up repo that
+# is a no-op even with the user's work dirty: no bd call (so no init), no stash, no byte written.
+snap() {
+  git -C "$1" stash list; git -C "$1" rev-parse HEAD; git -C "$1" config --get core.hooksPath
+  sha256sum "$(git -C "$1" rev-parse --absolute-git-dir | tr -d '\r')/index" | cut -d' ' -f1
+  (cd "$1" && find . -path ./.git -prune -o -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)
+}
+echo mine >> "$r/README.md"; echo new > "$r/user note.txt"
+[ "$(st "$(R check beads "$r")")" = present ] && s0="$(snap "$r")" && logclear
+out="$(R fix beads "$r")"
+[ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = '[]' ] && [ "$(logn)" = 0 ] && [ "$(snap "$r")" = "$s0" ] \
+  && [ -z "$(git -C "$r" stash list)" ] && [ "$(wc -l <<<"$s0")" -gt 10 ] \
+  && ok "r58_fix_beads_on_a_set_up_dirty_repo_is_a_no_op" || bad "r58 no-op: $out; log=$(cat "$LOG"); stash=$(git -C "$r" stash list)"
+# ...and the R36 held-stash refusal still comes before that no-op
+git -C "$r" stash push -q -m ritual-beads; logclear
+out="$(R fix beads "$r")"
+[ "$(st "$(R check beads "$r")")" = present ] && [ "$(st "$out")" = failed ] && dt "$out" | grep -qF 'still held' && [ "$(logn)" = 0 ] \
+  && [ "$(git -C "$r" stash list | grep -c '')" = 1 ] && ok "r58_held_stash_refusal_comes_before_the_no_op" || bad "r58 held stash: $out"
+git -C "$r" stash pop -q
 
 # ============================== fix beads: bd variants
 r="$(mkrepo "Exit Repo")"; logclear

@@ -45,11 +45,12 @@ ho_marker() {
 # ho_anchor <root>: print "<sha> <subject>" of the newest commit whose SUBJECT starts "handoff:".
 # Subject only: --grep would also match a BODY line. Returns 0 found, 1 none (an unborn branch
 # has none), 2 history unreadable, 3 none IN REACH: the clone is shallow, so the anchor may lie
-# beyond its cut-off. 3 is unknown, never "there is no anchor".
+# beyond its cut-off. 3 is unknown, never "there is no anchor"; so is a git whose
+# --is-shallow-repository answer is neither true nor false (git < 2.15 echoes the option): 2.
 # Twin of _handoff_anchor in skills/project-start/lib/handoff.sh (hooks cannot source the skill's
-# lib); test-handoff-hooks.sh asserts the two agree on full histories. Two deliberate differences:
-# this one stops reading at the first match (a hook pays for the log on every startup and every
-# shipping command), and only this one has the shallow code 3.
+# lib); test-handoff-hooks.sh asserts the two agree, the shallow codes 3 and 2 included. One
+# deliberate difference: this one stops reading at the first match (a hook pays for the log on
+# every startup and every shipping command).
 ho_anchor() {
   local out st
   if ! git -C "$1" rev-parse -q --verify HEAD >/dev/null 2>&1; then
@@ -65,8 +66,11 @@ ho_anchor() {
   case "$st" in
     "0 0"|"141 0") printf '%s\n' "${out%%$'\n'*}" ;;
     "0 1")
-      [ "$(git -C "$1" rev-parse --is-shallow-repository 2>/dev/null)" = true ] && return 3
-      return 1 ;;
+      case "$(git -C "$1" rev-parse --is-shallow-repository 2>/dev/null)" in
+        true) return 3 ;;
+        false) return 1 ;;
+        *) return 2 ;;
+      esac ;;
     *) return 2 ;;
   esac
 }

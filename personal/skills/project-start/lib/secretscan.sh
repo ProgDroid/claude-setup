@@ -3,8 +3,9 @@
 # Source this file; do not execute it. Needs common.sh and workspace.sh (preflight) sourced first.
 #
 # Pinned against gitleaks 8.30.1 (`gitleaks git --help`); exit 1 = leaks found:
-#   gitleaks git --pre-commit --staged --redact --no-banner --verbose
-# --verbose names the file, line and rule of each finding; --redact keeps the secret masked. It also
+#   gitleaks git --pre-commit --staged --redact --no-banner --no-color --verbose
+# --verbose names the file, line and rule of each finding; --redact keeps the secret masked;
+# --no-color keeps ANSI codes out of the findings the commit step quotes. It also
 # exits 1 when it cannot load its config, so the proof requires gitleaks' own "leaks found:" line
 # as well as a non-zero exit, and the hook tells the two apart by that line.
 
@@ -35,7 +36,7 @@ _SS_BLOCK=(
   "${_SS_RESOLVER[@]}"
   'if [ -n "$_ritual_gl" ]; then'
   '  _ritual_rc=0'
-  '  _ritual_out="$("$_ritual_gl" git --pre-commit --staged --redact --no-banner --verbose 2>&1)" || _ritual_rc=$?'
+  '  _ritual_out="$("$_ritual_gl" git --pre-commit --staged --redact --no-banner --no-color --verbose 2>&1)" || _ritual_rc=$?'
   '  [ -z "$_ritual_out" ] || printf "%s\n" "$_ritual_out" >&2'
   '  if [ "$_ritual_rc" -ne 0 ]; then'
   '    case "$_ritual_out" in'
@@ -305,7 +306,7 @@ fix_secret_scan() {
     fi
     st="$(jq -r .status <<<"$res" 2>/dev/null | tr -d '\r')"; dt="$(jq -r .detail <<<"$res" 2>/dev/null | tr -d '\r')"
     case "$st" in
-      present) emit secret-scan already "${swept}ritual block already in $hook; $dt" ;;
+      present) emit_already secret-scan "$top" "${swept}ritual block already in $hook; $dt" ${wrote[@]+"${wrote[@]}"} ;;
       unknown) emit secret-scan unknown "not proved: $dt${swept:+; ${swept%; }}" ;;   # always starts "not proved:"
       *)       emit secret-scan failed "${swept}ritual block already in $hook, but ${dt:-the proof gave no result}" ;;
     esac

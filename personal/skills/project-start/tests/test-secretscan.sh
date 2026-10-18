@@ -119,15 +119,19 @@ tail -n +"$((end_ln + 1))" "$h" > "$TMPROOT/new.rest"
   && [ -n "$end_ln" ] && cmp -s "$TMPROOT/orig.rest" "$TMPROOT/new.rest" \
   && [ "$(grep -nxF "$BEGIN_BD" "$h" | cut -d: -f1)" -gt "$end_ln" ] \
   && ok "fix_inserts_into_beads_hook" || bad "fix_inserts_into_beads_hook: $out / end=$end_ln"
-grep -qF '"$_ritual_gl" git --pre-commit --staged --redact --no-banner --verbose' "$h" \
+grep -qF '"$_ritual_gl" git --pre-commit --staged --redact --no-banner --no-color --verbose' "$h" \
   && ok "fix_block_runs_pinned_command" || bad "pinned command missing from block"
 
-# fix_idempotent: a second fix changes nothing and keeps one marker pair.
+# fix_idempotent: a second fix changes nothing and keeps one marker pair. The hook edit was never
+# committed, so the rerun lists it again for the commit step (I1).
 s1="$(sha256sum "$h" | cut -d' ' -f1)"
 out="$(D fix secret-scan "$r")"
-[ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = '[]' ] && [ "$(sha256sum "$h" | cut -d' ' -f1)" = "$s1" ] \
+[ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = '[".beads/hooks/pre-commit"]' ] && [ "$(sha256sum "$h" | cut -d' ' -f1)" = "$s1" ] \
   && [ "$(nmark "$h" '# >>> ritual secret-scan')" = 1 ] && [ "$(nmark "$h" '# <<< ritual secret-scan')" = 1 ] \
-  && ok "fix_idempotent" || bad "fix_idempotent: $out"
+  && dt "$out" | grep -qF 'not yet committed' && ok "fix_idempotent" || bad "fix_idempotent: $out"
+git -C "$r" add .beads/hooks/pre-commit && git -C "$r" commit -q --no-verify -m 'secret scan'
+out="$(D fix secret-scan "$r")"
+[ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = '[]' ] && ok "fix_rerun_after_the_commit_lists_nothing" || bad "rerun after commit: $out"
 
 # fix_absolute_hookspath: bd itself writes an ABSOLUTE Windows core.hooksPath; wrote stays repo-relative.
 r="$(bd_repo)"; git -C "$r" config core.hooksPath "$(cygpath -w "$r/.beads/hooks")"

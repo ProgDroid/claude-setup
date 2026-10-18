@@ -158,6 +158,18 @@ grep -qF 'only when `fix handoff` returned `fixed` or `already`' <<<"$FLAT" \
   && grep -qE 'handoff-commit.{0,40} (outcome|status|result).{0,40}note' <<<"$FLAT" \
   && ok "handoff_commit_runs_only_after_fix_success" \
   || bad "handoff_commit_runs_only_after_fix_success: the R56 condition is missing from project-start or handoff SKILL.md"
+# I2: step 7 takes the block's printed status only when the block ran `fix handoff`
+grep -qF 'when the block ran `fix handoff`' <<<"$FLAT" && ok "step_7_qualifies_the_printed_handoff_status" \
+  || bad "step_7_qualifies_the_printed_handoff_status: no 'when the block ran \`fix handoff\`'"
+
+echo "== re-runs =="
+# I1: step 6's ask covers what an earlier, uncommitted run set up
+grep -qF 'files set up by an earlier run that was not committed' <<<"$FLAT" && ok "commit_ask_covers_an_earlier_uncommitted_run" \
+  || bad "commit_ask_covers_an_earlier_uncommitted_run: step 6 does not name them"
+# M2: the issues beads-seed created ride the ritual commit (bd stages nothing itself)
+sec5b="$(awk '/^- \*\*`beads-seed`\*\*/ { f = 1 } f && /^- \*\*`ci`\*\*/ { exit } f' <<<"$BODY")"
+grep -qF '.beads/issues.jsonl' <<<"$sec5b" && grep -qF 'model.json' <<<"$sec5b" && grep -qF 'bd create' <<<"$sec5b" \
+  && ok "beads_seed_commits_issues_jsonl" || bad "beads_seed_commits_issues_jsonl: bullet: $sec5b"
 
 echo "== secret-scan =="
 grep -qE 'before (you run|running).{0,40}check secret-scan|check secret-scan.{0,120}(tell|warn) the user' <<<"$LBODY" \

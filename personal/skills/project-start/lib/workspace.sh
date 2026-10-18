@@ -115,7 +115,7 @@ ritual_commit() {
     return 0
   fi
 
-  local top gd old p mode blob rmode rblob ti tree otree out new changed=()
+  local top gd p
   top="$(git -C "$repo" rev-parse --show-toplevel)" || die "cannot resolve repo root: $repo"
   gd="$(git -C "$top" rev-parse --path-format=absolute --git-dir)" || die "cannot resolve the git dir: $repo"
   for p in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD; do
@@ -124,10 +124,27 @@ ritual_commit() {
       return 0
     fi
   done
+  # From the scratch index's creation to the real index's sync, INT/TERM/HUP are recorded, not
+  # obeyed (the secret-scan proof's pattern). One that arrives before `git commit` runs stops the
+  # ritual before it commits; one that arrives after git moved the branch (a slow post-commit hook)
+  # lets the index sync finish, so the real index never shows the committed paths as deleted. The
+  # scratch index is removed either way, then the signal is re-raised as the exit status.
+  _RC_SIG=""
+  trap '_RC_SIG=INT' INT; trap '_RC_SIG=TERM' TERM; trap '_RC_SIG=HUP' HUP
+  _ritual_commit_in "$top" "$gd" "$msg" "$@"
+  trap - INT TERM HUP
+  case "$_RC_SIG" in INT) exit 130 ;; TERM) exit 143 ;; HUP) exit 129 ;; esac
+}
+
+# _ritual_commit_in <top> <git-dir> <message-file> <path>...: ritual_commit's work, run while it
+# records signals in _RC_SIG. Every return removes the scratch index.
+_ritual_commit_in() {
+  local top="$1" gd="$2" msg="$3"; shift 3
+  local old p mode blob rmode rblob ti tree otree out crc new changed=()
   old="$(git -C "$top" rev-parse -q --verify HEAD 2>/dev/null)"; old="${old%$'\r'}"
   ti="$(mktemp "$gd/ritual-index.XXXXXX")" || die "mktemp failed in $gd"
   rm -f "$ti"   # git wants no file or a valid index; an empty file is neither
-  _rc_fail() { rm -f "$ti" "$ti.lock"; emit commit failed "$1"; }
+  _rc_fail() { rm -f "$ti" "$ti.lock"; emit commit failed "${_RC_SIG:+interrupted by SIG$_RC_SIG; }$1"; }
 
   local -x GIT_LITERAL_PATHSPECS=1   # every path below is literal, never a glob
   if [ -n "$old" ]; then GIT_INDEX_FILE="$ti" git -C "$top" read-tree "$old" || { _rc_fail "could not seed the scratch index from HEAD"; return 0; }
@@ -154,13 +171,18 @@ ritual_commit() {
   tree="$(GIT_INDEX_FILE="$ti" git -C "$top" write-tree)" || { _rc_fail "could not write the scratch tree"; return 0; }
   if [ -n "$old" ]; then otree="$(git -C "$top" rev-parse "$old^{tree}")"; else otree="$(git -C "$top" hash-object -t tree /dev/null)"; fi
   if [ "${tree%$'\r'}" = "${otree%$'\r'}" ]; then rm -f "$ti"; emit commit already "nothing to commit: the paths already match HEAD"; return 0; fi
+  [ -z "$_RC_SIG" ] || { _rc_fail "stopped before git commit ran; nothing was committed"; return 0; }
 
   # the hooks are the user's code: they get git's normal (glob) pathspecs, not the ritual's literal mode
-  out="$(GIT_LITERAL_PATHSPECS=0 GIT_INDEX_FILE="$ti" git -C "$top" commit -q -F "$msg" 2>&1)" || {
+  out="$(GIT_LITERAL_PATHSPECS=0 GIT_INDEX_FILE="$ti" git -C "$top" commit -q -F "$msg" 2>&1)"; crc=$?
+  rm -f "$ti" "$ti.lock"
+  # whether git made the commit is read from HEAD, not from the exit status: a signal can end git
+  # after it moved the branch (its post-commit hook still running)
+  new="$(git -C "$top" rev-parse -q --verify HEAD 2>/dev/null)"; new="${new%$'\r'}"
+  if [ "$new" = "$old" ]; then
     _rc_fail "git commit failed, HEAD and the index are unchanged: $(printf '%s' "$out" | tr -d '\r' | grep -v '^[[:space:]]*$' | tail -n 3 | paste -sd'|' - | cut -c1-300)"
-    return 0; }
-  rm -f "$ti"
-  new="$(git -C "$top" rev-parse HEAD)"; new="${new%$'\r'}"
+    return 0
+  fi
   if [ "$(git -C "$top" rev-parse -q --verify "$new^" 2>/dev/null | tr -d '\r')" != "$old" ]; then
     emit commit failed "HEAD $new is not a child of $old after committing; check git log"; return 0
   fi
@@ -173,7 +195,10 @@ ritual_commit() {
     emit commit failed "could not update the index after committing; the commit was undone (HEAD is ${old:-unborn} again)"
     return 0
   fi
-  emit commit fixed "committed ${new:0:7}: ${#changed[@]} path(s)"
+  local note=""
+  [ "$crc" = 0 ] || note="; git commit exited $crc after making the commit"
+  [ -z "$_RC_SIG" ] || note="$note; SIG$_RC_SIG arrived after git made the commit, so the index was synced before stopping"
+  emit commit fixed "committed ${new:0:7}: ${#changed[@]} path(s)$note"
 }
 
 # check_untracked_docs <repo> -> step-result. present = untracked, non-ignored files under docs/.

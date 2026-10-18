@@ -506,6 +506,21 @@ git clone -q --depth 1 "file://$(cygpath -m "$sh_src")" "$sh_dst" 2>/dev/null
 shl="$(git -C "$sh_dst" rev-parse --is-shallow-repository 2>/dev/null)"
 out="$( . "$LIB"; ho_anchor "$sh_dst"; echo "rc=$?" )"
 [ "$shl" = true ] && [ "$out" = "rc=3" ] && ok "ho_anchor_shallow_clone_without_anchor_returns_3" || bad "shallow anchor (shallow=$shl): $out"
+
+# M5: a git that answers --is-shallow-repository with neither true nor false (git < 2.15 echoes
+# the option back) cannot say whether an anchor lies beyond a cut-off: 2 (unreadable), never 1
+# (ABSENT), and the ritual twin agrees
+OLDGIT="$TMPROOT/old git shim"; mkdir -p "$OLDGIT"
+printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = --is-shallow-repository ] && { echo --is-shallow-repository; exit 0; }; done\nexec "%s" "$@"\n' "$(command -v git)" > "$OLDGIT/git"
+chmod +x "$OLDGIT/git"
+og="$(mkrepo fr-old-git)"
+shim_says="$(PATH="$OLDGIT:$PATH" git -C "$og" rev-parse --is-shallow-repository)"
+plain="$( . "$LIB"; ho_anchor "$og"; echo "rc=$?" )"
+out_h="$( PATH="$OLDGIT:$PATH"; . "$LIB"; ho_anchor "$og"; echo "rc=$?" )"
+out_r="$( PATH="$OLDGIT:$PATH"; RITUAL_SKILL_DIR="$PLUGIN/skills/project-start"; . "$RITUAL_LIB/common.sh"; . "$RITUAL_LIB/handoff.sh"; _handoff_anchor "$og"; echo "rc=$?" )"
+[ "$shim_says" = --is-shallow-repository ] && [ "$plain" = rc=1 ] && [ "$out_h" = rc=2 ] && [ "$out_r" = rc=2 ] \
+  && ok "ho_anchor_is_unreadable_when_is_shallow_answers_neither_and_agrees_with_the_twin" \
+  || bad "old git: shim=[$shim_says] plain=[$plain] hook=[$out_h] ritual=[$out_r]"
 run "$SS" "$(p_ss startup "$sh_dst")"
 [ "$EVT" = SessionStart ] && has "SHALLOW" && has "unknown, not absent" && has "PICK" && has "agent work 3" \
   && ! has "No handoff: commit was found" && ! has "nothing to diff from" \

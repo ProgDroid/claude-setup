@@ -98,5 +98,5 @@ fix_parking_lot() {
     emit parking-lot failed "rule not found in CLAUDE.md after insert" "${wrote[@]}"; return 0
   fi
   if [ "${#wrote[@]}" -gt 0 ]; then emit parking-lot fixed "created: ${wrote[*]}" "${wrote[@]}"
-  else emit parking-lot already "nothing to add"; fi
+  else emit_already parking-lot "$repo" "nothing to add" "$_PARK_LOT_PATH" CLAUDE.md; fi
 }

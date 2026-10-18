@@ -113,6 +113,21 @@ d="$(RITUAL_STEPS_JSON="$TMPROOT/v2.json" R due "$r4")"
 printf '%s' "$d" | jq -e '.offer|index("baseline")' >/dev/null && [ "$(printf '%s' "$d" | jq '.skip|length')" = 0 ] \
   && ok "due_reoffers_declined_new_version" || bad "new version: $d"
 
+echo "== per-run asks (I3) =="
+[ "$(jq -c '[.steps[] | select(.per_run == true) | .id]' "$SKILL_DIR/steps.json" | tr -d '\r')" = '["untracked-docs","commit"]' ] \
+  && ok "steps_json_marks_commit_and_untracked_docs_per_run" || bad "per_run steps: $(jq -c '[.steps[] | select(.per_run) | .id]' "$SKILL_DIR/steps.json")"
+r5="$(mkrepo perrun)"
+R record-write "$r5" "$(results '{"steps":{"commit":{"result":"declined"},"untracked-docs":{"result":"declined"},"baseline":{"result":"declined"}}}')" >/dev/null
+d="$(R due "$r5")"
+printf '%s' "$d" | jq -e '(.offer | index("commit")) and (.offer | index("untracked-docs"))' >/dev/null \
+  && ok "due_offers_a_declined_commit_again" || bad "declined commit not re-offered: $d"
+[ "$(printf '%s' "$d" | jq -c '[.skip[].id]')" = '["baseline"]' ] && ok "control_a_declined_step_that_is_not_per_run_is_still_skipped" || bad "per-run skip: $d"
+echo '{"ritual_version":1,"steps":[{"id":"a","kind":"ask","version":1,"per_run":true},{"id":"b","kind":"ask","version":1},{"id":"c","kind":"ask","version":1,"per_run":false}]}' > "$TMPROOT/pr.json"
+r6="$(mkrepo perrun2)"
+RITUAL_STEPS_JSON="$TMPROOT/pr.json" R record-write "$r6" "$(results '{"steps":{"a":{"result":"declined"},"b":{"result":"declined"},"c":{"result":"declined"}}}')" >/dev/null
+d="$(RITUAL_STEPS_JSON="$TMPROOT/pr.json" R due "$r6")"
+[ "$(printf '%s' "$d" | jq -c '[.offer, [.skip[].id]]')" = '[["a"],["b","c"]]' ] && ok "due_never_skips_a_per_run_step_whatever_its_id" || bad "per_run registry: $d"
+
 echo "== from another cwd =="
 ( cd "$TMPROOT" && bash "$RITUAL" record-read "$r4" | jq -e '.steps.baseline' >/dev/null ) \
   && ok "runs from an unrelated cwd" || bad "cwd-dependent"

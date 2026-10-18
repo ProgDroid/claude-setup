@@ -97,4 +97,102 @@ ctl="$(S handoff-commit "$wt")"
 [ "$(jr "$ctl" .status)" = failed ] && ok "control_handoff_commit_in_a_worktree_is_failed" \
   || bad "control_handoff_commit_in_a_worktree_is_failed: $ctl"
 
+echo "== I2: the handoff block when fix handoff did not run =="
+NOTRUN="not run here: record check handoff or the user's answer by the mapping table"
+# agent_hs <printed> <by-the-table>: what step 7 records: the printed status when the block ran
+# fix handoff, else check handoff's status or the user's answer, mapped by the table
+agent_hs() { case "$1" in "not run here"*) printf '%s' "$2" ;; *) printf '%s' "$1" ;; esac; }
+# case A: the user declined the handoff ask, so there is no out/handoff.json
+d="$(mkrepo "flow declined")"; RT3="$(newrt)"; h0="$(git -C "$d" rev-parse HEAD | tr -d '\r')"
+out="$(run_snippet '"$R" handoff-commit' "$d" "$RT3" 2>&1)"
+hs="$(printf '%s\n' "$out" | sed -n 's/^handoff status to record: //p' | tr -d '\r')"
+[ "$hs" = "$NOTRUN" ] && [ ! -e "$RT3/handoff-commit.json" ] && [ "$(git -C "$d" rev-parse HEAD | tr -d '\r')" = "$h0" ] \
+  && ok "handoff_block_without_a_fix_says_not_run_here" || bad "handoff_block_without_a_fix_says_not_run_here: [$hs]"
+jq -n --arg r "$(agent_hs "$hs" declined)" '{steps: {handoff: {result: $r, note: "user declined"}}}' > "$RT3/results.json"
+S record-write "$d" "$RT3/results.json" >/dev/null
+due="$(S due "$d")"
+[ "$(jr "$(S record-read "$d")" .steps.handoff.result)" = declined ] && [ "$(jr "$due" '[.skip[].id] | index("handoff") != null')" = true ] \
+  && [ "$(jr "$due" '.offer | index("handoff") == null')" = true ] \
+  && ok "declined_handoff_is_recorded_declined_and_the_next_due_skips_it" || bad "declined handoff: record=$(S record-read "$d") due=$due"
+# case B: check handoff already says present, so no fix ran
+p="$(mkrepo "flow present")"; S fix handoff "$p" >/dev/null
+git -C "$p" add CLAUDE.md .claude/handoff.json; git -C "$p" commit -q -m setup; S handoff-commit "$p" >/dev/null
+RT4="$(newrt)"; S check handoff "$p" > "$RT4/chk/handoff.json"; h1="$(git -C "$p" rev-parse HEAD | tr -d '\r')"
+out="$(run_snippet '"$R" handoff-commit' "$p" "$RT4" 2>&1)"
+hs="$(printf '%s\n' "$out" | sed -n 's/^handoff status to record: //p' | tr -d '\r')"
+cst="$(jq -r .status "$RT4/chk/handoff.json" | tr -d '\r')"
+[ "$cst" = present ] && [ "$hs" = "$NOTRUN" ] && [ "$(git -C "$p" rev-parse HEAD | tr -d '\r')" = "$h1" ] \
+  && ok "handoff_block_with_check_present_says_not_run_here" || bad "handoff_block_with_check_present_says_not_run_here: check=$cst [$hs]"
+jq -n --arg r "$(agent_hs "$hs" "$([ "$cst" = present ] && echo already)")" '{steps: {handoff: {result: $r}}}' > "$RT4/results.json"
+S record-write "$p" "$RT4/results.json" >/dev/null
+[ "$(jr "$(S record-read "$p")" .steps.handoff.result)" = already ] && ok "handoff_check_present_is_recorded_already" \
+  || bad "handoff_check_present_is_recorded_already: $(S record-read "$p")"
+
+echo "== I1: an interrupted run's setup is committed by the next run =="
+i="$(mkrepo "flow interrupted")"; RT5="$(newrt)"
+S preflight "$i" > "$RT5/preflight.json"; S auto "$i" > "$RT5/out/auto.json"; S fix handoff "$i" > "$RT5/out/handoff.json"
+# run 1 stops here, before step 6: the marker, CLAUDE.md and docs/parking-lot.md are only on disk
+RT6="$(newrt)"
+S preflight "$i" > "$RT6/preflight.json"; S auto "$i" > "$RT6/out/auto.json"; S fix handoff "$i" > "$RT6/out/handoff.json"
+pl="$(jq -c '.results[] | select(.id == "parking-lot")' "$RT6/out/auto.json" | tr -d '\r')"
+[ "$(jr "$pl" .status)" = already ] && [ "$(jr "$pl" '.wrote | sort | tostring')" = '["CLAUDE.md","docs/parking-lot.md"]' ] \
+  && [[ "$(jr "$pl" .detail)" == *"not yet committed"* ]] \
+  && ok "rerun_auto_parking_lot_is_already_and_lists_its_uncommitted_files" || bad "rerun parking-lot: $pl"
+ho="$(cat "$RT6/out/handoff.json")"
+[ "$(jr "$ho" .status)" = already ] && [ "$(jr "$ho" '.wrote | sort | tostring')" = '[".claude/handoff.json","CLAUDE.md"]' ] \
+  && ok "rerun_fix_handoff_is_already_and_lists_its_uncommitted_files" || bad "rerun fix handoff: $ho"
+run_snippet '"$R" commit-plan' "$i" "$RT6" > "$RT6/plan.out" 2>&1
+miss=""
+for f in .claude/handoff.json CLAUDE.md docs/parking-lot.md; do
+  jq -e --arg f "$f" '.ask | index($f)' "$RT6/plan.json" >/dev/null || miss="$miss $f"
+done
+[ -z "$miss" ] && [ "$(jq '.commit | length' "$RT6/plan.json" | tr -d '\r')" = 0 ] \
+  && ok "commit_plan_routes_the_leftovers_to_ask" || bad "commit_plan_routes_the_leftovers_to_ask: missing [$miss] plan=$(cat "$RT6/plan.json")"
+mapfile -t A < <(jq -r '.ask[]' "$RT6/plan.json" | tr -d '\r')   # the user confirmed every ask path
+printf 'chore: project-start ritual\n' > "$RT6/msg"
+c="$(S commit "$i" --preflight "$RT6/preflight.json" --message-file "$RT6/msg" --include-dirty -- "${A[@]}")"
+[ "$(jr "$c" .status)" = fixed ] && [ -n "$(git -C "$i" ls-files -- .claude/handoff.json)" ] && [ -n "$(git -C "$i" ls-files -- docs/parking-lot.md)" ] \
+  && [ "$(git -C "$i" status --porcelain | tr -d '\r')" = '?? NEXT.md' ] \
+  && ok "include_dirty_commits_what_the_earlier_run_left" || bad "include_dirty_commits_what_the_earlier_run_left: $c / $(git -C "$i" status --porcelain | paste -sd'|' -)"
+out="$(run_snippet '"$R" handoff-commit' "$i" "$RT6" 2>&1)"
+# run 2's fix was `already`, so that is the step's result; handoff-commit's `fixed` goes in its note
+[[ "$out" == *"handoff status to record: already"* ]] && [ "$(jq -r .status "$RT6/handoff-commit.json" | tr -d '\r')" = fixed ] \
+  && [ -z "$(git -C "$i" status --porcelain | tr -d '\r')" ] \
+  && ok "the_rerun_ends_with_everything_committed" || bad "the_rerun_ends_with_everything_committed: $out / $(git -C "$i" status --porcelain | paste -sd'|' -)"
+# control: on the fully committed repo, already lists nothing and the plan is empty
+RT7="$(newrt)"
+S preflight "$i" > "$RT7/preflight.json"; S auto "$i" > "$RT7/out/auto.json"; S fix handoff "$i" > "$RT7/out/handoff.json"
+run_snippet '"$R" commit-plan' "$i" "$RT7" > "$RT7/plan.out" 2>&1
+[ "$(jq -c '.wrote' "$RT7/out/auto.json" | tr -d '\r')" = '[]' ] && [ "$(jq -c '[.status, .wrote]' "$RT7/out/handoff.json" | tr -d '\r')" = '["already",[]]' ] \
+  && [ "$(jq -c . "$RT7/plan.json" | tr -d '\r')" = '{"commit":[],"ask":[]}' ] \
+  && ok "control_a_committed_repo_lists_nothing" || bad "control_a_committed_repo_lists_nothing: auto=$(jq -c .wrote "$RT7/out/auto.json") handoff=$(cat "$RT7/out/handoff.json") plan=$(cat "$RT7/plan.json")"
+
+echo "== R58: a declined commit, then a present check whose no-flag fix lists the leftovers =="
+k="$(mkrepo "flow declined commit")"; RK1="$(newrt)"
+S preflight "$k" > "$RK1/preflight.json"; S auto "$k" > "$RK1/out/auto.json"; S fix handoff "$k" > "$RK1/out/handoff.json"
+# run 1 stops before step 6. Run 2 lists the leftovers, the user DECLINES the commit, and the handoff
+# block still makes the anchor (the fix was `already`), so run 3's check handoff says `present`
+RK2="$(newrt)"
+S preflight "$k" > "$RK2/preflight.json"; S auto "$k" > "$RK2/out/auto.json"; S fix handoff "$k" > "$RK2/out/handoff.json"
+run_snippet '"$R" commit-plan' "$k" "$RK2" > "$RK2/plan.out" 2>&1
+jq -e '.ask | index(".claude/handoff.json")' "$RK2/plan.json" >/dev/null && ok "r58_run_2_lists_the_marker" || bad "r58_run_2_lists_the_marker: $(cat "$RK2/plan.json")"
+run_snippet '"$R" handoff-commit' "$k" "$RK2" > "$RK2/hc.out" 2>&1
+jq -n '{steps: {commit: {result: "declined"}, handoff: {result: "already"}}}' > "$RK2/results.json"
+S record-write "$k" "$RK2/results.json" >/dev/null
+[ -z "$(git -C "$k" ls-files -- .claude/handoff.json)" ] && [ -n "$(git -C "$k" ls-files -- NEXT.md)" ] \
+  && ok "r58_premise_marker_uncommitted_and_the_anchor_made" || bad "r58 premise: $(git -C "$k" status --porcelain | paste -sd'|' -) $(cat "$RK2/hc.out")"
+# run 3: due re-offers the commit (I3); check handoff is present; the step-5 block runs its no-flag fix
+RK3="$(newrt)"
+S preflight "$k" > "$RK3/preflight.json"; S auto "$k" > "$RK3/out/auto.json"
+due="$(S due "$k")"; S check handoff "$k" > "$RK3/chk/handoff.json"
+[ "$(jr "$due" '.offer | index("commit") != null')" = true ] && [ "$(jq -r .status "$RK3/chk/handoff.json" | tr -d '\r')" = present ] \
+  && ok "r58_run_3_offers_the_commit_and_check_handoff_is_present" || bad "r58 run 3: due=$due check=$(cat "$RK3/chk/handoff.json")"
+run_snippet 'pr handoff &&' "$k" "$RK3" > "$RK3/r58.out" 2>&1
+ho="$(cat "$RK3/out/handoff.json" 2>/dev/null)"
+[ "$(jr "$ho" .status)" = already ] && jr "$ho" '.wrote | index(".claude/handoff.json") != null' | grep -qx true \
+  && ok "r58_present_check_gets_its_no_flag_fix_which_lists_the_marker" || bad "r58 no-flag fix: [$ho] $(cat "$RK3/r58.out")"
+run_snippet '"$R" commit-plan' "$k" "$RK3" > "$RK3/plan.out" 2>&1
+jq -e '.ask | index(".claude/handoff.json")' "$RK3/plan.json" >/dev/null \
+  && ok "r58_the_re_offered_commit_offers_the_marker" || bad "r58 run 3 plan: $(cat "$RK3/plan.json" 2>/dev/null)"
+
 finish

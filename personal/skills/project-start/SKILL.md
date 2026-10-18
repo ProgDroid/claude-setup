@@ -71,7 +71,8 @@ Step `beads` sets up the house Beads tracker (`bd`).
 bash "$R" check beads "$REPO" > "$RT/chk/beads.json"; cat "$RT/chk/beads.json"
 ```
 
-- `present`: nothing to ask; record `already`.
+- `present`: nothing to ask; record `already`. Its fix still runs, with no flags, in step 5 (a
+  `present` check still gets its fix).
 - `unknown` (no `bd` on PATH): nothing to ask; tell the user and record `unknown`.
 - `absent`: ask **"Set up Beads here? `bd init` makes its own commit."** If preflight listed dirty
   paths, the same question offers to set the user's changes aside for `bd init` only and restore
@@ -142,6 +143,20 @@ cat "$RT"/chk/*.json
 bash "$R" candidates "$REPO" > "$RT/candidates.json"; cat "$RT/candidates.json"   # only when Beads is set up
 ```
 
+**A `present` check still gets its fix**, with no flags. There the fix writes nothing and returns
+`already`, and its `wrote` lists any of the step's files that an earlier run set up and never
+committed ("not yet committed" in its detail), so step 6 can offer them. Record the step `already`.
+`fix secret-scan` proves the existing block again (the same live proof, announced as above); a
+`failed` `fix beads` names a stash an earlier run still holds: show it as in step 2.
+
+```bash
+pr() { [ "$(jq -r .status "$RT/chk/$1.json" 2>/dev/null | tr -d '\r')" = present ]; }
+pr beads && bash "$R" fix beads "$REPO" > "$RT/out/beads.json"
+pr secret-scan && bash "$R" fix secret-scan "$REPO" > "$RT/out/secret-scan.json"
+pr handoff && bash "$R" fix handoff "$REPO" > "$RT/out/handoff.json"
+cat "$RT"/out/*.json
+```
+
 Ask only what `due` offered and what is not already in place.
 
 - **`public-sweep`.** `present` means the repo is PUBLIC: offer to run the
@@ -171,7 +186,8 @@ Ask only what `due` offered and what is not already in place.
 - **`beads-seed`**, only when Beads is set up. Show `candidates`' items (text and source) as a list,
   and let the user pick which become issues. Create each picked one with `bd create`, and confirm
   it by listing the issues: bd's exit code is not evidence, since several bd commands exit 255 on
-  success.
+  success. When `bd create` ran, put `.beads/issues.jsonl` in `model.json` (below): neither
+  `bd create` nor bd's hook stages it, and it is how the issues reach other clones.
 - **`ci`.** `absent` and `oracle` found a test command: offer a minimal workflow in
   `.github/workflows/` that runs it. `absent` with no test command: not applicable, no question.
 - **`baseline`.** Always an ask, never automatic. Say that it runs the whole test suite once and
@@ -179,7 +195,8 @@ Ask only what `due` offered and what is not already in place.
   oracle's test command once, and note the pass count, the fail count and the duration. Then stop
   **only what you started**. A failing baseline is a result, not an open step, and its failures are
   recorded (step 7).
-- **`handoff`.** `present`: already set up; no question. If the detail mentions "shallow clone", no
+- **`handoff`.** `present`: already set up; no question (its no-flag fix ran in the block above).
+  If the detail mentions "shallow clone", no
   `handoff:` commit is within reach and the anchor may lie beyond the cut-off: offer
   `git fetch --unshallow` first, then check again, before asking anything else. Otherwise ask
   **"Set up the NEXT.md handoff here?"** with the default session-start question, "How did the last
@@ -221,8 +238,10 @@ bash "$R" commit-plan "$REPO" "$RT/preflight.json" "$RT/wrote.json" > "$RT/plan.
 ```
 
 It answers `{"commit": [...], "ask": [...]}`. `ask` holds the paths that were already dirty at
-preflight, such as a `.gitignore` the user was editing: name each one, and include it only if the
-user says so, so their own edits never ride along unannounced. (Untracked docs the user accepted in
+preflight, such as a `.gitignore` the user was editing, or files set up by an earlier run that was
+not committed (a step that reports `already` lists them in `wrote`, with "not yet committed" in its
+detail): name each one, and include it only if the user says so, so their own edits never ride
+along unannounced. (Untracked docs the user accepted in
 step 5 are in `ask` too; that yes covers them.) Show the changes as one diff and ask whether to
 commit them as one commit on the current branch.
 
@@ -257,8 +276,9 @@ case "$hs" in
     bash "$R" handoff-commit "$REPO" > "$RT/handoff-commit.json"; cat "$RT/handoff-commit.json"
     cs="$(jq -r .status "$RT/handoff-commit.json" | tr -d '\r')"
     case "$cs" in failed|unknown) hs="$cs" ;; esac ;;
+  "") hs="not run here: record check handoff or the user's answer by the mapping table" ;;
 esac
-echo "handoff status to record: ${hs:-none}"
+echo "handoff status to record: $hs"
 ```
 
 `handoff-commit` answers `already` when a `handoff:` commit exists. It refuses (`failed`), touching
@@ -279,8 +299,11 @@ bash "$R" record-write "$REPO" "$RT/results.json"
 `lessons`, `commit` and `record` included; leave out only the steps `due` skipped. Map each status
 with the table below. `record-write` merges into the existing record and prints it.
 
-`handoff` is one step id for two commands. Its result is the status the step-6 block printed: the
-`fix handoff` outcome, and the `handoff-commit` outcome goes in that step's note. Only when
+`handoff` is one step id for two commands. When the block ran `fix handoff` (a result was saved
+in `$RT/out/handoff.json`), its result is the status the step-6 block printed: the `fix handoff`
+outcome, and the `handoff-commit` outcome goes in that step's note. When the block printed
+`not run here`, record `check handoff`'s status by the table (`present`: `already`) or the user's
+answer to the ask (`declined`), never `none`. Only when
 `handoff-commit` ran (after a `fixed` or `already` fix) and did not make or find the anchor does its
 `failed` or `unknown` become the result. A fix `unknown` stays `unknown`, so the step stays open.
 Never let the second result silently overwrite the first.
@@ -317,7 +340,9 @@ repo, on a machine with every tool, leaves it empty.
 | - | `record` (this write) | `done` |
 
 `unknown` and `interrupted` stay open. `declined`, `none`, `na`, `failed`, `done` and `already`
-never do: a declined step is offered again only when that step's own version changes.
+never do: a declined step is offered again only when that step's own version changes. The per-run
+asks (`commit` and `untracked-docs`, marked `per_run` in `steps.json`) are the exception: their
+question is about this run's files, so `due` offers them on every run.
 
 ## Cloud sessions
 

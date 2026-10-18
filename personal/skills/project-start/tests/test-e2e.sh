@@ -106,7 +106,8 @@ full_fixture() {
 
 # to_record <auto-output> <checks-json-lines-file> <preflight-exit> -> {"steps":{...}} for every
 # steps.json id, mapped as the skill maps them: fixed->done, already/present->already,
-# unknown->unknown, failed->failed, oracle absent->none, ci absent with no oracle->na, any other
+# unknown->unknown, failed->failed, oracle absent->none, ci absent with no oracle->na,
+# public-sweep absent->na, untracked-docs absent->already, stack absent->none, any other
 # absent (an ask the skill would not take)->declined. lessons is model-run (done); record is this
 # write (done); preflight is done when it ran; asks with no script are declined.
 to_record() {
@@ -120,6 +121,9 @@ to_record() {
         elif $s == "unknown" or $s == "failed" then $s
         elif $s == "absent" and $id == "oracle" then "none"
         elif $s == "absent" and $id == "ci" and $or != "present" then "na"
+        elif $s == "absent" and $id == "public-sweep" then "na"
+        elif $s == "absent" and $id == "untracked-docs" then "already"
+        elif $s == "absent" and $id == "stack" then "none"
         elif $s == "absent" then "declined"
         else "unmapped:" + $s end;
     {steps: ($reg[0].steps | map(.id as $id | .kind as $k | {key: $id, value: {result: (
@@ -130,6 +134,12 @@ to_record() {
         elif $k == "ask" then "declined"
         else "unmapped:no-result" end)}}) | from_entries)}'
 }
+
+echo "== to_record follows SKILL.md's table =="
+printf '%s\n' '{"id":"public-sweep","status":"absent"}' '{"id":"untracked-docs","status":"absent"}' '{"id":"ci","status":"absent"}' > "$TMPROOT/m4 checks.jsonl"
+m4="$(to_record '{"results":[{"id":"stack","status":"absent"},{"id":"oracle","status":"present"}]}' "$TMPROOT/m4 checks.jsonl" 0)"
+[ "$(printf '%s' "$m4" | jq -c '[.steps["public-sweep","untracked-docs","stack","ci"].result]' | tr -d '\r')" = '["na","already","none","declined"]' ] \
+  && ok "to_record_maps_public_sweep_untracked_docs_and_stack_absent_like_the_skill" || bad "to_record rows: $m4"
 
 echo "== usage =="
 out="$(bash "$RITUAL" auto 2>&1)"; rc=$?
@@ -213,7 +223,10 @@ o3="$(S auto "$u")"; rc=$?
 echo "== rerun changes nothing =="
 p1="$(git -C "$r" status --porcelain)"; s1="$(tree_sums "$r")"
 out2="$(S auto "$r")"; rc=$?
-[ "$rc" = 0 ] && [ "$(j "$out2" .wrote)" = '[]' ] && ok "fully_set_up_rerun_changes_nothing: second wrote is []" || bad "rerun wrote: $(j "$out2" .wrote)"
+# the first run was never committed: the rerun writes nothing, yet lists the same paths again (I1)
+[ "$rc" = 0 ] && [ "$(j "$out2" '.wrote | sort')" = "$(j "$out" '.wrote | sort')" ] && [ "$(j "$out2" '.wrote | length')" = 5 ] \
+  && [ "$(j "$out2" '[.results[] | select(.status == "already" and (.wrote | length) > 0) | .detail | test("not yet committed")] | all')" = true ] \
+  && ok "uncommitted_rerun_lists_the_first_runs_paths_again" || bad "rerun wrote: $(j "$out2" .wrote)"
 [ "$(git -C "$r" status --porcelain)" = "$p1" ] && [ "$(tree_sums "$r")" = "$s1" ] \
   && ok "rerun_leaves_status_and_bytes_identical" || bad "rerun changed the tree"
 [ "$(res "$out2" traps status)|$(res "$out2" stack-checks status)|$(res "$out2" parking-lot status)" = 'already|already|already' ] \

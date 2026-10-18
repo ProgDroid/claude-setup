@@ -199,6 +199,47 @@ bash "$RITUAL" commit "$r" --preflight "$TMPROOT/c6.json" -- n.txt >/dev/null 2>
 bash "$RITUAL" commit "$r" --message-file "$TMPROOT/msg.txt" -- n.txt >/dev/null 2>&1; rc2=$?
 [ "$rc1" = 2 ] && [ "$rc2" = 2 ] && [ "$(headof "$r")" = "$h0" ] && ok "commit_usage_errors_exit_2" || bad "commit_usage_errors_exit_2: $rc1 $rc2"
 
+# M1: TERM while a slow post-commit hook runs, i.e. after git moved the branch and before the real
+# index is synced. Sent the way `timeout` sends it: to the ritual and its whole process group.
+r="$(mkrepo)"; pf "$r" > "$TMPROOT/c7.json"; echo c > "$r/CLAUDE.md"; mkdir -p "$r/docs"; echo p > "$r/docs/parking-lot.md"
+mkdir -p "$r/.git/hooks"; printf '#!/bin/sh\n: > "%s"\nsleep 3\n' "$TMPROOT/c7-post-commit-ran" > "$r/.git/hooks/post-commit"
+chmod +x "$r/.git/hooks/post-commit"; h0="$(headof "$r")"
+timeout -s TERM 120 bash "$RITUAL" commit "$r" --preflight "$TMPROOT/c7.json" --message-file "$TMPROOT/msg.txt" \
+  -- CLAUDE.md docs/parking-lot.md > "$TMPROOT/c7.out" 2>"$TMPROOT/c7.err" & tpid=$!
+for i in $(seq 1 300); do [ -e "$TMPROOT/c7-post-commit-ran" ] && break; sleep 0.1; done
+kill -TERM "$tpid" 2>/dev/null; wait "$tpid"; rc=$?
+moved=0; [ -e "$TMPROOT/c7-post-commit-ran" ] && [ "$(git -C "$r" rev-parse -q --verify HEAD~1 | tr -d '\r')" = "$h0" ] && moved=1
+[ "$moved" = 1 ] && [ "$(git -C "$r" show --name-only --format= HEAD | tr -d '\r' | LC_ALL=C sort | paste -sd'|' -)" = "CLAUDE.md|docs/parking-lot.md" ] \
+  && ok "commit_term_premise_the_signal_landed_after_the_commit_was_made" || bad "commit_term_premise: moved=$moved rc=$rc out=$(cat "$TMPROOT/c7.out")"
+[ -z "$(git -C "$r" diff --cached --name-status | tr -d '\r')" ] && [ -z "$(git -C "$r" status --porcelain | tr -d '\r')" ] \
+  && ok "commit_term_after_the_commit_still_syncs_the_real_index" \
+  || bad "commit_term_after_the_commit_still_syncs_the_real_index: $(git -C "$r" status --porcelain | paste -sd'|' -)"
+[ "$(leftover "$r")" = 0 ] && ok "commit_term_leaves_no_scratch_index" || bad "commit_term_leaves_no_scratch_index: $(leftover "$r")"
+[ "$rc" -ge 128 ] && [ "$(jq -r .status "$TMPROOT/c7.out" 2>/dev/null | tr -d '\r')" = fixed ] \
+  && [[ "$(jq -r .detail "$TMPROOT/c7.out" | tr -d '\r')" == *SIGTERM* ]] \
+  && ok "commit_term_reports_the_commit_then_exits_by_the_signal" || bad "commit_term_reports_the_commit_then_exits_by_the_signal: rc=$rc out=$(cat "$TMPROOT/c7.out")"
+# TERM before git commit runs: a git stub sends it to the ritual while the scratch tree is being
+# written, after the scratch index exists. Nothing is committed and no scratch index is left.
+SIGSTUB="$TMPROOT/term stub"; mkdir -p "$SIGSTUB"
+{ printf '#!/usr/bin/env bash\nREAL_GIT=%q\nPIDF=%q\n' "$(command -v git)" "$TMPROOT/c8.pid"; cat <<'WRAP'
+for a in "$@"; do
+  if [ "$a" = write-tree ]; then
+    for i in $(seq 1 100); do [ -s "$PIDF" ] && break; sleep 0.1; done
+    kill -TERM "$(cat "$PIDF")"; break
+  fi
+done
+exec "$REAL_GIT" "$@"
+WRAP
+} > "$SIGSTUB/git"; chmod +x "$SIGSTUB/git"
+r="$(mkrepo)"; pf "$r" > "$TMPROOT/c8.json"; echo c > "$r/CLAUDE.md"; h0="$(headof "$r")"; i0="$(lsfs "$r")"
+PATH="$SIGSTUB:$PATH" bash "$RITUAL" commit "$r" --preflight "$TMPROOT/c8.json" --message-file "$TMPROOT/msg.txt" \
+  -- CLAUDE.md > "$TMPROOT/c8.out" 2>"$TMPROOT/c8.err" & rpid=$!
+echo "$rpid" > "$TMPROOT/c8.pid"; wait "$rpid"; rc=$?
+[ "$(headof "$r")" = "$h0" ] && [ "$(lsfs "$r")" = "$i0" ] && [ "$(leftover "$r")" = 0 ] && [ "$rc" = 143 ] \
+  && [ "$(jq -r .status "$TMPROOT/c8.out" 2>/dev/null | tr -d '\r')" = failed ] && [[ "$(jq -r .detail "$TMPROOT/c8.out" | tr -d '\r')" == *"interrupted by SIGTERM"* ]] \
+  && ok "commit_term_before_git_commit_commits_nothing_and_cleans_up" \
+  || bad "commit_term_before_git_commit: rc=$rc head-moved=$([ "$(headof "$r")" = "$h0" ] && echo no || echo yes) left=$(leftover "$r") out=$(cat "$TMPROOT/c8.out") err=$(cat "$TMPROOT/c8.err")"
+
 # --- check untracked-docs
 r="$(mkrepo)"; mkdir -p "$r/docs" "$r/src"; echo a > "$r/docs/a.md"; echo b > "$r/src/b.rs"
 out="$(bash "$RITUAL" check untracked-docs "$r")"

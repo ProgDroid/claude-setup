@@ -39,7 +39,7 @@ fix_traps() {
   local repo="$1" miss line w newmod n detail
   local wrote=()
   miss="$(_traps_missing "$repo")"
-  [ -n "$miss" ] || { emit traps already "nothing to add"; return 0; }
+  [ -n "$miss" ] || { emit_already traps "$repo" "nothing to add" .gitattributes .gitignore; return 0; }
   while IFS= read -r line; do
     if [ "$line" = attr ]; then append_line "$repo/.gitattributes" "$_TRAP_ATTR"; w=.gitattributes
     else append_line "$repo/.gitignore" "$line"; w=.gitignore; fi
@@ -156,12 +156,12 @@ check_stack_checks() {
 
 fix_stack_checks() {
   local repo="$1" lang dir base f bak res table line rel lock lockbak meta_ok
-  local wrote=() asks="" fails="" unk=""
+  local wrote=() have=() asks="" fails="" unk=""
   table="$(_clippy_table)"
   while IFS=$'\t' read -r lang dir; do
     case "$lang" in rust|python|flutter) ;; *) continue ;; esac
     res="$(_stackcheck_one "$repo" "$lang" "$dir")"
-    [ "${res%%$'\t'*}" = present ] && continue
+    if [ "${res%%$'\t'*}" = present ]; then [ "$lang" = rust ] && have+=("$(_rel "$dir" Cargo.toml)"); continue; fi
     if [ "$lang" != rust ]; then asks="${asks:+$asks; }${res#*$'\t'}"; continue; fi
     base="$repo"; [ "$dir" = . ] || base="$repo/$dir"; f="$base/Cargo.toml"; rel="$(_rel "$dir" Cargo.toml)"
     # only a single-crate root ([package], no [workspace]); anything else is the user's call
@@ -195,5 +195,5 @@ fix_stack_checks() {
   elif [ -n "$unk" ]; then emit stack-checks unknown "$detail" "${wrote[@]}"
   elif [ -n "$asks" ]; then emit stack-checks absent "$detail" "${wrote[@]}"
   elif [ "${#wrote[@]}" -gt 0 ]; then emit stack-checks fixed "appended [lints.clippy]" "${wrote[@]}"
-  else emit stack-checks already "nothing to add"; fi
+  else emit_already stack-checks "$repo" "nothing to add" ${have[@]+"${have[@]}"}; fi
 }
