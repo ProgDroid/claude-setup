@@ -206,5 +206,29 @@ else
   echo "  FAIL: multi-repo: sibling memory not synced/committed"; fail=$((fail + 1))
 fi
 
+# 12. .claude/no-auto-commit at the repo root opts the repo out (switchboard
+# marker: a repo whose WIP must stay on the PC). Without it the same repo commits.
+newrepo
+git checkout -qb feature/marker
+mkdir -p .claude; : > .claude/no-auto-commit
+git add -A; git commit -qm marker
+before="$(git rev-parse HEAD)"
+echo two > a.txt
+CLAUDE_CLOUD_SESSION=1 HOME="$(mktemp -d)" bash "$HOOK" >/dev/null 2>&1
+check "no-auto-commit marker: the tree stays dirty" dirty
+if [ "$(git rev-parse HEAD)" = "$before" ]; then
+  echo "  PASS: no-auto-commit marker: no commit was made"; pass=$((pass + 1))
+else
+  echo "  FAIL: no-auto-commit marker: a commit was made"; fail=$((fail + 1))
+fi
+
+newrepo
+git checkout -qb feature/nomarker
+mkdir -p .claude
+git add -A; git commit -qm "empty claude dir" --allow-empty
+echo two > a.txt
+CLAUDE_CLOUD_SESSION=1 HOME="$(mktemp -d)" bash "$HOOK" >/dev/null 2>&1
+check "no marker (same setup): committed as today" clean
+
 echo "-- $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

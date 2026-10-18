@@ -267,3 +267,23 @@ warning. `Edit(...)` covers every file-editing tool; use it.
 
 An `Edit(~/.claude/settings.json)` deny rule works, and locks the agent out of its own settings
 permanently. That is the point, but it means future settings changes are a manual operation.
+
+## Earlier cloud work is not only `claude/*`
+
+Cloud sessions do not always push to `claude/*`: branches arrive as `ccr-*` and other names too, so
+"look for `claude/*`" misses earlier work that never landed. `hooks/earlier-cloud-work.sh` (a
+cloud-only SessionStart hook) lists every unmerged branch on origin, minus `dependabot/*`, the
+session's own branch and anything already merged into the default branch.
+
+- The authority is `git ls-remote --heads origin`, not local refs: a resumed clone holds only `main`
+  and its own branch. The hook runs under a 22 s budget (8 s per network call) and prints
+  "couldn't check <repo> (out of time)" rather than going silent.
+- If a `switchboard-state` clone sits beside the project and its `verdicts.tsv` says `wait` for this
+  repo, the hook prints that verdict: the PC has work this session cannot see.
+- A repo containing `.claude/no-auto-commit` is skipped by `auto-commit.sh`, so its work in progress
+  stays on the PC.
+- Known limitations, not built for: the merged test is ancestry (`merge-base --is-ancestor`), so a
+  squash-merged or rebased cloud PR keeps listing as unmerged. Measured 2026-10-17: all 13
+  `claude/*` branches in continuable projects were merged by ancestry. And `--unshallow` on a big
+  repo usually exceeds the 8 s per-call cap, so a shallow clone reports "shallow clone" rather than
+  a list.
