@@ -155,7 +155,8 @@ ritual_commit() {
   if [ -n "$old" ]; then otree="$(git -C "$top" rev-parse "$old^{tree}")"; else otree="$(git -C "$top" hash-object -t tree /dev/null)"; fi
   if [ "${tree%$'\r'}" = "${otree%$'\r'}" ]; then rm -f "$ti"; emit commit already "nothing to commit: the paths already match HEAD"; return 0; fi
 
-  out="$(GIT_INDEX_FILE="$ti" git -C "$top" commit -q -F "$msg" 2>&1)" || {
+  # the hooks are the user's code: they get git's normal (glob) pathspecs, not the ritual's literal mode
+  out="$(GIT_LITERAL_PATHSPECS=0 GIT_INDEX_FILE="$ti" git -C "$top" commit -q -F "$msg" 2>&1)" || {
     _rc_fail "git commit failed, HEAD and the index are unchanged: $(printf '%s' "$out" | tr -d '\r' | grep -v '^[[:space:]]*$' | tail -n 3 | paste -sd'|' - | cut -c1-300)"
     return 0; }
   rm -f "$ti"

@@ -163,6 +163,14 @@ out="$(rc_ "$r" "$TMPROOT/c3.json" -- x.txt)"
 [ "$(jr "$out" .status)" = fixed ] && [ "$(tr -d '\r' < "$TMPROOT/hook-saw.txt")" = x.txt ] \
   && ok "commit_hook_sees_only_the_ritual_paths" || bad "commit_hook_sees_only_the_ritual_paths: $out saw=[$(cat "$TMPROOT/hook-saw.txt" 2>/dev/null)]"
 
+# a hook's own glob pathspecs still work: the ritual's literal-pathspec mode must not leak into it
+r="$(mkrepo)"; pf "$r" > "$TMPROOT/c3g.json"; mkdir -p "$r/docs"; echo d > "$r/docs/notes.md"; echo t > "$r/t.txt"
+mkdir -p "$r/.git/hooks"; printf '#!/bin/sh\ngit diff --cached --name-only -- "*.md" > "%s"\nexit 0\n' "$TMPROOT/hook-glob.txt" > "$r/.git/hooks/pre-commit"
+chmod +x "$r/.git/hooks/pre-commit"
+out="$(rc_ "$r" "$TMPROOT/c3g.json" -- docs/notes.md t.txt)"
+[ "$(jr "$out" .status)" = fixed ] && [ "$(tr -d '\r' < "$TMPROOT/hook-glob.txt")" = docs/notes.md ] \
+  && ok "commit_hook_globs_still_match" || bad "commit_hook_globs_still_match: $out saw=[$(cat "$TMPROOT/hook-glob.txt" 2>/dev/null)]"
+
 # a path missing from the work tree is a deletion; the real index's mode is kept
 r="$(mkrepo)"; echo h > "$r/hook.sh"; git -C "$r" add hook.sh; git -C "$r" update-index --chmod=+x hook.sh
 git -C "$r" commit -q -m h; pf "$r" > "$TMPROOT/c4.json"
