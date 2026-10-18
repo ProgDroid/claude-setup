@@ -14,18 +14,24 @@ step. You orchestrate, ask and draft.
 `fix` for it, run that and report what it says: never judge a step's state by reading files
 yourself, and never write the record by hand.
 
-Set these once per run. The skill's base directory is shown when the skill loads; quote every
-expansion, since paths may contain spaces.
+Set these at the start of the run. The skill's base directory is shown when the skill loads; quote
+every expansion, since paths may contain spaces.
 
 ```bash
 R="<this skill's base directory>/ritual.sh"
 REPO="$(git rev-parse --show-toplevel)"   # ritual.sh resolves any path inside the repo to this
-RT="$(mktemp -d)"                          # scratch for this run, outside the repo
+RT="$(mktemp -d)"; mkdir -p "$RT/out" "$RT/chk"; echo "$RT"   # scratch for this run, outside the repo
 ```
 
+Shell variables do not survive from one tool call to the next. Start every later command block
+with the same three assignments, using the literal `RT` path printed here, so the whole run shares
+one scratch directory.
+
 Every result is `{"id", "status", "detail", "wrote"}`. `status` is `present | absent | unknown` for
-a check, and `fixed | already | failed | unknown | absent` for a fix. `wrote` lists the paths the
-step changed; keep every one of them for the commit step.
+a check (`check secret-scan` can also say `failed`), and `fixed | already | failed | unknown |
+absent` for a fix. `wrote` lists the paths the step changed. **Save every fix result (and `auto`)
+to `$RT/out/<step>.json` and every check result to `$RT/chk/<step>.json`**: step 6 takes `wrote`
+from those files verbatim. Never retype a path the script reported.
 
 **Ground rules**
 
@@ -62,7 +68,7 @@ results so its old record entry is kept. The automatic steps always run.
 Step `beads` sets up the house Beads tracker (`bd`).
 
 ```bash
-bash "$R" check beads "$REPO"
+bash "$R" check beads "$REPO" > "$RT/chk/beads.json"; cat "$RT/chk/beads.json"
 ```
 
 - `present`: nothing to ask; record `already`.
@@ -72,8 +78,9 @@ bash "$R" check beads "$REPO"
   them straight after. On yes:
 
 ```bash
-bash "$R" fix beads "$REPO"            # clean tree
-bash "$R" fix beads "$REPO" --stash    # dirty tree, when the user accepted the stash
+bash "$R" fix beads "$REPO" > "$RT/out/beads.json"            # clean tree
+bash "$R" fix beads "$REPO" --stash > "$RT/out/beads.json"    # dirty tree, when the user accepted the stash
+cat "$RT/out/beads.json"
 ```
 
 The restore is verified by the script. If `fix beads` reports `failed`, show its detail verbatim:
@@ -85,7 +92,7 @@ command must be run as given. A plain `git stash apply` can change line endings.
 Tell the user the automatic steps are running; they take about 7 to 15 seconds.
 
 ```bash
-bash "$R" auto "$REPO" > "$RT/auto.json"
+bash "$R" auto "$REPO" > "$RT/out/auto.json"; cat "$RT/out/auto.json"
 ```
 
 `auto` detects the stack once and runs, in order: `stack`, `traps`, `stack-checks`, `oracle`,
@@ -102,7 +109,7 @@ when absent and adds the house parking-lot rule to `CLAUDE.md`. The output is
 - `parking-lot` `absent` with "different rule exists (line N)" means the project has its own
   parking-lot rule; it is kept, and adding the house rule becomes an ask in step 5.
 - `beads-metrics` `absent` means bd telemetry is on. It is a machine-wide setting: tell the user and
-  offer to turn it off.
+  offer to turn it off, then re-run `check beads-metrics` and record what it says.
 - **A result whose detail starts "step ended without a result" is a ritual bug**, not an
   environment gap: that step crashed. Tell the user which step it was and quote its stderr from the
   detail. Do not retry it silently. Record it `unknown` so the record keeps it open.
@@ -126,12 +133,13 @@ questions. Before running `check secret-scan`, tell the user that it runs a live
 a temporary file holding a fake key, runs the pre-commit hook, and removes the file again.
 
 ```bash
-bash "$R" check public-sweep "$REPO"
-bash "$R" check secret-scan "$REPO"
-bash "$R" check untracked-docs "$REPO"
-bash "$R" check ci "$REPO"
-bash "$R" check handoff "$REPO"
-bash "$R" candidates "$REPO"            # only when Beads is set up
+bash "$R" check public-sweep "$REPO" > "$RT/chk/public-sweep.json"
+bash "$R" check secret-scan "$REPO" > "$RT/chk/secret-scan.json"
+bash "$R" check untracked-docs "$REPO" > "$RT/chk/untracked-docs.json"
+bash "$R" check ci "$REPO" > "$RT/chk/ci.json"
+bash "$R" check handoff "$REPO" > "$RT/chk/handoff.json"
+cat "$RT"/chk/*.json
+bash "$R" candidates "$REPO" > "$RT/candidates.json"; cat "$RT/candidates.json"   # only when Beads is set up
 ```
 
 Ask only what `due` offered and what is not already in place.
@@ -140,10 +148,11 @@ Ask only what `due` offered and what is not already in place.
   `publishing-a-private-repo` sweep once. `absent` means private or internal: not applicable, no
   question. `unknown` (no `gh`, no auth, no GitHub remote) is never read as "private".
 - **`secret-scan`.** `absent`: offer the gitleaks pre-commit scan. On yes, run
-  `bash "$R" fix secret-scan "$REPO"`, then prove it with `bash "$R" check secret-scan "$REPO"`
-  (announced as above). It installs where git really runs hooks, inside Beads' hook when Beads is
-  set up. `unknown` with "gitleaks not found": offer to install gitleaks; until then the step stays
-  open. `failed`: show the detail; the proof names what went wrong.
+  `bash "$R" fix secret-scan "$REPO" > "$RT/out/secret-scan.json"`, then prove it with
+  `bash "$R" check secret-scan "$REPO"` (announced as above). It installs where git really runs
+  hooks, inside Beads' hook when Beads is set up. `unknown` with "gitleaks not found": offer to
+  install gitleaks; until then the step stays open. `failed`: show the detail; the proof names what
+  went wrong.
 - **`stack-checks`**, when step 3 left it `absent` with "needs ask": show the policy the include
   file prescribes (for a Cargo workspace, `[workspace.lints.clippy]` in the root and
   `[lints] workspace = true` in each member; for Python a ruff config; for Flutter
@@ -152,10 +161,10 @@ Ask only what `due` offered and what is not already in place.
 - **`workspace`.** No script answers this one. If `CLAUDE.md` is missing, draft one. If it exists
   (including one `bd init` just wrote), propose **additions** as a diff: the test command from
   `oracle`, the stack, and the decision record (`docs/superpowers/specs`). Also propose a
-  `.claude/settings.json` permission allow-list covering the oracle's commands. Add what is accepted
-  to the list of written paths.
-- **`untracked-docs`.** `present` lists untracked files under `docs/`: offer to commit them with the
-  ritual's commit. Accepted paths join the written paths.
+  `.claude/settings.json` permission allow-list covering the oracle's commands.
+- **`untracked-docs`.** `present` lists untracked files under `docs/`. Leave out every path this
+  run already wrote (such as `docs/parking-lot.md` from `auto`: it is in the commit already), and
+  offer to commit the rest with the ritual's commit.
 - **`parking-lot`**, when step 3 found a different rule: offer to add the house rule (the text in
   `house/parking-rule.md` beside this file) under `## Working rules`, leaving the existing line
   alone.
@@ -167,70 +176,102 @@ Ask only what `due` offered and what is not already in place.
   `.github/workflows/` that runs it. `absent` with no test command: not applicable, no question.
 - **`baseline`.** Always an ask, never automatic. Say that it runs the whole test suite once and
   may take a while. On yes, start what the tests need (for example a database container), run the
-  oracle's test command once, record the pass count and the duration, then stop **only what you
-  started**. A failing baseline is a result, not an open step.
-- **`handoff`.** `present`: already set up; no question. Otherwise ask **"Set up the NEXT.md handoff
-  here?"** with the default session-start question, "How did the last change go?", which the user
-  accepts or edits. Offer `paths` only as a pick-list of hand-edited files seen in recent history
-  (files changed by commits without a `Co-Authored-By: Claude` trailer), with "none" as the
-  default; never as a blank to fill. On yes:
+  oracle's test command once, and note the pass count, the fail count and the duration. Then stop
+  **only what you started**. A failing baseline is a result, not an open step, and its failures are
+  recorded (step 7).
+- **`handoff`.** `present`: already set up; no question. If the detail mentions "shallow clone", no
+  `handoff:` commit is within reach and the anchor may lie beyond the cut-off: offer
+  `git fetch --unshallow` first, then check again, before asking anything else. Otherwise ask
+  **"Set up the NEXT.md handoff here?"** with the default session-start question, "How did the last
+  change go?", which the user accepts or edits. Offer `paths` only as a pick-list of files the
+  developer edited by hand: the files changed in the last 50 commits, leaving out every commit whose
+  subject starts `chore: auto-commit` or that carries a `Co-Authored-By: Claude` trailer, with
+  "none" as the default; never as a blank to fill. On yes:
 
 ```bash
-bash "$R" fix handoff "$REPO" --ask "<question>" --paths "<glob> <glob>"   # each flag only when changed
+bash "$R" fix handoff "$REPO" --ask "<question>" --paths "<glob> <glob>" > "$RT/out/handoff.json"   # each flag only when changed
+cat "$RT/out/handoff.json"
 ```
 
   It writes `NEXT.md`, the `.claude/handoff.json` marker and a `## Session routine` section in
   `CLAUDE.md`. `NEXT.md` is not in its `wrote`: it gets its own `handoff:` commit after step 6.
   - `absent` with "different session routine (line N)": the project has its own routine. Show it,
-    and replace it only on an explicit yes: re-run with `--replace-routine`.
+    and replace it only on an explicit yes: re-run with `--replace-routine`. If the user keeps
+    their own, the step is `declined`.
   - `unknown` in a linked worktree, or when git could not tell where it is: nothing was written.
-    Tell the user to run it from the main checkout.
-  - `unknown` (from `check handoff`) in a shallow clone: no `handoff:` commit is within reach, so
-    the anchor may lie beyond the cut-off. Offer `git fetch --unshallow`, then check again.
+    Tell the user to run it from the main checkout. The step stays open.
   - "marker is git-ignored here": the marker stays local and cloud sessions will not see it. Never
     rewrite the user's ignore rules to force it in.
 
-### 6. The commit
-
-Collect every written path into one JSON array (`auto`'s `wrote`, each fix's `wrote`, and the files
-you wrote for an accepted ask), then ask for the plan:
+Files you write yourself for an accepted ask (the `CLAUDE.md` additions, `.claude/settings.json`,
+a CI workflow, the house parking-lot rule, a lint policy) and the untracked docs the user accepted
+go in one more result file, so step 6 sees them too:
 
 ```bash
-{ jq -r '.wrote[]' "$RT/auto.json"; printf '%s\n' <other written paths>; } \
-  | tr -d '\r' | jq -Rn '[inputs | select(length > 0)]' > "$RT/wrote.json"
-bash "$R" commit-plan "$REPO" "$RT/preflight.json" "$RT/wrote.json"
+jq -n '{wrote: $ARGS.positional}' --args <each path you wrote or the user accepted> > "$RT/out/model.json"
+```
+
+### 6. The commit
+
+Collect every written path from the saved results, verbatim, and ask for the plan:
+
+```bash
+jq -r '.wrote[]?' "$RT"/out/*.json | tr -d '\r' | jq -Rn '[inputs | select(length > 0)] | unique' > "$RT/wrote.json"
+bash "$R" commit-plan "$REPO" "$RT/preflight.json" "$RT/wrote.json" > "$RT/plan.json"; cat "$RT/plan.json"
 ```
 
 It answers `{"commit": [...], "ask": [...]}`. `ask` holds the paths that were already dirty at
 preflight, such as a `.gitignore` the user was editing: name each one, and include it only if the
 user says so, so their own edits never ride along unannounced. (Untracked docs the user accepted in
 step 5 are in `ask` too; that yes covers them.) Show the changes as one diff and ask whether to
-commit them as one commit on the current branch. On yes, commit only those paths:
+commit them as one commit on the current branch.
+
+On yes, `ritual.sh commit` makes the commit. It builds it in a scratch index from `HEAD` plus
+exactly these paths, so nothing the user staged goes in and the user's staged work stays staged.
+A file the ritual untracked and ignored (such as `.beads/interactions.jsonl`) is committed as a
+deletion and stays untracked. The pre-commit hook, the secret scan included, still runs on the
+commit's content. Never commit the ritual's paths with `git add` and `git commit` by hand, and
+never with `git add -f`.
 
 ```bash
 printf 'chore: project-start ritual\n' > "$RT/msg"
-git -C "$REPO" add -- <paths>
-git -C "$REPO" commit -F "$RT/msg" -- <paths>
+jq -r '.commit[]' "$RT/plan.json" | tr -d '\r' > "$RT/paths.txt"   # then append each `ask` path the user confirmed
+mapfile -t P < "$RT/paths.txt"
+INC=()   # INC=(--include-dirty) only when you appended `ask` paths the user confirmed
+bash "$R" commit "$REPO" --preflight "$RT/preflight.json" --message-file "$RT/msg" "${INC[@]}" -- "${P[@]}" > "$RT/commit.json"
+cat "$RT/commit.json"
 ```
 
-The commit runs the pre-commit hook, the secret scan included.
+It answers `fixed` with the new commit, `already` when there was nothing to commit, or `failed` with
+the cause (a path dirty at preflight without `--include-dirty`, a hook that rejected the commit, a
+merge in progress). On `failed` nothing was committed and the index is as it was: show the detail.
 
-Then, when the handoff was accepted, make the first `handoff:` commit, holding `NEXT.md` alone:
+Then make the first `handoff:` commit, holding `NEXT.md` alone, **only when `fix handoff` returned
+`fixed` or `already`**. After an `unknown` fix (a linked worktree, or git could not tell) it is not
+run: it would refuse with `failed` and close a step that must stay open.
 
 ```bash
-bash "$R" handoff-commit "$REPO"
+hs="$(jq -r .status "$RT/out/handoff.json" 2>/dev/null | tr -d '\r')"
+case "$hs" in
+  fixed|already)
+    bash "$R" handoff-commit "$REPO" > "$RT/handoff-commit.json"; cat "$RT/handoff-commit.json"
+    cs="$(jq -r .status "$RT/handoff-commit.json" | tr -d '\r')"
+    case "$cs" in failed|unknown) hs="$cs" ;; esac ;;
+esac
+echo "handoff status to record: ${hs:-none}"
 ```
 
-It answers `already` when a `handoff:` commit exists. It refuses (`failed`), touching nothing, in a
-linked worktree, when git cannot tell where it is, in a shallow clone with no anchor in reach, and
-when other paths are staged; say which, and never unstage the user's changes yourself.
+`handoff-commit` answers `already` when a `handoff:` commit exists. It refuses (`failed`), touching
+nothing, in a linked worktree, when git cannot tell where it is, in a shallow clone with no anchor
+in reach, and when other paths are staged; say which, and never unstage the user's changes
+yourself.
 
 ### 7. The record
 
 Build the results with `jq` (never the Write tool) and write them:
 
 ```bash
-jq -n '{steps: {...}, baseline: {pass: <n>, seconds: <n>}}' > "$RT/results.json"   # baseline only when it ran
+jq -n '{steps: {...}, baseline: {pass: <n>, fail: <n>, seconds: <n>}}' > "$RT/results.json"   # baseline only when it ran
 bash "$R" record-write "$REPO" "$RT/results.json"
 ```
 
@@ -238,10 +279,11 @@ bash "$R" record-write "$REPO" "$RT/results.json"
 `lessons`, `commit` and `record` included; leave out only the steps `due` skipped. Map each status
 with the table below. `record-write` merges into the existing record and prints it.
 
-`handoff` is one step id for two commands. Its result is the `fix handoff` outcome, and the
-`handoff-commit` outcome goes in that step's note. When `handoff-commit` did not make or find the
-anchor, record its status (`failed` or `unknown`) as the result instead. Never let the second
-result silently overwrite the first.
+`handoff` is one step id for two commands. Its result is the status the step-6 block printed: the
+`fix handoff` outcome, and the `handoff-commit` outcome goes in that step's note. Only when
+`handoff-commit` ran (after a `fixed` or `already` fix) and did not make or find the anchor does its
+`failed` or `unknown` become the result. A fix `unknown` stays `unknown`, so the step stays open.
+Never let the second result silently overwrite the first.
 
 Then report the record: the date, every step's result, and `open_steps`. `open_steps` lists only
 `unknown` and `interrupted` steps, the ones a later run can clear. A full run on a fully set-up
@@ -263,12 +305,15 @@ repo, on a machine with every tool, leaves it empty.
 | `absent` | `public-sweep` (private or internal) | `na` |
 | `absent` | `untracked-docs` (nothing to commit) | `already` |
 | `absent` | `stack` (no stack detected) | `none` |
-| `absent` | any other step whose ask was accepted | the result of the fix that followed |
+| `absent` | a check whose ask was accepted and whose fix then ran | that fix's status, by this table |
+| `absent` | a fix that still reports it after the user's answer (e.g. they kept their own session routine) | `declined` |
+| no script | an accepted ask you did yourself: `workspace`, a `ci` workflow, `beads-seed` issues, a `stack-checks` policy, the `parking-lot` house rule, `beads-metrics` turned off | `done`; then re-run its `check` where one exists and record what that says |
 | declined (the user said no) | any ask | `declined` |
 | cut off before it finished | any | `interrupted` |
 | no script | `beads-seed` without Beads; with no candidates | `na`; `none` |
 | exit 0 | `preflight` | `done` |
-| - | `lessons`, `workspace`, `baseline`, `commit` once done | `done` (`commit` with nothing to commit: `already`) |
+| no script | `baseline` that ran, whatever the tests said | `done`, with the note "pass N, fail M" (the failures are never dropped) |
+| - | `lessons`, `commit` once done | `done` (`commit` answering `already`: `already`) |
 | - | `record` (this write) | `done` |
 
 `unknown` and `interrupted` stay open. `declined`, `none`, `na`, `failed`, `done` and `already`

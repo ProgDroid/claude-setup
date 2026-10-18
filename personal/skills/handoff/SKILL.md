@@ -144,10 +144,16 @@ checkout.
 3. `ritual.sh handoff-commit <repo>` makes the first `handoff:` commit, holding `NEXT.md` alone (or
    an empty anchor when `NEXT.md` is already committed).
 
-Both steps report under the same step id, `handoff`. Record them deliberately: the step's result is
-the `fix handoff` outcome, and the `handoff-commit` outcome goes in that step's note, unless the
-anchor could not be made, in which case the result is `failed`. Never let the second result
-silently overwrite the first.
+Both steps report under the same step id, `handoff`. Record them deliberately:
+
+- Run `handoff-commit` only after `fix handoff` returned `fixed` or `already`. The step's result is
+  then the `fix handoff` outcome, and the `handoff-commit` outcome goes in that step's note, unless
+  the anchor could not be made: a `failed` or `unknown` commit outcome becomes the result.
+- When `fix handoff` returned `unknown` (a linked worktree, or git could not tell), do not run
+  `handoff-commit`: it would refuse with `failed` and close a step that must stay open. Record
+  `unknown` with the fix's detail, and tell the developer to run it from the main checkout.
+
+Never let the second result silently overwrite the first.
 
 The marker's keys are both optional:
 

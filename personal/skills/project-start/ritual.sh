@@ -111,7 +111,7 @@ sub="${1:-}"; [ $# -gt 0 ] && shift
 # Every <repo> means its work tree's top, so a path below it cannot split one run's writes.
 case "$sub" in
   check|fix) [ $# -ge 2 ] && set -- "$1" "$(repo_root "$2")" "${@:3}" ;;
-  record-path|record-read|record-write|due|preflight|commit-plan|stack|oracle|auto|candidates|handoff-commit)
+  record-path|record-read|record-write|due|preflight|commit-plan|commit|stack|oracle|auto|candidates|handoff-commit)
     [ $# -ge 1 ] && set -- "$(repo_root "$1")" "${@:2}" ;;
 esac
 case "$sub" in
@@ -121,6 +121,7 @@ case "$sub" in
   due)          [ $# -ge 1 ] || die "usage: due <repo>";  require_repo "$1"; record_due "$1" ;;
   preflight)    [ $# -ge 1 ] || die "usage: preflight <repo>"; require_repo "$1"; preflight "$1" ;;
   commit-plan)  [ $# -ge 3 ] || die "usage: commit-plan <repo> <preflight.json> <wrote.json>"; require_repo "$1"; commit_plan "$1" "$2" "$3" ;;
+  commit)       [ $# -ge 1 ] || die "usage: commit <repo> --preflight <preflight.json> --message-file <f> [--include-dirty] -- <path>..."; require_repo "$1"; ritual_commit "$@" ;;
   stack)        [ $# -ge 1 ] || die "usage: stack <repo>";  require_repo "$1"; stack_json "$1" ;;
   oracle)       [ $# -ge 1 ] || die "usage: oracle <repo>"; require_repo "$1"; oracle_json "$1" ;;
   auto)         [ $# -ge 1 ] || die "usage: auto <repo>";   require_repo "$1"; auto "$1" ;;
@@ -133,5 +134,5 @@ case "$sub" in
     fn="${sub}_${step//-/_}"
     declare -F "$fn" >/dev/null 2>&1 || die "unknown step: $step"
     "$fn" "$repo" "$@" ;;
-  *) die "unknown subcommand: ${sub:-<none>} (record-path|record-read|record-write|due|preflight|commit-plan|stack|oracle|auto|candidates|handoff-commit|check|fix)" ;;
+  *) die "unknown subcommand: ${sub:-<none>} (record-path|record-read|record-write|due|preflight|commit-plan|commit|stack|oracle|auto|candidates|handoff-commit|check|fix)" ;;
 esac

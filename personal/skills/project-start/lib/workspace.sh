@@ -76,6 +76,105 @@ commit_plan() {
        ask:    [$w[] | select(. as $x | $d | index($x))]}'
 }
 
+# ritual_commit <repo> --preflight <f> --message-file <f> [--include-dirty] -- <path>...
+# The ritual's own commit, holding exactly <path>... and nothing the user staged. It is built in a
+# scratch index (GIT_INDEX_FILE) seeded from HEAD (empty on an unborn branch):
+#   - a path on disk that is not (ignored and missing from the real index) -> its work-tree
+#     content, with the real index's mode when the real index holds the same blob;
+#   - a path not on disk, or ignored and missing from the real index -> a deletion (a file `fix
+#     beads` untracked and ignored stays untracked: `git add` would refuse it, `-f` would re-track it).
+# `git commit` (not commit-tree) runs on that index: the hooks run as usual and the secret scan's
+# `--staged` reads the scratch index through GIT_INDEX_FILE, and git updates the branch with its own
+# old-value check. Afterwards the real index is set to the new HEAD for every path the commit
+# changed (a hook may add one, as bd's export does). A path dirty at preflight is refused unless
+# --include-dirty (the user confirmed it). On failure the ref and the real index are unchanged.
+# -> fixed "committed <sha>: ..." | already "nothing to commit" | failed <cause>.
+ritual_commit() {
+  local repo="$1"; shift
+  local pf="" msg="" incl=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --preflight) [ $# -ge 2 ] || die "commit: --preflight needs a file"; pf="$2"; shift 2 ;;
+      --message-file) [ $# -ge 2 ] || die "commit: --message-file needs a file"; msg="$2"; shift 2 ;;
+      --include-dirty) incl=1; shift ;;
+      --) shift; break ;;
+      *) die "commit: unknown argument: $1" ;;
+    esac
+  done
+  [ -n "$pf" ] && [ -f "$pf" ] || die "commit: --preflight <preflight.json> is required"
+  [ -n "$msg" ] && [ -s "$msg" ] || die "commit: --message-file <non-empty file> is required"
+  [ $# -gt 0 ] || { emit commit already "no paths given; nothing to commit"; return 0; }
+  msg="$(cd "$(dirname "$msg")" && pwd)/$(basename "$msg")"
+
+  local dirty
+  dirty="$(printf '%s\n' "$@" | jq -Rr --slurpfile pf "$pf" \
+    '($pf[0].dirty | map(.path)) as $d | select(. as $x | $d | index($x))' | tr -d '\r' | paste -sd',' -)" \
+    || die "commit: could not read $pf"
+  if [ -n "$dirty" ] && [ "$incl" = 0 ]; then
+    emit commit failed "dirty at preflight: ${dirty//,/, }; ask the user, then pass --include-dirty (nothing was committed)"
+    return 0
+  fi
+
+  local top gd old p mode blob rmode rblob ti tree otree out new changed=()
+  top="$(git -C "$repo" rev-parse --show-toplevel)" || die "cannot resolve repo root: $repo"
+  gd="$(git -C "$top" rev-parse --path-format=absolute --git-dir)" || die "cannot resolve the git dir: $repo"
+  for p in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD; do
+    if git -C "$top" rev-parse -q --verify "$p" >/dev/null 2>&1; then
+      emit commit failed "$p exists (an operation is in progress); finish or abort it first (nothing was committed)"
+      return 0
+    fi
+  done
+  old="$(git -C "$top" rev-parse -q --verify HEAD 2>/dev/null)"; old="${old%$'\r'}"
+  ti="$(mktemp "$gd/ritual-index.XXXXXX")" || die "mktemp failed in $gd"
+  rm -f "$ti"   # git wants no file or a valid index; an empty file is neither
+  _rc_fail() { rm -f "$ti" "$ti.lock"; emit commit failed "$1"; }
+
+  local -x GIT_LITERAL_PATHSPECS=1   # every path below is literal, never a glob
+  if [ -n "$old" ]; then GIT_INDEX_FILE="$ti" git -C "$top" read-tree "$old" || { _rc_fail "could not seed the scratch index from HEAD"; return 0; }
+  else GIT_INDEX_FILE="$ti" git -C "$top" read-tree --empty || { _rc_fail "could not create the scratch index"; return 0; }; fi
+
+  local ign
+  for p in "$@"; do
+    read -r rmode rblob _ < <(git -C "$top" ls-files -s -- "$p" | head -n 1)
+    # check-ignore rejects the literal pathspec magic (fatal, 128), so it runs without it
+    GIT_LITERAL_PATHSPECS=0 git -C "$top" check-ignore -q --no-index -- "$p" 2>/dev/null; ign=$?
+    [ "$ign" -le 1 ] || { _rc_fail "could not tell whether $p is ignored (check-ignore exit $ign)"; return 0; }
+    if { [ -e "$top/$p" ] || [ -L "$top/$p" ]; } && ! { [ -z "${rblob:-}" ] && [ "$ign" = 0 ]; }; then
+      GIT_INDEX_FILE="$ti" git -C "$top" add -f -- "$p" 2>/dev/null || { _rc_fail "could not stage $p"; return 0; }
+      read -r mode blob _ < <(GIT_INDEX_FILE="$ti" git -C "$top" ls-files -s -- "$p" | head -n 1)
+      if [ -n "${rblob:-}" ] && [ "$rblob" = "${blob:-}" ] && [ "$rmode" != "$mode" ]; then
+        GIT_INDEX_FILE="$ti" git -C "$top" update-index --cacheinfo "$rmode,$rblob,$p" || { _rc_fail "could not set the mode of $p"; return 0; }
+      fi
+    else
+      GIT_INDEX_FILE="$ti" git -C "$top" rm -q --cached --ignore-unmatch -- "$p" >/dev/null || { _rc_fail "could not record the deletion of $p"; return 0; }
+    fi
+    rmode=""; rblob=""
+  done
+
+  tree="$(GIT_INDEX_FILE="$ti" git -C "$top" write-tree)" || { _rc_fail "could not write the scratch tree"; return 0; }
+  if [ -n "$old" ]; then otree="$(git -C "$top" rev-parse "$old^{tree}")"; else otree="$(git -C "$top" hash-object -t tree /dev/null)"; fi
+  if [ "${tree%$'\r'}" = "${otree%$'\r'}" ]; then rm -f "$ti"; emit commit already "nothing to commit: the paths already match HEAD"; return 0; fi
+
+  out="$(GIT_INDEX_FILE="$ti" git -C "$top" commit -q -F "$msg" 2>&1)" || {
+    _rc_fail "git commit failed, HEAD and the index are unchanged: $(printf '%s' "$out" | tr -d '\r' | grep -v '^[[:space:]]*$' | tail -n 3 | paste -sd'|' - | cut -c1-300)"
+    return 0; }
+  rm -f "$ti"
+  new="$(git -C "$top" rev-parse HEAD)"; new="${new%$'\r'}"
+  if [ "$(git -C "$top" rev-parse -q --verify "$new^" 2>/dev/null | tr -d '\r')" != "$old" ]; then
+    emit commit failed "HEAD $new is not a child of $old after committing; check git log"; return 0
+  fi
+  # the real index: every path the commit changed now matches the new HEAD
+  if [ -n "$old" ]; then mapfile -d '' -t changed < <(git -C "$top" diff-tree -r --no-renames --name-only -z "$old" "$new")
+  else mapfile -d '' -t changed < <(git -C "$top" ls-tree -r --name-only -z "$new"); fi
+  if [ "${#changed[@]}" -gt 0 ] && ! git -C "$top" reset -q "$new" -- "${changed[@]}" >/dev/null 2>&1; then
+    if [ -n "$old" ]; then git -C "$top" update-ref -m "ritual commit: undo" HEAD "$old" "$new"
+    else git -C "$top" update-ref -d HEAD "$new"; fi
+    emit commit failed "could not update the index after committing; the commit was undone (HEAD is ${old:-unborn} again)"
+    return 0
+  fi
+  emit commit fixed "committed ${new:0:7}: ${#changed[@]} path(s)"
+}
+
 # check_untracked_docs <repo> -> step-result. present = untracked, non-ignored files under docs/.
 check_untracked_docs() {
   local repo="$1" f list=() detail

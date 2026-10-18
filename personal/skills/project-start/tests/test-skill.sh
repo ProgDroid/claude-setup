@@ -19,6 +19,8 @@ fm_val() { printf '%s\n' "$FM" | sed -n "s/^$1:[[:space:]]*//p" | head -n 1; }
 BODY="$(tr -d '\r' < "$SKILL" | awk 'NR == 1 && $0 == "---" { f = 1; next } f == 1 && $0 == "---" { f = 2; next } f == 2')"
 # lower-cased copy for case-blind matches: grep.exe core-dumps on -iF here
 LBODY="${BODY,,}"
+# ...and one line with runs of whitespace squeezed, so a phrase wrapped across lines still matches
+FLAT="$(tr '\n' ' ' <<<"$LBODY" | tr -s ' ')"
 
 echo "== frontmatter =="
 [ "$(fm_val name)" = project-start ] && ok "frontmatter_name_is_project_start" || bad "frontmatter_name_is_project_start: name: '$(fm_val name)'"
@@ -71,12 +73,15 @@ for m in '"$R" preflight' '"$R" due' '"$R" fix beads' '"$R" auto' 'qmd search' \
 done
 [ "$order_ok" = 1 ] && ok "flow_in_order" || bad "flow_in_order: flow order:$trace"
 
-# the commit ask comes after commit-plan and before handoff-commit (R32)
+# the scripted ritual commit comes after commit-plan and before handoff-commit (R32, R57)
 cp_ln="$(grep -nF -- '"$R" commit-plan' <<<"$BODY" | head -n 1 | cut -d: -f1)"
-gc_ln="$(grep -nF -- 'commit -F "$RT/msg"' <<<"$BODY" | head -n 1 | cut -d: -f1)"
+gc_ln="$(grep -nF -- '"$R" commit "$REPO"' <<<"$BODY" | head -n 1 | cut -d: -f1)"
 hc_ln="$(grep -nF -- '"$R" handoff-commit' <<<"$BODY" | head -n 1 | cut -d: -f1)"
 [ -n "$cp_ln" ] && [ -n "$gc_ln" ] && [ -n "$hc_ln" ] && [ "$cp_ln" -lt "$gc_ln" ] && [ "$gc_ln" -lt "$hc_ln" ] \
-  && ok "ritual_commit_between_commit_plan_and_handoff_commit" || bad "ritual_commit_between_commit_plan_and_handoff_commit: commit-plan@$cp_ln git commit@$gc_ln handoff-commit@$hc_ln"
+  && ok "ritual_commit_between_commit_plan_and_handoff_commit" || bad "ritual_commit_between_commit_plan_and_handoff_commit: commit-plan@$cp_ln commit@$gc_ln handoff-commit@$hc_ln"
+# the hand recipe that re-tracked an ignored file is gone (R57)
+! grep -qE 'git (-C "\$REPO" )?add -- <paths>|git (-C "\$REPO" )?commit -F "\$RT/msg" -- ' <<<"$BODY" \
+  && ok "no_hand_commit_recipe" || bad "no_hand_commit_recipe: SKILL.md still commits by hand"
 
 grep -qF -- '"$R" fix beads "$REPO" --stash' <<<"$BODY" && ok "beads_ask_offers_stash" || bad "beads_ask_offers_stash: no --stash form of fix beads"
 
@@ -142,10 +147,17 @@ grep -qF 'git fetch --unshallow' "$SKILL_DIR/lib/handoff.sh" && grep -qF 'git fe
   && ok "shallow_clone_offers_unshallow" || bad "shallow_clone_offers_unshallow: unshallow offer missing"
 grep -qF 'main checkout' "$SKILL_DIR/lib/handoff.sh" && grep -qF 'run it from the main checkout' <<<"$BODY" \
   && ok "linked_worktree_says_main_checkout" || bad "linked_worktree_says_main_checkout: main-checkout instruction missing"
-grep -qF 'How did the last change go?' <<<"$BODY" && grep -qF 'pick-list' <<<"$LBODY" \
-  && ok "handoff_ask_is_recognition" || bad "handoff_ask_is_recognition: handoff default question / pick-list missing"
-grep -qE 'handoff-commit.{0,40} (outcome|status|result).{0,40}note' <<<"$LBODY" \
-  && ok "handoff_commit_outcome_goes_in_the_note" || bad "handoff_commit_outcome_goes_in_the_note: handoff-commit outcome-in-note rule missing"
+grep -qF 'how did the last change go?' <<<"$FLAT" && grep -qF 'pick-list' <<<"$FLAT" \
+  && grep -qF 'chore: auto-commit' <<<"$FLAT" \
+  && ok "handoff_ask_is_recognition" || bad "handoff_ask_is_recognition: default question / pick-list / auto-commit exclusion missing"
+# R56: handoff-commit runs only after a fix that succeeded, in both skills; its outcome then goes
+# in the note (the executed form of this rule is test-skill-flow.sh)
+HFLAT="$(tr -d '\r' < "$SKILL_DIR/../handoff/SKILL.md" | tr '[:upper:]' '[:lower:]' | tr '\n' ' ' | tr -s ' ')"
+grep -qF 'only when `fix handoff` returned `fixed` or `already`' <<<"$FLAT" \
+  && grep -qF 'only after `fix handoff` returned `fixed` or `already`' <<<"$HFLAT" \
+  && grep -qE 'handoff-commit.{0,40} (outcome|status|result).{0,40}note' <<<"$FLAT" \
+  && ok "handoff_commit_runs_only_after_fix_success" \
+  || bad "handoff_commit_runs_only_after_fix_success: the R56 condition is missing from project-start or handoff SKILL.md"
 
 echo "== secret-scan =="
 grep -qE 'before (you run|running).{0,40}check secret-scan|check secret-scan.{0,120}(tell|warn) the user' <<<"$LBODY" \
