@@ -282,3 +282,8 @@ session's own branch and anything already merged into the default branch.
   repo, the hook prints that verdict: the PC has work this session cannot see.
 - A repo containing `.claude/no-auto-commit` is skipped by `auto-commit.sh`, so its work in progress
   stays on the PC.
+- Known limitations, not built for: the merged test is ancestry (`merge-base --is-ancestor`), so a
+  squash-merged or rebased cloud PR keeps listing as unmerged. Measured 2026-10-17: all 13
+  `claude/*` branches in continuable projects were merged by ancestry. And `--unshallow` on a big
+  repo usually exceeds the 8 s per-call cap, so a shallow clone reports "shallow clone" rather than
+  a list.

@@ -195,7 +195,7 @@ has   "multi-repo: cwd inside alpha still reports sibling beta" "$out" "Earlier 
 mkstate() { # mkstate <parent> <verdict>
   mkdir -p "$1/switchboard-state"
   git init -q -b main "$1/switchboard-state"
-  printf '# slug\tid\tverdict\treasons\nother/thing\tx\tcan_continue\tfine\nown/repo\tabc\t%s\tPC has 3 unpushed commits\n' "$2" \
+  printf '# slug\tid\tverdict\treasons\nother/thing\tx\tcan_continue\tfine\no/r\tabc\t%s\tPC has 3 unpushed commits\n' "$2" \
     > "$1/switchboard-state/verdicts.tsv"
   git -C "$1/switchboard-state" add -A
   GIT_COMMITTER_DATE="2026-10-16T12:00:00 +0000" gitc -C "$1/switchboard-state" commit -qm state
@@ -205,21 +205,48 @@ slugrepo() { # slugrepo <parent> <remote url>: a clean proj whose origin URL is 
   git -C "$1/proj" remote set-url origin "$2"
   git -C "$1/proj" config "url.$1/.aux/proj.git.insteadOf" "$2"
 }
-P="$(mktemp -d)"; slugrepo "$P" "https://github.com/own/repo.git"; mkstate "$P" wait
+P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"; mkstate "$P" wait
 out="$(run_hook "$P/proj")"
-has "verdict wait (https url): switchboard line" "$out" "switchboard: wait (PC has 3 unpushed commits), as of 2026-10-16."
-P="$(mktemp -d)"; slugrepo "$P" "git@github.com:own/repo.git"; mkstate "$P" wait
-out="$(run_hook "$P/proj")"
-has "verdict wait (ssh url): switchboard line" "$out" "switchboard: wait (PC has 3 unpushed commits)"
-P="$(mktemp -d)"; slugrepo "$P" "https://github.com/own/repo"; mkstate "$P" can_continue
+has "verdict wait (https .git url): switchboard line" "$out" "switchboard: wait (PC has 3 unpushed commits), as of 2026-10-16."
+# Every origin URL shape must resolve to the slug o/r (I1: cloud origins may be a local proxy)
+for url in "git@github.com:o/r.git" "https://github.com/o/r" "https://github.com/o/r/" \
+           "http://local_proxy@127.0.0.1:43210/git/o/r" "http://local_proxy@127.0.0.1:43210/git/o/r.git/"; do
+  P="$(mktemp -d)"; slugrepo "$P" "$url"; mkstate "$P" wait
+  out="$(run_hook "$P/proj")"
+  has "verdict wait finds o/r for origin $url" "$out" "switchboard: wait (PC has 3 unpushed commits)"
+done
+P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r"; mkstate "$P" can_continue
 out="$(run_hook "$P/proj")"
 empty "verdict can_continue: nothing" "$out"
 P="$(mktemp -d)"; slugrepo "$P" "https://github.com/someone/else.git"; mkstate "$P" wait
 out="$(run_hook "$P/proj")"
 empty "verdict wait for ANOTHER slug: nothing" "$out"
-P="$(mktemp -d)"; slugrepo "$P" "https://github.com/own/repo.git"
+P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"
 out="$(run_hook "$P/proj")"
 empty "no switchboard-state sibling: nothing" "$out"
+
+# 12. M1: an unreachable origin must not suppress the local wait verdict
+P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"; mkstate "$P" wait
+git -C "$P/proj" config --unset-all "url.$P/.aux/proj.git.insteadOf"
+git -C "$P/proj" config "url.$P/nowhere.git.insteadOf" "https://github.com/o/r.git"
+out="$(run_hook "$P/proj")"
+has "unreachable origin + wait: the couldn't-check line" "$out" "couldn't check proj for earlier cloud branches (origin unreachable)"
+has "unreachable origin + wait: the switchboard line too" "$out" "switchboard: wait (PC has 3 unpushed commits)"
+
+# 13. M5: the budget runs out at the FETCH step, after ls-remote succeeded.
+# Budget 3 s; the shim makes ls-remote take 2 s, leaving < 2 s for the fetch.
+P="$(mktemp -d)"; mkproj "$P" proj; mkbranch "$P" proj claude/y 1
+git clone -q --single-branch --branch main "$P/.aux/proj.git" "$P/proj" 2>/dev/null
+shim="$(mktemp -d)"
+cat > "$shim/git" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do [ "\$a" = ls-remote ] && { sleep 2; break; }; done
+exec "$REAL_GIT" "\$@"
+SHIM
+chmod +x "$shim/git"
+out="$( cd "$P/proj" && PATH="$shim:$PATH" EARLIER_CLOUD_WORK_BUDGET=3 CLAUDE_CLOUD_SESSION=1 bash "$HOOK" 2>&1 )"
+has   "budget gone at the fetch step: out-of-time line" "$out" "couldn't check proj for earlier cloud branches (out of time)"
+lacks "budget gone at the fetch step: nothing listed" "$out" "claude/y"
 
 echo "-- $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
