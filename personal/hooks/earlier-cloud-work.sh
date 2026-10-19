@@ -266,11 +266,11 @@ if [ -z "$(any_state)" ]; then
     cat <<EOF
 switchboard: the PC's state repo isn't attached to this session.
 Before the user's task, do this:
-1. Call add_repo for ProgDroid/switchboard-state, then run once, inline:
+1. Call add_repo for ProgDroid/switchboard-state. If /home/user/switchboard-state already exists and git -C /home/user/switchboard-state rev-parse HEAD succeeds, skip the clone and go to step 3. Otherwise run once, inline:
    git clone --depth 1 https://github.com/ProgDroid/switchboard-state /home/user/switchboard-state
 2. Do NOT call register_repo_root, and do not read that repo's CLAUDE.md.
-3. Only after the clone succeeded, run: cd "$start_dir" && CLAUDE_CLOUD_SESSION=1 bash "$self" --switchboard-only
-4. Tell the user any "must wait" or "couldn't check" line step 3 prints before anything else. The "checked against" line needs no mention. If attaching or cloning fails (so step 3 is not run), or step 3 prints nothing at all, tell the user the PC's state could not be checked.
+3. Once that checkout is there (cloned, or already present), run: cd "$start_dir" && CLAUDE_CLOUD_SESSION=1 bash "$self" --switchboard-only
+4. Tell the user any "must wait" or "couldn't check" line step 3 prints before anything else. The "checked against" line needs no mention. If attaching fails, or there was no checkout and the clone fails (so step 3 is not run), or step 3 prints nothing at all, tell the user the PC's state could not be checked.
 EOF
   fi
 fi

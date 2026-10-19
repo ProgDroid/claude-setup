@@ -270,6 +270,7 @@ count "no state repo: instruction once" "$out" "isn't attached to this session" 
 has   "instruction names add_repo" "$out" "Call add_repo for ProgDroid/switchboard-state"
 has   "instruction forbids register_repo_root" "$out" "Do NOT call register_repo_root"
 has   "instruction gives the re-run command: cd to the start dir, absolute script path" "$out" "cd \"$P\" && CLAUDE_CLOUD_SESSION=1 bash \"$P/bin/earlier-cloud-work.sh\" --switchboard-only"
+has   "instruction skips the clone over a checkout add_repo left" "$out" "If /home/user/switchboard-state already exists and git -C /home/user/switchboard-state rev-parse HEAD succeeds, skip the clone and go to step 3."
 
 P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"; mkstate "$P" can_continue
 out="$(run_hook "$P/proj")"
