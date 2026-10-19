@@ -104,7 +104,7 @@ check "commits untracked files too" clean
 #
 # This hook syncs before it commits, so an overwrite here is not merely lost in
 # the worktree -- it is committed and pushed. That is exactly what happened in
-# ProgDroid/constellation on 2026-09-15 (29373ab, f90dca7, 2be8145): a stale
+# one project on 2026-09-15 (three commits): a stale
 # local memory kept being copied over a repo file the session had just
 # restored, and each Stop pushed the revert. Main was spared only because the
 # branch guard above returns first.
@@ -206,8 +206,8 @@ else
   echo "  FAIL: multi-repo: sibling memory not synced/committed"; fail=$((fail + 1))
 fi
 
-# 12. .claude/no-auto-commit at the repo root opts the repo out (switchboard
-# marker: a repo whose WIP must stay on the PC). Without it the same repo commits.
+# 12. .claude/no-auto-commit at the repo root opts the repo out (the
+# marker for a repo whose WIP must stay on the PC). Without it the same repo commits.
 newrepo
 git checkout -qb feature/marker
 mkdir -p .claude; : > .claude/no-auto-commit

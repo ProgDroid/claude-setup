@@ -6,8 +6,8 @@ description: Use when acting as the CONTROLLER in subagent-driven development - 
 # SDD controller discipline
 
 `superpowers:subagent-driven-development` says how to run the loop. This says how to avoid the
-failures that kept recurring *in the controller's seat*, measured across cotrip, news-brief,
-constellation, swarm-music and ds-job-analysis between 2026-06 and 2026-10.
+failures that kept recurring *in the controller's seat*, measured across several of this user's
+projects between 2026-06 and 2026-10.
 
 The organising fact: **the subagents mostly do exactly what they are told, and their reports are
 claims, not evidence.** So the two places defects survive are the controller's own text and the
@@ -15,7 +15,7 @@ controller's acceptance of a report.
 
 ## 1. Your plan is the likeliest defect
 
-Across ten cotrip slices, the review layer's best catches were errors in the controller's plan,
+Across ten slices of one project, the review layer's best catches were errors in the controller's plan,
 spec or dispatch, not in implementer code. A brief is the implementer's entire world; it cannot
 detect that its own premise is false.
 
@@ -27,7 +27,7 @@ detect that its own premise is false.
   the code, then say so in the commit. Never let an implementer comply its way into a bug.
 - **Check each brief against the code before dispatching it.** Reading load-bearing assumptions
   (column names, fixture names, prices, whether a guard has a test) found 6 plan defects in one
-  news-brief run before any implementer saw them. Settle documentation questions in the controller.
+  run before any implementer saw them. Settle documentation questions in the controller.
 - **An extracted brief is a FROZEN COPY.** After any upstream correction, re-extract every brief
   already written.
 - **Re-read the spec end-to-end after a mid-flight design change**, and sync it to what shipped
@@ -38,19 +38,27 @@ detect that its own premise is false.
   logs a parse error, skips that file and still exits 0 with "All tests passed". So a RED that
   failed with "class not defined" was a silent skip, and so was a broken test file sitting in CI.
   Make a deliberately broken test file and confirm the suite fails. Add a guard that compares the
-  number of scripts the runner ran with the number of test files on disk. (wickilibrium,
+  number of scripts the runner ran with the number of test files on disk. (A Godot project,
   2026-10-06.)
 - **When a task's output has an external oracle, run it on real data before you close the task.**
-  Don't wait for the acceptance task. In switchboard (2026-10-14), the beads `ready` rule passed 9
+  Don't wait for the acceptance task. In one project (2026-10-14), the beads `ready` rule passed 9
   fixture tests and a clean review. Then a throwaway `examples/` binary on the real export gave 53,
   where `bd` itself had reported 49. The 4 extras shared one property, a blocked parent, so the
   PLAN's rule was wrong. The plan had deferred real data to acceptance, six tasks later. Fixtures
   encode the plan's understanding, and only the oracle can disagree with it.
-- **A config file that sets a value explicitly pins the old behaviour past a code fix.** In
-  switchboard (2026-10-15), moving the ritual version source from the source clone to the
+- **A config file that sets a value explicitly pins the old behaviour past a code fix.** In one
+  project (2026-10-15), moving the ritual version source from the source clone to the
   installed plugin was correct in code. But the repo's `config/sb.toml` named the clone path
   explicitly, and would have overridden the fix on the one machine that mattered. When a default
   moves, grep every config file for the key, and put deleting the stale line in the brief.
+- **A ruling that makes a step run on EVERY invocation must be costed with the real tool first.**
+  Before ruling, ask what the step's check already does. A ruling that ran each fix whenever its
+  check said `present` closed a real gap: leftovers from an interrupted run. But the secret-scan
+  check already ran a live proof on every run, planting a fake key and running the commit hook.
+  So the ruling added a second, identical proof: about 6.9 s and one more fake-key plant per run,
+  to catch a rare case. Two scoped reviews passed it. A side agent caught it by asking what the
+  change cost the user. The fix was a `--proved` flag that reuses the check's result (2026-10-18).
+  "Idempotent" means safe to repeat, not cheap to repeat.
 
 ## 2. What goes in every dispatch
 
@@ -103,6 +111,14 @@ repeatedly audited the controller too.
 
 - **Run the suite yourself once, at the end.** Reviewers are told not to re-run it, so every number
   in the chain comes from the implementer it measures. One controller gate closes the chain.
+- **An implementer's gate counts as yours only when three facts line up.** Every changed file's
+  mtime is earlier than the gate logs' creation time. The tree is clean at the commit. Every log
+  carries `REAL_EXIT=0`. Then the gates covered the exact committed tree, and re-running them adds
+  nothing; on a 50-minute suite that is real time. If any of the three fails, run them yourself.
+  A merge from main is a new tree and always needs a fresh gate. So does a run that stopped
+  without its terminal marker: a passing tally up to the kill point is not a pass. A merge can
+  also break a test that pins a total, such as a count of registered hooks, when both sides add
+  one; only the gate on the merged tree finds that (2026-10-19).
 - **A count moving the wrong way is the tell** — "40 tests" right after adding two, when the true
   number was 60.
 - **Before a number scores a fix, name the layer the fix lives in** — prompt, parser, merge,
@@ -120,8 +136,8 @@ repeatedly audited the controller too.
   if the file is still read and happens to hold compatible values. The implementer listed the
   control as not executed. The controller rewrote the file with extreme values (warp 0, buffer 0,
   every new knob flipped), re-ran, then restored it from git: still 204/204. Only that run measured
-  the claim. Whenever a task claims "X no longer depends on Y", change Y and run it. (wickilibrium,
-  2026-10-10.)
+  the claim. Whenever a task claims "X no longer depends on Y", change Y and run it. (A Godot
+  project, 2026-10-10.)
 
 ## 5. Judge progress by artefacts, never liveness
 
@@ -141,7 +157,7 @@ finished run leaves no process.
 
 ## 6. Shared state is not visible from the file list
 
-- **Disjoint files is not independence.** news-brief's test DB drops the schema in every fixture; two
+- **Disjoint files is not independence.** One project's test DB drops the schema in every fixture; two
   concurrent runs produced 1 failed + 22 errors. Overlap implementers only with READ-ONLY reviewers
   told not to run the suite. If a collision happened, both results are UNKNOWN; re-run one at a time.
 - **Agent toolchain runs share USER-level state with the human, not just the repo.** Headless Godot
@@ -149,7 +165,7 @@ finished run leaves no process.
   keeps five files. Within minutes the log of the developer's hang had been rotated out, and its
   evidence was gone. When the human is playing or testing while implementers run, point agent runs
   at their own log/cache path (Godot: `--log-file <tmp>`), and capture any crash evidence the
-  moment it is reported. (wickilibrium, 2026-10-10.)
+  moment it is reported. (A Godot project, 2026-10-10.)
 - **After any task touching global nav, routing or always-mounted UI, run the FULL suite.** A
   wizard's global guard regressed ~16 e2e specs that per-task runs could not see.
 
@@ -161,13 +177,13 @@ six tasks edited. Dispatch the final review on the most capable model, point it 
 coherence explicitly, and give every reviewer **named risks, each with one focused check** — nearly
 every Important finding in one run came from a named risk.
 
+- **Before pushing to a public repo, scan the commit messages and the WHOLE tree, not only the
+  diff.** Per-task privacy scans read only the code changes. The branch's own messages, written
+  mid-task, carry project names and paths just as easily. Files that were already on main were
+  never in any diff at all: a full-tree scan before one release found 98 lines naming private
+  projects, all older than the branch. Scan term by term, with a planted control (2026-10-19).
+
 ## Provenance
 
-Promoted 2026-10-05 from project memories (the detail and dated evidence stay there):
-`polyDev-cotrip/controller-plan-errors-outnumber-implementer-errors`,
-`polyDev-constellation/verify-subagent-reports`, `polyDev-constellation/sdd-mandate-full-test-coverage`,
-`pythonDev-news-brief/mutation-diagnostic-demands-a-count`,
-`pythonDev-news-brief/parallel-implementers-share-test-db`,
-`pythonDev-news-brief/subagent-review-stalls`,
-`rustDev-swarm-music/judge-subagent-progress-by-artefacts-not-liveness`,
-`pythonDev-ds-job-analysis/feedback_verify_guards_by_deleting_them`.
+Promoted 2026-10-05 from eight private project memories in five projects; the detail and dated
+evidence stay there.

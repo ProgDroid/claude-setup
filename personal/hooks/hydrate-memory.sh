@@ -29,7 +29,7 @@ set -uo pipefail
 # Derive the key through lib-memory.sh rather than inline. This used to be
 # `tr '/' '-'`, which agrees with memory_key on a plain cloud path but NOT on
 # one containing an underscore -- memory_key folds '_' to '-' and this did not.
-# A repo like dynamic_day_planner would hydrate into one directory and sync out
+# A repo like my_app would hydrate into one directory and sync out
 # of another, silently. The manifest seeded below makes that agreement
 # load-bearing, so the two must share a single derivation.
 lib_ok=0

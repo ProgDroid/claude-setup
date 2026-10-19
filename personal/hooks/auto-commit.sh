@@ -29,7 +29,7 @@ commit_repo() (
   cd "$1" 2>/dev/null || exit 0
 
   # Opt-out marker: a repo whose work in progress must stay on the PC (e.g.
-  # switchboard). Checked first so not even a memory sync touches the repo.
+  # a companion state repo). Checked first so not even a memory sync touches the repo.
   root0="$(git rev-parse --show-toplevel 2>/dev/null)"
   [ -n "${root0:-}" ] && [ -e "$root0/.claude/no-auto-commit" ] && exit 0
 

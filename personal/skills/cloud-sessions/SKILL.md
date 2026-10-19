@@ -66,7 +66,7 @@ underscores** all replaced by `-`.
 |---|---|---|
 | Cloud VM | `/home/user/repo` | `-home-user-repo` |
 | Windows/MSYS | `/g/rustDev/aba` | `G--rustDev-aba` |
-| Underscores | `/g/flutterDev/dynamic_day_planner` | `G--flutterDev-dynamic-day-planner` |
+| Underscores | `/g/flutterDev/my_app` | `G--flutterDev-my-app` |
 
 A single-repo cloud session starts in `/home/user/repo`. Deriving the key wrongly fails
 **silently** — the write lands in a directory nothing reads, with no error. Underscore
@@ -127,7 +127,7 @@ registered as a user-scope MCP server instead, which is exactly the form that do
 The section above is about config. The costlier case is analysis: a cloud session sees the
 decisions you pushed, not the ones you made.
 
-Measured 2026-09-22, anime-calendar. A local session produced `docs/deployment-readiness.md` —
+Measured 2026-09-22, in a web-app project. A local session produced `docs/deployment-readiness.md` —
 a platform analysis that superseded the April implementation plan's choices (region, Postgres
 vendor, Redis vendor) and recorded a hard constraint the plan violated. It was never pushed.
 Cloud sessions then executed the plan, carefully and well: they corrected seven real errors in
@@ -210,7 +210,7 @@ a force-push. Another found its work already committed and could only make an em
 - **When `stop-hook-git-check.sh` reports uncommitted changes while an implementer is running, do
   not commit them** — they are the implementer's in-progress edits; it commits on finishing.
 - **Squash at merge is mandatory, not cosmetic, when implementers run mutation checks.** Verified
-  2026-10-06 (wickilibrium): a WIP auto-commit snapshotted `targeting.gd` while its cone filter was
+  2026-10-06 (a Godot project): a WIP auto-commit snapshotted `targeting.gd` while its cone filter was
   mutated to `if false:`, and pushed it. HEAD was correct a minute later, but a broken commit sits
   in the branch history. Tell implementers to keep a deliberate mutation in the tree only for the one
   test run it needs, and tell the human to squash.
@@ -229,7 +229,7 @@ under `.superpowers/sdd/`, which is git-ignored by design. In a cloud session th
 reclaimed, so a plan paused at a checkpoint "to resume from the ledger" cannot resume from it. At
 any checkpoint where work stops for the human, **commit a snapshot of the ledger** (for example
 `docs/superpowers/reviews/<date>-<plan>-execution-ledger.md`). Also move any engine or tooling facts the
-dispatch context file collected into the repo's `CLAUDE.md`. (wickilibrium, 2026-10-06: caught
+dispatch context file collected into the repo's `CLAUDE.md`. (A Godot project, 2026-10-06: caught
 during capture-learnings, after the checkpoint message had already promised the ledger would be kept.)
 
 ## Committing `.claude/` when it is gitignored

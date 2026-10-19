@@ -26,8 +26,8 @@ got="$(memory_key /home/user/repo)"
   && ok "linux: /home/user/repo -> -home-user-repo" \
   || bad "linux gave '$got'"
 
-got="$(memory_key /g/rustDev/actual-budget-automation)"
-[ "$got" = "G--rustDev-actual-budget-automation" ] \
+got="$(memory_key /g/rustDev/my-tool)"
+[ "$got" = "G--rustDev-my-tool" ] \
   && ok "msys: /g/rustDev/... -> G--rustDev-..." \
   || bad "msys gave '$got'"
 
@@ -37,11 +37,11 @@ got="$(memory_key "/g/My Docs/proj")"
   || bad "msys-with-space gave '$got'"
 
 # Underscores are normalised to '-'. Verified against a real repo:
-# /g/flutterDev/dynamic_day_planner keeps its memories under
-# G--flutterDev-dynamic-day-planner. Getting this wrong writes to a directory
+# /g/flutterDev/my_app keeps its memories under
+# G--flutterDev-my-app. Getting this wrong writes to a directory
 # nothing reads, silently -- hence a dedicated test on both platforms.
-got="$(memory_key /g/flutterDev/dynamic_day_planner)"
-[ "$got" = "G--flutterDev-dynamic-day-planner" ] \
+got="$(memory_key /g/flutterDev/my_app)"
+[ "$got" = "G--flutterDev-my-app" ] \
   && ok "msys: underscores normalise to hyphens" \
   || bad "msys underscore gave '$got'"
 
@@ -56,21 +56,21 @@ got="$(memory_key /home/user/my_repo)"
 # case above hand-writes an MSYS or Linux path, so the one shape the real call
 # site produces was the one shape never covered.
 #
-# Found 2026-09-05: the key came back as 'G:-pythonDev-news-brief', no
+# Found 2026-09-05: the key came back as 'G:-pythonDev-my-service', no
 # directory matched, and both hooks silently no-opped for days with no error
-# anywhere -- the news-brief corpus had drifted two entries behind.
-got="$(memory_key "G:/pythonDev/news-brief")"
-[ "$got" = "G--pythonDev-news-brief" ] \
+# anywhere -- one project's corpus had drifted two entries behind.
+got="$(memory_key "G:/pythonDev/my-service")"
+[ "$got" = "G--pythonDev-my-service" ] \
   && ok "windows: G:/a/b -> G--a-b (the git rev-parse form)" \
   || bad "windows drive form gave '$got'"
 
-got="$(memory_key 'G:\pythonDev\news-brief')"
-[ "$got" = "G--pythonDev-news-brief" ] \
+got="$(memory_key 'G:\pythonDev\my-service')"
+[ "$got" = "G--pythonDev-my-service" ] \
   && ok "windows: backslash form normalises identically" \
   || bad "windows backslash form gave '$got'"
 
-got="$(memory_key "g:/pythonDev/news-brief")"
-[ "$got" = "G--pythonDev-news-brief" ] \
+got="$(memory_key "g:/pythonDev/my-service")"
+[ "$got" = "G--pythonDev-my-service" ] \
   && ok "windows: lowercase drive letter uppercases" \
   || bad "windows lowercase drive gave '$got'"
 
@@ -152,8 +152,8 @@ CLAUDE_CLOUD_SESSION=1 HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
 # WHY: this copy is one-way and used to be unconditional, which made the local
 # memory dir the sole authority -- anything written straight into a repo's
 # .claude/memory/ was destroyed at the next Stop. Observed 2026-09-15 in
-# ProgDroid/constellation: a session had restored
-# .claude/memory/constellation-status.md in the repo while the local copy was
+# one project: a session had restored
+# .claude/memory/project-status.md in the repo while the local copy was
 # 25 stale lines written early in the session. Every Stop copied the stale file
 # back over the good one and auto-commit.sh committed the rollback -- three
 # times (29373ab, f90dca7, 2be8145), each reverting a restore the session had
@@ -192,7 +192,7 @@ grep -q 'second draft' "$repo/.claude/memory/learned.md" \
 # 8. THE INCIDENT. A repo file with an independent history is not overwritten,
 # even when the local file is unambiguously newer.
 #
-# Measured 2026-09-22 in ProgDroid/aegyptvault-notes: a cloud session created
+# Measured 2026-09-22 in a notes repo: a cloud session created
 # .claude/memory/ with its own MEMORY.md -- a 15-line index of 2 notes. Locally
 # a 97-line MEMORY.md indexed 100 notes under the same project key. Two
 # DIFFERENT documents sharing one filename. The local one was newer, so `cp -u`
@@ -282,7 +282,7 @@ HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
 
 # 14. A line-ending-only change is not a divergence.
 #
-# Measured 2026-10-03 in ds-job-analysis (core.autocrlf=true, no
+# Measured 2026-10-03 in one project (core.autocrlf=true, no
 # .gitattributes): this sync wrote LF files into .claude/memory/, a merge
 # checkout rewrote them as CRLF, and the next Stop reported every one of them as
 # "diverged" and refused to update them -- twice in one session. Same text,

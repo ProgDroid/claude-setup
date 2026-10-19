@@ -36,7 +36,7 @@
 # whole rationale ("python under the Bash tool hits winpty and prints nothing")
 # does not apply once the command dispatches to powershell.exe.
 #
-# Hit live on 2026-08-31 in G:\overleaf while pulling two compiled PDFs:
+# Hit live on 2026-08-31 in a LaTeX repo while pulling two compiled PDFs:
 #   powershell.exe -NoProfile -Command "python tools/pull_pdf.py A B; python tools/pull_pdf.py C D"
 # The workaround was to move the whole invocation into a .ps1 and call it with
 # -File, so the word never appears in the Bash string at all.

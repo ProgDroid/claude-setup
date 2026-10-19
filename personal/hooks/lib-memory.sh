@@ -15,8 +15,8 @@
 #                      (drive letter uppercased, then separators -> '-')
 #
 # UNDERSCORES ARE NORMALISED TO '-'. Verified 2026-07-25: the repo at
-# /g/flutterDev/dynamic_day_planner has its memories under
-# G--flutterDev-dynamic-day-planner, and no project directory anywhere on this
+# /g/flutterDev/my_app has its memories under
+# G--flutterDev-my-app, and no project directory anywhere on this
 # machine contains an underscore. Missing this cost nothing only because it was
 # caught before shipping -- the hook would have written to a directory nothing
 # reads, with no error and no output.
@@ -30,10 +30,10 @@ memory_key() {
   #
   # Both production callers (sync-memory.sh, auto-commit.sh) derive the root
   # from `git rev-parse --show-toplevel`, and on Git Bash that returns
-  # G:/pythonDev/news-brief -- a Windows path with a drive colon, NOT the MSYS
-  # /g/pythonDev/news-brief the matcher below was written for. So every real
+  # G:/pythonDev/my-service -- a Windows path with a drive colon, NOT the MSYS
+  # /g/pythonDev/my-service the matcher below was written for. So every real
   # call fell through to the generic branch and produced a key containing a
-  # colon ('G:-pythonDev-news-brief'). No such directory can exist, both hooks
+  # colon ('G:-pythonDev-my-service'). No such directory can exist, both hooks
   # hit their `[ -d "$_src" ] || return 0` guard, and the whole mechanism
   # no-opped in complete silence for days. Found 2026-09-05.
   #
@@ -57,7 +57,7 @@ memory_key() {
 # SAYS, not when it was last touched.
 #
 # CARRIAGE RETURNS ARE STRIPPED before hashing, so LF and CRLF copies of the
-# same text digest identically. Measured 2026-10-03 in ds-job-analysis
+# same text digest identically. Measured 2026-10-03 in one project
 # (core.autocrlf=true, no .gitattributes): this sync wrote LF files, a merge
 # checkout rewrote them as CRLF, and every one then failed the lineage check and
 # was reported as "diverged" -- git's own conversion read as a stranger's edit.
@@ -254,14 +254,14 @@ seed_memory_manifest() {
 # files, and they come apart the moment a cloud session writes a memory this
 # machine has never seen.
 #
-# Measured 2026-09-22 in ProgDroid/aegyptvault-notes: a cloud session created
+# Measured 2026-09-22 in a notes repo: a cloud session created
 # .claude/memory/ holding its own MEMORY.md -- a 15-line index of 2 notes. The
 # local machine had a 97-line MEMORY.md indexing 100 notes under the same
 # project key. Two DIFFERENT documents sharing one filename, and the local one
 # was newer, so `-u` overwrote the repo's on every Stop and destroyed edits made
 # to it minutes earlier. In a cloud session auto-commit.sh commits that loss.
 #
-# The earlier fix (2026-09-15, ProgDroid/constellation) added `-u` to stop a
+# The earlier fix (2026-09-15, in another project) added `-u` to stop a
 # stale local copy clobbering a fresh repo edit. That was a real bug, and it is
 # this same bug seen from the other side: both are "the destination is not ours
 # to overwrite". A timestamp happened to express that case and cannot express

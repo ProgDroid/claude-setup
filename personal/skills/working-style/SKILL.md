@@ -21,18 +21,18 @@ stated plainly, with its cost named.
 the rest out of scope", he pushed back: *"we should make the version we want this to eventually be
 now, I won't return to this much."* For a tool he will run but not revisit, a deferred phase is a
 phase that never ships. Pull the out-of-scope list back in and plan the finished version, rather than
-proposing a phased roadmap he would have to remember to resume. (ds-job-analysis, 2026-10-02)
+proposing a phased roadmap he would have to remember to resume. (A data-analysis project, 2026-10-02)
 
 **A date-gated follow-up is the same failure.** Twice in one session: *"I'd rather not have date
 gated stuff"* and *"settle it as keep today, I don't want date-gated stuff that I will forget."*
-(aegyptvault/dotfiles, 2026-10-17). When something is "blocked until <date>", first look for the
+(Setup work, 2026-10-17.) When something is "blocked until <date>", first look for the
 route that un-gates it today. A live check waiting for a budget reset ran the same afternoon on
 another provider's key, and cost $0.05. When a measurement window is what gates it, score it now on
 the evidence in hand, state how strong that evidence is, and replace the calendar date with an event
 that reopens the decision by itself (e.g. a new `recurred:` date). Never leave him a date to remember.
 
 **Passion projects are the exception: there the scope growth is the risk.** For a project he cares
-about (wickilibrium, a game, 2026-10-06), he named his own stall pattern: *"I put too much baggage
+about (a game, 2026-10-06), he named his own stall pattern: *"I put too much baggage
 in them and then get too stuck to finish them"*. Asked to be specific, he pointed to setup and
 architecture perfectionism, plus losing momentum after a break. So in a passion project, endorsed ideas go to a
 **parking lot**, not into the current milestone, and he agreed to that override. Milestones are
@@ -48,8 +48,8 @@ call into the application. Deliver it as something Claude Code agents drive on h
 MCP tool surface plus a skill or a sandboxed agent. Stated directly: *"I don't want to have to set up
 API keys and use it that way, I want to use agents via subscription."* The application stays
 deterministic (it stores, validates and counts); the model work happens in the session. Ship the
-agents and skills as a plugin in the repo so the other user gets them too. (ds-job-analysis,
-2026-10-02)
+agents and skills as a plugin in the repo so the other user gets them too. (A data-analysis
+project, 2026-10-02)
 
 ## Friction is the deciding variable
 
@@ -89,7 +89,7 @@ When proposing a system, first ask whether the problem needs a system at all.
 a maintenance burden or a false obligation (a queue implying it should be read, stubs nobody opens);
 for cheap static items, propose keeping and ask. **Never argue from "you haven't used it" alone** — that
 reading has been overruled twice. On builds, favour a focused single-purpose tool refined over time to
-one app grown to do everything. (promoted_from: aegyptvault-notes/user-prunes-and-offloads.md, 2026-10-02)
+one app grown to do everything. (promoted from a private memory, 2026-10-02)
 
 ## Adopt before building
 
@@ -108,16 +108,16 @@ an otherwise-strong option fails on this alone, rather than presenting it and le
 He has substantial professional GCP experience, Cloud Run specifically. Do not price "time to learn the
 platform" into a GCP recommendation, and do not explain Cloud Run, Cloud SQL or Cloud Scheduler basics
 unprompted. More generally, when a trade-off rests partly on familiarity, **ask** rather than assume: a
-learning-curve argument once pushed a recommendation the wrong way. (promoted_from:
-anime-calendar/user_gcp_cloud_run_experience.md, 2026-10-02)
+learning-curve argument once pushed a recommendation the wrong way. (promoted from a
+private memory, 2026-10-02)
 
 ## Give odds, not hedges
 
 He deliberately reasons in probabilities. Give base rates, rough odds and explicit tail sizes, not hedged
 certainty or a list of risks without magnitudes; an unsized risk is noise. Separate "unlikely" from
 "unlikely **and** cheap to insure against", since they lead to opposite actions. Inverting the question
-("what would have to be true for X to be the wrong call?") lands better than advocacy. (promoted_from:
-aegyptvault-notes/user-thinks-in-probabilities.md, 2026-10-02)
+("what would have to be true for X to be the wrong call?") lands better than advocacy. (promoted from a
+private memory, 2026-10-02)
 
 ## Concurrent sessions are normal
 
@@ -132,7 +132,7 @@ that this session never touched. That is in-flight work, not cruft.
   there as the normal state.
 - A fixed `/tmp` path is shared between sessions; use the session scratchpad.
 
-(promoted_from: news-brief/user-runs-concurrent-sessions.md, 2026-10-02)
+(promoted from a private memory, 2026-10-02)
 
 ## Offer both-and, not only either/or
 
@@ -169,7 +169,7 @@ A decision framed as "which vendor / tier / platform" usually rests on a number,
 frequently **a property of our own code, not of the thing being chosen**. Establish that first.
 Options priced against a self-imposed limit are priced wrong.
 
-Measured 2026-09-22, anime-calendar. Two platform decisions had been stalled for twelve days:
+Measured 2026-09-22, in a web-app project. Two platform decisions had been stalled for twelve days:
 
 - **Redis.** The sizing input was "3 fixed + 2 per calendar + 1 per viewer ≈ 43 connections",
   against a free tier's cap of 30. That budget was not a property of the app — `redis_pubsub.rs`
@@ -197,7 +197,7 @@ neither of you listed, which here was "do not build a second environment at all"
 
 He decides on the premises an option states, without seeing the code behind them. A false clause in
 an option description produces a real decision about the wrong thing. Measured 2026-09-22
-(swarm-music): an option promised a renderer would replay "exactly what you played", he picked it,
+(a music project): an option promised a renderer would replay "exactly what you played", he picked it,
 and the code's own doc said the two only agree within a tolerance. Retracted and re-asked, the
 corrected question produced a different design.
 
