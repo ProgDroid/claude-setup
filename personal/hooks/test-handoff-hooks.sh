@@ -83,10 +83,30 @@ p_edit() { jq -nc --arg t "$1" --arg f "$2" --arg d "$3" '{session_id:"t", trans
 RUNS=0; NONZERO=0; STDERR_RUNS=0
 # run <hook> <payload>: sets OUT (raw stdout), CTX (additionalContext), EVT (hookEventName)
 run() {
-  OUT="$(printf '%s' "$2" | bash "$1" 2>"$TMPROOT/err")"; local rc=$?
+  OUT="$(printf '%s' "$2" | bash "$1" 2>"$TMPROOT/err")"
+  collect $? "$1"
+}
+
+# nrun <hook> <payload>: as run, but the payload arrives through cmd.exe's NATIVE Windows pipe,
+# which is how Claude Code (node) hands a hook its stdin. Every `printf | bash` above is an MSYS
+# pipe, and the two differ: on a native pipe Git Bash cannot open /dev/stdin by path ("No such
+# file or directory"). That shipped in 0.14.0 and passed this whole suite.
+nrun() {
+  printf '%s' "$2" > "$TMPROOT/native.json"
+  # The hook path is in the mixed form Claude Code passes (C:/Users/.../hooks/x.sh, as its logged
+  # stderr shows): an all-backslash path defeats the hooks' `${0%/*}` and they exit 0 unsourced.
+  printf '@type "%s" | "%s" "%s"\r\n' "$(cygpath -w "$TMPROOT/native.json")" \
+    "$(cygpath -w "$(command -v bash)")" "$(cygpath -m "$1")" > "$TMPROOT/native.cmd"
+  OUT="$(cmd.exe //d //c "$(cygpath -ws "$TMPROOT/native.cmd")" 2>"$TMPROOT/err")"
+  collect $? "$1"
+}
+
+# collect <rc> <hook>: the bookkeeping shared by run and nrun
+collect() {
+  local rc="$1"
   RUNS=$((RUNS + 1))
-  [ "$rc" = 0 ] || { NONZERO=$((NONZERO + 1)); echo "    (nonzero exit $rc from $(basename "$1"))"; }
-  [ -s "$TMPROOT/err" ] && { STDERR_RUNS=$((STDERR_RUNS + 1)); echo "    (stderr from $(basename "$1"): $(head -c 200 "$TMPROOT/err"))"; }
+  [ "$rc" = 0 ] || { NONZERO=$((NONZERO + 1)); echo "    (nonzero exit $rc from $(basename "$2"))"; }
+  [ -s "$TMPROOT/err" ] && { STDERR_RUNS=$((STDERR_RUNS + 1)); echo "    (stderr from $(basename "$2"): $(head -c 200 "$TMPROOT/err"))"; }
   CTX=""; EVT=""
   if [ -n "$OUT" ]; then
     CTX="$(jq -r '.hookSpecificOutput.additionalContext // empty' <<<"$OUT" 2>/dev/null | tr -d '\r')"
@@ -634,6 +654,26 @@ if [ -f "$SKILL" ]; then
 else
   bad "SKILL.md missing"
 fi
+
+echo "== native Windows pipe (how Claude Code delivers stdin) =="
+
+if command -v cmd.exe >/dev/null 2>&1 && command -v cygpath >/dev/null 2>&1; then
+  nv="$(std_repo native-ss)"; cm "$nv" "agent work" "$AGENT"
+  nrun "$SS" "$(p_ss startup "$(winpath "$nv")")"
+  [ "$EVT" = SessionStart ] && has "ended without a handoff" \
+    && ok "native_pipe_session_start_speaks" || bad "native pipe startup: $(show) / $(head -c 200 "$TMPROOT/err")"
+  ne="$(std_repo native-pt)"; net="$FIX/native wt linked"; git -C "$ne" worktree add -q -b feat "$net" 2>/dev/null
+  nrun "$PT" "$(p_edit Edit "$(winpath "$net/NEXT.md")" "$(winpath "$net")")"
+  [ "$EVT" = PostToolUse ] && has "linked worktree" \
+    && ok "native_pipe_post_tool_speaks" || bad "native pipe NEXT.md edit: $(show) / $(head -c 200 "$TMPROOT/err")"
+else
+  echo "  SKIP: no cmd.exe (not Windows); the lint below still covers the idiom"
+fi
+
+# The lint behind the cases above, and the half that runs everywhere: no hook reads /dev/stdin
+# outside a comment. `$(cat)` reads fd 0 on any pipe.
+devstdin="$(grep -ln '^[^#]*/dev/stdin' "$HOOKS"/*.sh 2>/dev/null | grep -v '/test-' || true)"
+[ -z "$devstdin" ] && ok "no_hook_reads_dev_stdin" || bad "hooks read /dev/stdin: $(printf '%s' "$devstdin" | tr '\n' ' ')"
 
 echo "== hygiene =="
 

@@ -28,7 +28,9 @@
 
 set -uo pipefail
 
-json="$(</dev/stdin)"   # one read; `read -d ''` takes a pipe a byte at a time (~5 s per MB)
+# One read via cat: `read -d ''` takes a pipe a byte at a time (~5 s per MB), and `$(</dev/stdin)`
+# fails on the native Windows pipe Claude Code hands a hook ("No such file or directory").
+json="$(cat)"
 case "$0" in */*) here="${0%/*}" ;; *) here=. ;; esac
 . "$here/handoff-lib.sh" 2>/dev/null || exit 0
 
