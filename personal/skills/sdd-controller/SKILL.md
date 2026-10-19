@@ -59,6 +59,16 @@ detect that its own premise is false.
   to catch a rare case. Two scoped reviews passed it. A side agent caught it by asking what the
   change cost the user. The fix was a `--proved` flag that reuses the check's result (2026-10-18).
   "Idempotent" means safe to repeat, not cheap to repeat.
+- **A defensive "also reset X" ruling is often an equivalent mutant.** Before ruling it, check
+  whether X's only writer always runs before X's only reader. A ruling to clear an "aim broken"
+  flag at every grab added a line no test could fail: the swap's start assigned the flag on every
+  push, and the line printing it always ran later. The implementer's own mutation found 0 failures
+  and it was removed a task later (2026-10-19). The same run's plan also asserted a final position
+  that its own coordinates contradicted; compute a plan's geometry from its numbers before writing
+  an assertion on it.
+- **Run `scripts/sdd-workspace` with the PROJECT as the working directory, never the skill's.** It
+  resolves the repo from cwd, so a call made from the skill directory created the workspace inside
+  the dotfiles repo that holds the skill (2026-10-19). Check the printed path is under the project.
 
 ## 2. What goes in every dispatch
 
@@ -176,6 +186,14 @@ by none; two independently written predicates that drifted; a value re-resolved 
 six tasks edited. Dispatch the final review on the most capable model, point it at cross-task
 coherence explicitly, and give every reviewer **named risks, each with one focused check** — nearly
 every Important finding in one run came from a named risk.
+
+- **Name "every preview of an outcome against the action that produces it" as a final-review risk.**
+  A debug indicator drew where a grab's swap would leave the target, computed from the player's
+  position before the press; the grab warps first, so at range the line was up to 2 m off. Its
+  test compared the drawn line with the same pre-warp formula, a symmetric control, and the
+  per-task review approved it. The final review caught it (2026-10-19). Fix shape: one helper that
+  both the action and the preview call, tested against a hand-computed value in a setup where the
+  action changes the inputs.
 
 - **Before pushing to a public repo, scan the commit messages and the WHOLE tree, not only the
   diff.** Per-task privacy scans read only the code changes. The branch's own messages, written
