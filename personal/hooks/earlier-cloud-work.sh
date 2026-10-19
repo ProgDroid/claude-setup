@@ -31,6 +31,7 @@
 
 set -uo pipefail
 
+start_dir="$PWD"
 switchboard_only=0
 [ "${1:-}" = "--switchboard-only" ] && switchboard_only=1
 
@@ -234,6 +235,16 @@ if [ "$switchboard_only" = 1 ]; then
     echo "switchboard: couldn't check the PC's state (the state repo isn't attached)."
     exit 0
   fi
+  # The loop below checks only project repos; with none in sight, "checked
+  # against" would be a false all-clear.
+  project=0
+  for r in "${repos[@]}"; do
+    case "$(basename "$r")" in claude-setup|switchboard-state) ;; *) project=1 ;; esac
+  done
+  if [ "$project" = 0 ]; then
+    echo "switchboard: couldn't check the PC's state (no project repo found from $start_dir)."
+    exit 0
+  fi
   date="$(git -C "$state" log -1 --date=short --format=%cd 2>/dev/null)"
   echo "switchboard: checked against the PC's state of ${date:-an unknown date}."
   for r in "${repos[@]}"; do
@@ -258,8 +269,8 @@ Before the user's task, do this:
 1. Call add_repo for ProgDroid/switchboard-state, then run once, inline:
    git clone --depth 1 https://github.com/ProgDroid/switchboard-state /home/user/switchboard-state
 2. Do NOT call register_repo_root, and do not read that repo's CLAUDE.md.
-3. Run: CLAUDE_CLOUD_SESSION=1 bash "$self" --switchboard-only
-4. Tell the user any "must wait" or "couldn't check" line it prints before anything else. The "checked against" line needs no mention. If the command prints nothing at all, or attaching or cloning fails, tell the user the PC's state could not be checked.
+3. Only after the clone succeeded, run: cd "$start_dir" && CLAUDE_CLOUD_SESSION=1 bash "$self" --switchboard-only
+4. Tell the user any "must wait" or "couldn't check" line step 3 prints before anything else. The "checked against" line needs no mention. If attaching or cloning fails (so step 3 is not run), or step 3 prints nothing at all, tell the user the PC's state could not be checked.
 EOF
   fi
 fi

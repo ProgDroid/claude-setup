@@ -263,12 +263,13 @@ lacks "budget gone at the fetch step: nothing listed" "$out" "claude/y"
 
 # 14. The state repo is not attached: the hook asks the model to attach it.
 P="$(mktemp -d)"; mkproj "$P" alpha; clone_proj "$P" alpha; mkproj "$P" beta; clone_proj "$P" beta
-out="$(run_hook "$P")"
+# Invoke the hook by a RELATIVE path, so a `self="$0"` would not pass.
+mkdir -p "$P/bin" && cp "$HOOK" "$P/bin/earlier-cloud-work.sh"   # a copy beside the repos, so a relative path to it exists
+out="$( cd "$P" && env CLAUDE_CLOUD_SESSION=1 SWITCHBOARD_STATE_DIR="$P/.no-state-dir" bash ./bin/earlier-cloud-work.sh 2>&1 )"
 count "no state repo: instruction once" "$out" "isn't attached to this session" 1
-has   "instruction names add_repo" "$out" "add_repo"
-has   "instruction forbids register_repo_root" "$out" "register_repo_root"
-has   "instruction names the repo" "$out" "ProgDroid/switchboard-state"
-has   "instruction gives the re-run command with the script's absolute path" "$out" "CLAUDE_CLOUD_SESSION=1 bash \"$DIR/earlier-cloud-work.sh\" --switchboard-only"
+has   "instruction names add_repo" "$out" "Call add_repo for ProgDroid/switchboard-state"
+has   "instruction forbids register_repo_root" "$out" "Do NOT call register_repo_root"
+has   "instruction gives the re-run command: cd to the start dir, absolute script path" "$out" "cd \"$P\" && CLAUDE_CLOUD_SESSION=1 bash \"$P/bin/earlier-cloud-work.sh\" --switchboard-only"
 
 P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"; mkstate "$P" can_continue
 out="$(run_hook "$P/proj")"
@@ -313,6 +314,11 @@ has "switchboard-only without the gate variable: still prints the wait line" "$o
 P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"; mkstate "$P" wait; mv "$P/switchboard-state" "$P/elsewhere"
 out="$(sbo "$P/proj" SWITCHBOARD_STATE_DIR="$P/elsewhere")"
 has "switchboard-only, state at SWITCHBOARD_STATE_DIR: the wait line" "$out" "switchboard: o/r must wait for the PC"
+# No project repo in sight (a shell outside any project): never an all-clear.
+P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"; mkstate "$P" wait; mv "$P/switchboard-state" "$P/elsewhere"
+E="$(mktemp -d)"
+out="$(sbo "$E" SWITCHBOARD_STATE_DIR="$P/elsewhere")"
+[ "$out" = "switchboard: couldn't check the PC's state (no project repo found from $E)." ] && ok "switchboard-only, no project repo: couldn't-check" || { bad "switchboard-only, no project repo: wrong output"; echo "$out" | sed 's/^/      | /'; }
 
 echo "-- $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
