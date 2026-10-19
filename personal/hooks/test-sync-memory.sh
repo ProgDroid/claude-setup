@@ -323,6 +323,238 @@ grep -q 'independent cloud history' "$repo/.claude/memory/learned.md" \
   && ok "still keeps a CRLF repo file whose text was edited independently" \
   || bad "line-ending normalisation let an independent edit be clobbered"
 
+# 17. A single run that exercises every branch at once: identical, overwrite,
+# diverge, new (including a name with spaces) and a CRLF-only rewrite.
+#
+# The batched hashing pairs each local file with its repo counterpart by
+# POSITION, so an off-by-one would silently compare a file against its
+# neighbour. One-branch-per-fixture cases cannot see that; a mixed directory
+# can. The manifest is checked byte for byte against what the per-file
+# _memory_hash says each recorded state must be.
+setup
+mkdir -p "$repo/.claude/memory"
+m="$fakehome/.claude/projects/$key/memory"; r="$repo/.claude/memory"
+printf 'same\n'       > "$m/a-same.md"
+printf 'v1\n'         > "$m/b-ours.md"
+printf 'v1\n'         > "$m/c-theirs.md"
+printf 'crlf later\n' > "$m/f-crlf.md"
+HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1          # lineage for all of them
+printf 'v2 local\n'   > "$m/b-ours.md"                 # ours to overwrite
+printf 'cloud edit\n' > "$r/c-theirs.md"               # independent history
+to_crlf "$r/f-crlf.md"                                 # git checkout only
+cp "$r/f-crlf.md" "$m/../f-crlf.before"
+printf 'new\n'        > "$m/d-new.md"
+printf 'spaced\r\n'   > "$m/e new spaced.md"
+out="$(HOME="$fakehome" bash "$HOOK" 2>/dev/null)"
+if grep -q 'v2 local' "$r/b-ours.md" && grep -q 'cloud edit' "$r/c-theirs.md" \
+   && [ -f "$r/d-new.md" ] && [ -f "$r/e new spaced.md" ]; then
+  ok "mixed run: overwrite, keep, and both new files land correctly"
+else
+  bad "mixed run: wrong file contents after one sync"
+fi
+cmp -s "$r/f-crlf.md" "$m/../f-crlf.before" \
+  && ok "mixed run: a CRLF-only rewrite is left byte-for-byte untouched" \
+  || bad "mixed run: rewrote a file whose text had not changed"
+case "$out" in
+  *'kept the repo copy of c-theirs.md -- '*) ok "mixed run: exactly c-theirs.md reported as diverged" ;;
+  *) bad "mixed run: wrong divergence report (got: ${out:-<empty>})" ;;
+esac
+want=""
+for f in "$m"/*.md; do
+  n="${f##*/}"
+  case "$n" in c-theirs.md) src="$r/$n" ;; *) src="$f" ;; esac
+  want="$want$(_memory_hash "$src")	$n
+"
+done
+# Read it where the HOOK wrote it: under the fake HOME, at the key setup()
+# derived from git's toplevel -- not memory_manifest_path, which would resolve
+# against this shell's real HOME.
+got="$(cat "$fakehome/.claude/projects/$key/.memory-sync-manifest" 2>/dev/null)
+"
+[ "$got" = "$want" ] \
+  && ok "mixed run: manifest records exactly the per-file digests" \
+  || bad "mixed run: manifest differs; want [$want] got [$got]"
+
+echo "== lib-memory.sh: batched hashing =="
+
+# The batch must agree with _memory_hash BYTE FOR BYTE. The per-machine
+# manifest holds digests written by earlier runs of the per-file function, so
+# any drift -- a CR kept, a trailing newline added or dropped -- would be read
+# as every memory having diverged at once.
+corpus="$(mktemp -d)"
+printf 'one\r\ntwo\r\n'             > "$corpus/crlf.md"
+printf 'one\ntwo\n'                 > "$corpus/lf.md"
+printf 'one\r\ntwo\nthree\r\n'      > "$corpus/mixed.md"
+printf 'no trailing newline'        > "$corpus/nonl.md"
+printf 'no trailing newline\r'      > "$corpus/trailing-cr.md"
+: >                                   "$corpus/empty.md"
+printf 'lone\rcr mid-line\n'        > "$corpus/lonecr.md"
+printf '\r\r\r'                     > "$corpus/only-crs.md"
+printf 'spaced\r\nname\n'           > "$corpus/with space.md"
+printf '\377\376\r\n\303\r(\n'      > "$corpus/bad-utf8.md"
+printf 'nul\000byte\r\n'            > "$corpus/nul.md"
+printf 'trailing\n\n\n'             > "$corpus/blank-tail.md"
+printf 'back\\slash %%s\r\n'        > "$corpus/escapes.md"
+awk 'BEGIN { for (i = 0; i < 20000; i++) printf "line %d of a large memory\r\n", i }' \
+  > "$corpus/big.md"
+mkdir "$corpus/dir.md"
+eq_files=()
+for f in "$corpus"/*.md; do eq_files+=("$f"); done
+eq_files+=("$corpus/missing.md")
+
+_memory_hash_batch "${eq_files[@]}" 2>/dev/null
+i=0; oracle_empty=""
+for f in "${eq_files[@]}"; do
+  want="$(_memory_hash "$f" 2>/dev/null)" || want=""
+  got="${_MEMORY_HASHES[$i]-}"
+  [ -f "$f" ] && [ -z "$want" ] && oracle_empty="$oracle_empty ${f##*/}"
+  [ "$got" = "$want" ] \
+    && ok "batch hash matches _memory_hash: ${f##*/}" \
+    || bad "batch hash for ${f##*/}: want '$want' got '$got'"
+  i=$((i + 1))
+done
+# Control: a broken oracle would return '' everywhere and agree with a broken
+# batch. Every regular file must have produced a real digest.
+[ -z "$oracle_empty" ] \
+  && ok "control: the per-file oracle produced a digest for every regular file" \
+  || bad "control: oracle returned nothing for:$oracle_empty"
+
+# The fallback hashers. A machine without sha256sum must get the SAME
+# algorithm from the batch that _memory_hash would pick, so run both under a
+# PATH holding only wrappers for the tools each branch needs.
+#
+# awk MUST be on that PATH: without it the batch drops to its per-file
+# fallback, which agrees with the oracle trivially -- these two cases passed
+# that way, testing nothing, until a mutation that broke the batch's CR
+# stripping left them green (2026-10-18). equiv_under now refuses to report a
+# pass when awk is missing.
+mkbin() {
+  _bin="$(mktemp -d)"
+  for _c in "$@"; do
+    _real="$(command -v "$_c" 2>/dev/null)" || continue
+    printf '#!/bin/sh\nexec "%s" "$@"\n' "$_real" > "$_bin/$_c"
+    chmod +x "$_bin/$_c"
+  done
+  printf '%s' "$_bin"
+}
+equiv_under() {   # <bin-dir> <digest-shape-glob> -> "mismatch=N shape=ok|bad"
+  (
+    PATH="$1"
+    command -v awk >/dev/null 2>&1 || { printf 'no awk on the test PATH'; exit 0; }
+    _memory_hash_batch "${eq_files[@]}" 2>/dev/null
+    _mm=0; _shape=ok; _i=0
+    for _f in "${eq_files[@]}"; do
+      _w="$(_memory_hash "$_f" 2>/dev/null)" || _w=""
+      [ "${_MEMORY_HASHES[$_i]-}" = "$_w" ] || _mm=$((_mm + 1))
+      if [ -f "$_f" ]; then
+        case "$_w" in $2) ;; *) _shape=bad ;; esac
+      fi
+      _i=$((_i + 1))
+    done
+    printf 'mismatch=%s shape=%s' "$_mm" "$_shape"
+  )
+}
+if command -v md5sum >/dev/null 2>&1; then
+  b="$(mkbin md5sum cksum awk tr cut mktemp rm)"
+  res="$(equiv_under "$b" '[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]')"
+  [ "$res" = "mismatch=0 shape=ok" ] \
+    && ok "md5sum fallback: batch matches _memory_hash" \
+    || bad "md5sum fallback: $res"
+else
+  echo "  SKIP: no md5sum on this machine"
+fi
+if command -v cksum >/dev/null 2>&1; then
+  b="$(mkbin cksum awk tr cut mktemp rm)"
+  res="$(equiv_under "$b" '[0-9]*-[0-9]*')"
+  [ "$res" = "mismatch=0 shape=ok" ] \
+    && ok "cksum fallback: batch matches _memory_hash" \
+    || bad "cksum fallback: $res"
+else
+  echo "  SKIP: no cksum on this machine"
+fi
+
+# seed_memory_manifest (hydrate-memory.sh's baseline) must write exactly what
+# the per-file loop always wrote.
+want=""
+for f in "$corpus"/*.md; do
+  h="$(_memory_hash "$f" 2>/dev/null)" || continue
+  [ -n "$h" ] && want="$want$h	${f##*/}
+"
+done
+smf="$(mktemp)"; rm -f "$smf"
+seed_memory_manifest "$corpus" "$smf"
+got="$(cat "$smf" 2>/dev/null)
+"
+[ "$got" = "$want" ] \
+  && ok "seed_memory_manifest writes the per-file digests unchanged" \
+  || bad "seed_memory_manifest drifted; want [$want] got [$got]"
+
+echo "== sync-memory.sh: cost does not grow with the number of memories =="
+
+# Measured 2026-10-18: with 108 memories the per-file hashing spawned ~650
+# processes, took 36 s under Git Bash (~80 ms per spawn) and was killed by the
+# hook's 20 s timeout on EVERY Stop -- so the manifest was never written and the
+# files after the cut-off never synced. Count external commands rather than
+# time them: the count is the cause, and it is the same on every platform.
+spybin="$(mktemp -d)"
+for c in sha256sum shasum md5sum cksum tr cut awk cp sed find mktemp rm mv cat \
+         sort head wc xargs dirname basename; do
+  real="$(command -v "$c" 2>/dev/null)" || continue
+  printf '#!/bin/sh\necho x >> "$SPAWN_LOG"\nexec "%s" "$@"\n' "$real" > "$spybin/$c"
+  chmod +x "$spybin/$c"
+done
+gen_memories() {   # <count> into the current fixture's local memory dir
+  _n=0
+  while [ "$_n" -lt "$1" ]; do
+    printf -- '---\nname: gen-%d\n---\nbody %d\r\n' "$_n" "$_n" \
+      > "$fakehome/.claude/projects/$key/memory/gen-$_n.md"
+    _n=$((_n + 1))
+  done
+}
+spawns_for() {     # <count> -> "<first-sync spawns> <steady-state spawns>"
+  setup
+  mkdir -p "$repo/.claude/memory"
+  gen_memories "$1"
+  _log="$(mktemp)"
+  PATH="$spybin:$PATH" SPAWN_LOG="$_log" HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
+  _first="$(wc -l < "$_log" | tr -d ' ')"
+  : > "$_log"
+  PATH="$spybin:$PATH" SPAWN_LOG="$_log" HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
+  _steady="$(wc -l < "$_log" | tr -d ' ')"
+  printf '%s %s' "$_first" "$_steady"
+}
+small="$(spawns_for 20)"; large="$(spawns_for 150)"
+[ "${small#* }" = "${large#* }" ] \
+  && ok "steady-state spawns independent of file count (20 files: ${small#* }, 150: ${large#* })" \
+  || bad "steady-state spawns grow with file count (20 files: ${small#* }, 150: ${large#* })"
+[ "${small% *}" = "${large% *}" ] \
+  && ok "first-sync spawns independent of file count (20 files: ${small% *}, 150: ${large% *})" \
+  || bad "first-sync spawns grow with file count (20 files: ${small% *}, 150: ${large% *})"
+
+# And the budget itself: a first sync plus a steady-state sync of 150 memories
+# inside 20 s, i.e. each one inside half the hook's 20 s timeout on average.
+# Measured 2026-10-18 under Git Bash: ~88 s before the fix, ~7 s after, so the
+# bound discriminates by 4x either way while leaving room for a loaded machine.
+# Only discriminating where process creation is slow (Git Bash), which is where
+# the bug lives; the spawn counts above are the portable guard.
+now_ms() {
+  if [ -n "${EPOCHREALTIME:-}" ]; then _t="${EPOCHREALTIME/[.,]/}"; printf '%s' $((_t / 1000))
+  else printf '%s' $((SECONDS * 1000)); fi
+}
+setup
+mkdir -p "$repo/.claude/memory"
+gen_memories 150
+t0="$(now_ms)"
+HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
+HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
+el=$(( $(now_ms) - t0 ))
+synced=0; for f in "$repo/.claude/memory"/gen-*.md; do [ -f "$f" ] && synced=$((synced + 1)); done
+if [ "$el" -lt 20000 ] && [ "$synced" -eq 150 ]; then
+  ok "150 memories: two syncs in ${el} ms, all 150 landed"
+else
+  bad "150 memories: two syncs took ${el} ms, $synced/150 landed (budget 20000 ms)"
+fi
+
 # 7. Outside a git repo -> exit 0
 d="$(mktemp -d)"; cd "$d" || exit 1
 HOME="$(mktemp -d)" bash "$HOOK" >/dev/null 2>&1
