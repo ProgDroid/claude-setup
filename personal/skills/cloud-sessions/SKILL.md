@@ -287,3 +287,24 @@ session's own branch and anything already merged into the default branch.
   `claude/*` branches in continuable projects were merged by ancestry. And `--unshallow` on a big
   repo usually exceeds the 8 s per-call cap, so a shallow clone reports "shallow clone" rather than
   a list.
+
+## The git proxy reaches only the session's attached repos; `add_repo` attaches more
+
+Measured 2026-10-19 (switchboard stage 4.1 gate). A session opened on one repo cannot read a
+private repo it was not started with. `git ls-remote` and `git clone` of it both fail with
+`fatal: could not read Username for 'https://github.com': terminal prompts disabled` (exit 128),
+while the same call against the session's own repo succeeds. Earlier "it reaches the private state
+repo" results had all come from sessions that had it attached as a companion, so they measured
+the wrong variable.
+
+**The model's `add_repo` tool attaches a repo mid-session, and the user saw no approval prompt.**
+After it, `ls-remote` and a `--depth 1` clone of that private repo succeed. A hook cannot call it;
+only the model can, so a SessionStart hook that needs another repo prints an instruction for the
+model instead (switchboard's `earlier-cloud-work.sh` does this for `ProgDroid/switchboard-state`).
+
+**`add_repo`'s result tells the model to clone, then call `register_repo_root`**, which loads that
+repo's `CLAUDE.md`, skills and plugins into the session on the next turn. When the attached repo is
+data for a check, not the session's subject, say explicitly "do NOT call `register_repo_root`";
+otherwise its instructions take over the session. The result also caps the attached repo at 2
+concurrent smart-HTTP operations (a third gets HTTP 429) and warns that `add_repo` may already have
+left a checkout at `/home/user/<repo>`. Check `git rev-parse HEAD` there before cloning over it.
