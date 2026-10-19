@@ -598,11 +598,11 @@ q() { jq -r "$1" "$HJ" 2>/dev/null | tr -d '\r'; }
 [ "$(q '[(.hooks.Stop // [])[], (.hooks.UserPromptSubmit // [])[] | .hooks[] | select(.command | test("handoff"))] | length')" = 0 ] \
   && ok "no_stop_or_user_prompt_submit_handoff_hook" || bad "Stop/UPS handoff hook present"
 kept=""
-for h in hydrate-memory auto-commit sync-memory redteam-gate negative-result-guard job-state-nudge windows-guard; do
+for h in hydrate-memory earlier-cloud-work auto-commit sync-memory redteam-gate negative-result-guard job-state-nudge windows-guard; do
   [ "$(q "[.hooks[][] | .hooks[] | select(.command | test(\"/$h.sh\"))] | length")" = 1 ] || kept="$kept $h"
 done
 [ -z "$kept" ] && ok "existing_hook_entries_each_still_present_once" || bad "existing entries changed:$kept"
-[ "$(q '[.hooks[][] | .hooks[]] | length')" = 10 ] && ok "existing_entries_kept_total_10_commands" || bad "command count: $(q '[.hooks[][] | .hooks[]] | length')"
+[ "$(q '[.hooks[][] | .hooks[]] | length')" = 11 ] && ok "existing_entries_kept_total_11_commands" || bad "command count: $(q '[.hooks[][] | .hooks[]] | length')"
 
 echo "== SKILL.md =="
 
