@@ -15,6 +15,7 @@ import { matches, ifAllows, tokenize } from "../core/hooks.js";
 import { wildcardMatch } from "../core/wildcard.js";
 import { toCcCalls, toCcResponse, applyUpdatedInput, unmappedUpdateKeys, undroppableKeys, UPDATE_ARG_MAPS, sanitizeMcpName } from "../core/toolmap.js";
 import { ccVersion as coreCcVersion, fetchChangelog as coreFetchChangelog, parseChangelog, hookDigest, knownSet, semver, cmpVer } from "../core/releasenotes.js";
+import { renderCommand } from "../core/agents.js";
 
 // OC V1 front-end (docs/v1-capabilities.md holds the measured hook behaviour this relies on).
 // Every hook catches its own errors, logs them and counts them in the state file's failure counter,
@@ -53,6 +54,12 @@ const R45_KEYS = ["webfetch", "websearch", "task", "skill"];
 // Other built-in denies (agent.ts) that a user-level key the adapter emits would loosen: plan's
 // task.general (a CC Task/Agent rule) and general's todowrite (a CC TodoWrite allow).
 const OTHER_BUILTIN_DENIES = { plan: { task: { general: "deny" } }, general: { todowrite: "deny" } };
+
+// command.execute.before re-renders CC commands only on the OC versions its two premises were read
+// from (OC 1.19.0's SessionPrompt.command): the hook fires AFTER the template is rendered, and OC
+// keeps using the parts array it passes as output.parts. Elsewhere it stays off and says so.
+export const ARGFIX_OC = "1.19.x";
+export const argFixOn = (v) => typeof v === "string" && /^1\.19\.\d+$/.test(v);
 
 // R42: the compact parity line.
 export const LINE_MAX = 500;
@@ -252,7 +259,7 @@ export async function createV1(ctx = {}, deps = {}) {
   } catch (e) {
     fail("inventory", e);
     // Minor 2: no CC hooks run, and the config hook applies FAILSAFE_ASKS over the baseline.
-    inv = { failed: true, merged: {}, plugins: [], hooks: [], degraded: [], permission: {}, mcp: {}, agent: {}, command: {}, skillPaths: [], instructions: [], unknown: [], problems: [INVENTORY_FAILED], probeMismatches: [] };
+    inv = { failed: true, merged: {}, plugins: [], hooks: [], degraded: [], permission: {}, mcp: {}, agent: {}, command: {}, commandSource: {}, skillPaths: [], instructions: [], unknown: [], problems: [INVENTORY_FAILED], probeMismatches: [] };
   }
   const unknownKeys = new Set(inv.unknown.map((u) => `${u.where}\u0000${u.key}\u0000${u.note}`));
   const addUnknowns = (list) => {
@@ -390,7 +397,11 @@ export async function createV1(ctx = {}, deps = {}) {
   // Unseen items in the brief's order: unknowns (not-translated first), unclassified bridged hooks,
   // degraded hooks, failures, problems, kind-3, self-probe mismatches. Each item has a `kind`, a short
   // `name` for the compact line and the `full` text (ids included) for cc-parity.log.
-  function parityItems(k3, failures, ocChange) {
+  // ocv: the running OC version. On a verified one, command.execute.before resolves the unknowns
+  // marked hookFixable, so they are left out; otherwise they show, plus one problem saying the
+  // correction is off.
+  function parityItems(k3, failures, ocChange, ocv) {
+    const argFix = argFixOn(ocv);
     const items = [];
     const local = new Set();
     const add = (key, kind, name, full) => {
@@ -400,7 +411,9 @@ export async function createV1(ctx = {}, deps = {}) {
     };
     const nt = (u) => /^affects behaviour; not translated/.test(u.note);
     for (const u of inv.unknown) if (nt(u)) add(`u\u0000${u.where}\u0000${u.key}\u0000${u.note}`, "notTranslated", u.key, `${u.key} (${u.where}): ${u.note}`);
-    for (const u of inv.unknown) if (!nt(u)) add(`u\u0000${u.where}\u0000${u.key}\u0000${u.note}`, "unknown", u.key, `${u.key} (${u.where}): ${u.note}`);
+    for (const u of inv.unknown) {
+      if (!nt(u) && !(argFix && u.hookFixable)) add(`u\u0000${u.where}\u0000${u.key}\u0000${u.note}`, "unknown", u.key, `${u.key} (${u.where}): ${u.note}`);
+    }
     const hookLine = (h) => `${h.id} ${hookName(h)} (${h.event}${h.matcher ? ` ${h.matcher}` : ""}, ${h.origin}): ${h.command ?? ""}${Array.isArray(h.args) ? ` ${JSON.stringify(h.args)}` : ""}`;
     for (const h of inv.hooks) {
       if (h.disposition === "bridge" && !h.classified) add(`hb\u0000${h.id}`, "bridged", hookName(h), `unclassified hook, runs bridged: ${hookLine(h)}`);
@@ -413,6 +426,17 @@ export async function createV1(ctx = {}, deps = {}) {
     }
     const probe = new Set(inv.probeMismatches);
     const label = (p) => PROBLEM_LABELS[p] ?? (p === INVENTORY_FAILED ? "CC inventory failed" : /^superpowers .*unavailable/.test(p) ? "superpowers adapter unavailable" : p);
+    // First among the problems: it changes what a command does, so it keeps a name in the line.
+    const uncorrected = Object.entries(isObj(inv.commandSource) ? inv.commandSource : {}).filter(([, s]) => s?.indexed && !s.shell).map(([n]) => n);
+    if (!argFix && uncorrected.length) {
+      const v = ocv ?? "?";
+      add(
+        `argfix\u0000${v}`,
+        "problem",
+        `command $N uncorrected (OC ${v})`,
+        `OC ${ocv ?? "version unknown"} is outside the verified ${ARGFIX_OC}: command.execute.before does not re-render CC commands, so their $N and $ARGUMENTS[N] render as OC does (an unfilled index is blanked, the highest takes the rest of the arguments): ${uncorrected.join(", ")}`,
+      );
+    }
     for (const p of inv.problems) if (!probe.has(p)) add(`p\u0000${p}`, "problem", label(p), p);
     if (k3?.item) {
       const top = /top 3: (.*)$/.exec(k3.item.digest)?.[1] ?? "";
@@ -481,7 +505,7 @@ export async function createV1(ctx = {}, deps = {}) {
       // First run (nothing stored): record only. Any later change, either way, is reported once.
       const ocChange = ocv && prevOc && prevOc !== ocv ? { prev: prevOc, cur: ocv } : null;
       const failures = state.failures.list();
-      const items = parityItems(k3, failures, ocChange);
+      const items = parityItems(k3, failures, ocChange, ocv);
       const blocks = [...contexts];
       const line = items.length ? compactLine(items) : null;
       if (line) blocks.push(line);
@@ -634,6 +658,7 @@ export async function createV1(ctx = {}, deps = {}) {
           inv.permission = pa.permission;
           inv.agent = pa.agent;
           inv.command = pa.command;
+          inv.commandSource = pa.commandSource;
           if (Array.isArray(cfg.skills)) log("config: skills is an array (not OC V1); skills.paths not set");
           else {
             cfg.skills = isObj(cfg.skills) ? cfg.skills : {};
@@ -782,6 +807,36 @@ export async function createV1(ctx = {}, deps = {}) {
           const m = String(e?.message ?? e).slice(0, 120);
           throw new Block(`the CC parity adapter failed while CC PreToolUse hooks applied to this call (${m}); the call is blocked (failed closed). Details: cc-parity.log`);
         }
+      }
+    },
+
+    // CC commands with CC's argument rules (core/agents.js renderCommand). OC 1.19.0 renders the
+    // template with its own rules first (1-based, an unfilled index blanked, the highest taking the
+    // rest), then fires this hook with output = { parts } and keeps using that same parts array, so
+    // the rendered text (a subtask's prompt) is replaced IN PLACE on the part OC holds; output.parts
+    // is never reassigned. Every bridged command, so an index-free body gets CC's "ARGUMENTS:" line
+    // and `\$ARGUMENTS` escape too; never one OC did not get from the adapter; not a body with an OC
+    // shell block (OC ran it before this hook; reported at translation time when it has $N); not on
+    // an OC outside ARGFIX_OC (reported in the parity line). Never throws: OC fails the command on
+    // a plugin throw, so an error leaves OC's render and is logged and counted.
+    "command.execute.before": async (input, output) => {
+      try {
+        const name = input?.command;
+        const sources = isObj(inv.commandSource) ? inv.commandSource : {};
+        const src = typeof name === "string" && Object.hasOwn(sources, name) ? sources[name] : null;
+        if (!src || src.shell) return;
+        const ocv = await ocVersionP;
+        if (!argFixOn(ocv)) {
+          log(`command.execute.before: OC ${ocv ?? "version unknown"} is outside ${ARGFIX_OC}; ${name} left as OC rendered it`);
+          return;
+        }
+        const parts = Array.isArray(output?.parts) ? output.parts : [];
+        const sub = parts.find((p) => p?.type === "subtask");
+        const [part, field] = sub ? [sub, "prompt"] : [parts.find((p) => p?.type === "text"), "text"];
+        if (!part || typeof part[field] !== "string") throw new Error(`no rendered ${field} part for ${name}`);
+        part[field] = renderCommand(src, input.arguments).trim(); // OC trims its own render too
+      } catch (e) {
+        fail("command.execute.before", e);
       }
     },
 

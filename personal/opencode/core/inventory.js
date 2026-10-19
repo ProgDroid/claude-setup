@@ -69,13 +69,14 @@ export function permissionAndAgents({ merged, plugins, mcp, home, projectDir, wo
   const skillAsks = promptingSkills(collectSkillPaths({ home, projectDir, plugins })).map((s) => s.name);
   const perm = toOcPermission(merged?.permissions, baseline, { home, worktree, mcpServers: Array.isArray(mcpServers) ? mcpServers : Object.keys(mcp ?? {}), skillAsks });
   const ag = collectAgents({ home, projectDir, plugins, userPermission: perm.permission });
-  return { permission: perm.permission, agent: ag.agent, command: ag.command, unknown: [...perm.unknown, ...ag.unknown] };
+  return { permission: perm.permission, agent: ag.agent, command: ag.command, commandSource: ag.commandSource, unknown: [...perm.unknown, ...ag.unknown] };
 }
 
 // buildInventory({ home, projectDir, ocTools, observedArgs, env, worktree, baseline }) -> Inventory
 //   ocTools / observedArgs: the PREVIOUS session's observations (state.observed), see selfprobe.js.
-//   Inventory = { merged, plugins, hooks, degraded, permission, mcp, agent, command, skillPaths,
-//                 instructions, unknown, problems, probeMismatches }
+//   Inventory = { merged, plugins, hooks, degraded, permission, mcp, agent, command, commandSource,
+//                 skillPaths, instructions, unknown, problems, probeMismatches }
+//   commandSource: per bridged command, its raw CC body for command.execute.before (agents.js).
 //   hooks: every collected entry plus { disposition, reason, classified }. problems: the env-flag,
 //   R35 and self-probe items (probe mismatches last, also listed in probeMismatches). The
 //   superpowers-adapter problem is added by v1/plugin.js, which owns that composition.
@@ -124,6 +125,7 @@ export function buildInventory({ home = os.homedir(), projectDir = process.cwd()
     mcp,
     agent: pa.agent,
     command: pa.command,
+    commandSource: pa.commandSource,
     skillPaths: collectSkillPaths({ home, projectDir, plugins }),
     instructions: ruleFiles(home),
     unknown,

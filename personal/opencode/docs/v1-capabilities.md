@@ -365,6 +365,22 @@ Standalone Bun 1.4.0 differs on one form: `.cmd` without a shell → `EINVAL` (N
 hardening). Don't depend on it. Use Git Bash for extension-less scripts and `shell:true` for
 `.cmd`.
 
+### E20: `command.execute.before` (read from the 1.19.0 bundle, not run live)
+`SessionPrompt.command` (`packages/opencode/src/session/prompt.ts`), as compiled into the 1.19.0
+Windows binary, in order:
+```
+args  = arguments.match(/(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi), outer quotes stripped
+text  = template.replaceAll(/\$(\d+)/g, ...)   1-based; index past the args -> ""; the highest index -> the rest joined
+text  = text.replaceAll("$ARGUMENTS", arguments); no $N and no $ARGUMENTS -> text + "\n\n" + arguments
+text  = every !`cmd` (/!`([^`]+)`/g) run in the shell, its output in place; then text.trim()
+parts = subtask ? [{type:"subtask", ..., prompt: <first text part>.text}] : [{type:"text", text}, ...@file/@agent parts, ...input parts]
+trigger("command.execute.before", {command, sessionID, arguments}, {parts})   then prompt({..., parts})
+```
+`Plugin.trigger` awaits each hook with the same output object and returns it; the caller ignores
+the return and sends its own `parts` array. So a hook can change the parts in place, but a new
+`output.parts` array is dropped, and a hook that throws fails the command. The adapter's
+correction (README Known gaps) rests on exactly this, which is why it runs only on 1.19.x.
+
 ## CC hook protocol (verified)
 
 Source: https://code.claude.com/docs/en/hooks.md, fetched 2026-10-15. The fetch tool read only the

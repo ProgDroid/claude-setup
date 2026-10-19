@@ -274,17 +274,100 @@ function translateAgent(file, fallbackName, prefix, userPermission) {
   return { name, agent, unknown };
 }
 
-// R37: translation-time substitution and arg remap. CC `$N` / `$ARGUMENTS[N]` are 0-based, OC's `$N` 1-based.
-function rewriteTemplate(body, { pluginRoot, projectDir }, where, key) {
+// `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_PROJECT_DIR}` -> their values; any other `${CLAUDE_*}` stays and
+// is passed to onUnknown.
+function claudeVars(text, { pluginRoot, projectDir }, onUnknown = () => {}) {
+  return text.replace(/\$\{(CLAUDE_[A-Za-z0-9_]*)\}/g, (m, v) => {
+    if (v === "CLAUDE_PLUGIN_ROOT" && pluginRoot) return pluginRoot;
+    if (v === "CLAUDE_PROJECT_DIR" && projectDir) return projectDir;
+    onUnknown(m);
+    return m;
+  });
+}
+
+// OC 1.19.0 runs every `` !`cmd` `` in a rendered command (SessionPrompt.command, regex Qy) BEFORE
+// command.execute.before, so such a body cannot be re-rendered there without losing the output.
+const OC_SHELL = /!`[^`]+`/;
+const INDEXED = /\$(?:ARGUMENTS\[\d+\]|\d)/;
+export const SHELL_NOTE = "$N in a command with an OC shell block (!`...`): OC runs the block before the adapter can re-render the command, so its $N render as OC does (an unfilled index is blanked, the highest takes the rest)";
+
+// CC's argument splitting is a bash parse of the arguments (the first command's words, quotes
+// removed). Approximated: whitespace splits outside quotes; '...' and "..." group and lose their
+// quotes (a backslash inside "..." is kept, as CC keeps it); a backslash elsewhere escapes the next
+// character. An unterminated quote falls back to CC's own fallback, a whitespace split.
+export function ccArgv(s) {
+  if (!s || !s.trim()) return [];
+  const out = [];
+  let cur = null;
+  let q = null;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (q === "'") {
+      if (c === "'") q = null;
+      else cur += c;
+    } else if (q === '"') {
+      if (c === '"') q = null;
+      else if (c === "\\" && i + 1 < s.length) cur += c + s[++i];
+      else cur += c;
+    } else if (/\s/.test(c)) {
+      if (cur !== null) out.push(cur);
+      cur = null;
+    } else {
+      cur ??= "";
+      if (c === "'" || c === '"') q = c;
+      else if (c === "\\" && i + 1 < s.length) cur += s[++i];
+      else cur += c;
+    }
+  }
+  if (q) return s.split(/\s+/).filter(Boolean);
+  if (cur !== null) out.push(cur);
+  return out;
+}
+
+// CC 2.1.302's substitution of a markdown command's arguments (`ZFe` in the CC bundle, called with
+// no named arguments and CC's `!`-defusing value transform; test/cc-oracle.js reads the original
+// from the CC binary). 0-based `$N` and `$ARGUMENTS[N]`; an index with no argument stays LITERAL
+// (OC blanks it); `\$` before a digit or ARGUMENTS escapes; `$N` followed by a word character is
+// not a placeholder; `$ARGUMENTS` is the whole string; a filled value is never re-substituted; and
+// when nothing was filled, non-empty arguments are appended as "ARGUMENTS: ...". Null arguments:
+// the body unchanged. CC's 4,000,000-character refusal is not reproduced.
+const LIT = "\uFFFF"; // a `$` that stays literal
+const VAL = "\uFFFE"; // brackets a filled value
+const defuse = (v) => v.replace(/`!/g, "` !").replace(/!`/g, "! `").replace(/(^|\s)!/gm, "$1\\!");
+export function renderCcArgs(body, args) {
+  if (args === undefined || args === null) return body;
+  const clean = (t) => String(t ?? "").replaceAll(LIT, "\uFFFD").replaceAll(VAL, "\uFFFD");
+  const fill = (v) => VAL + defuse(clean(v)).replaceAll("$", LIT) + VAL;
+  const argv = ccArgv(args);
+  let filled = false;
+  const byIndex = (m, i, literal) => {
+    const v = argv[parseInt(i, 10)];
+    if (v === undefined) return literal;
+    filled = true;
+    return fill(v);
+  };
+  let out = clean(body).replace(/(?<!\\)\\\$(?=\d|ARGUMENTS)/g, LIT);
+  out = out.replace(/\$ARGUMENTS\[(\d+)\]/g, (m, i) => byIndex(m, i, LIT + m.slice(1)));
+  out = out.replace(/\$(\d+)(?!\w)/g, (m, i) => byIndex(m, i, m));
+  out = out.replaceAll("$ARGUMENTS", () => ((filled = true), fill(args)));
+  if (!filled && args) out += `\n\nARGUMENTS: ${fill(args)}`;
+  return out.replaceAll(LIT, "$").replaceAll(VAL, "");
+}
+
+// A bridged command's text as CC would send it: CC's argument rules, then the adapter's
+// `${CLAUDE_*}` substitution (CC's own order).
+export const renderCommand = (src, args) => claudeVars(renderCcArgs(src.raw, args), src);
+
+// R37: translation-time substitution and arg remap. CC `$N` / `$ARGUMENTS[N]` are 0-based, OC's `$N`
+// 1-based. OC still needs this template; on a verified OC, v1/plugin.js's command.execute.before
+// re-renders the raw body with CC's rules, which resolves the notes marked `hookFixable`.
+function rewriteTemplate(body, ctx, where, key) {
   const unknown = [];
   let quoted = false;
   let escaped = false;
-  let out = body.replace(/\$\{(CLAUDE_[A-Za-z0-9_]*)\}/g, (m, v) => {
-    if (v === "CLAUDE_PLUGIN_ROOT" && pluginRoot) return pluginRoot;
-    if (v === "CLAUDE_PROJECT_DIR" && projectDir) return projectDir;
-    unknown.push({ where, key, note: `${m} has no OC equivalent` });
-    return m;
-  });
+  const shell = OC_SHELL.test(body);
+  const indexed = INDEXED.test(body);
+  let out = claudeVars(body, ctx, (m) => unknown.push({ where, key, note: `${m} has no OC equivalent` }));
   out = out
     .split("\n")
     .map((line) =>
@@ -298,9 +381,11 @@ function rewriteTemplate(body, { pluginRoot, projectDir }, where, key) {
       }),
     )
     .join("\n");
-  if (escaped) unknown.push({ where, key, note: "escaped \\$N is literal in CC; OC has no escape and will substitute it" });
-  if (quoted) unknown.push({ where, key, note: "$N inside single quotes (shell text): CC leaves an unfilled index literal, OC blanks it" });
-  return { out, unknown };
+  const fixable = shell ? {} : { hookFixable: true };
+  if (escaped) unknown.push({ where, key, note: "escaped \\$N is literal in CC; OC has no escape and will substitute it", ...fixable });
+  if (quoted) unknown.push({ where, key, note: "$N inside single quotes (shell text): CC leaves an unfilled index literal, OC blanks it", ...fixable });
+  if (shell && indexed) unknown.push({ where, key, note: SHELL_NOTE });
+  return { out, unknown, indexed, shell };
 }
 
 function translateCommand(file, rel, prefix, ctx) {
@@ -320,13 +405,16 @@ function translateCommand(file, rel, prefix, ctx) {
   // allowed-tools is not carried: in CC it only pre-approves tools while the command runs, and OC
   // has no per-command grant, so OC prompts per its permission config instead (stricter, never
   // looser; README Known gaps).
-  return { name, command, unknown };
+  // The raw body, kept in memory (never logged) for command.execute.before.
+  const source = { raw: body, pluginRoot: ctx.pluginRoot, projectDir: ctx.projectDir, indexed: rw.indexed, shell: rw.shell };
+  return { name, command, source, unknown };
 }
 
 // Precedence (later wins): plugins < user < project, as in CC.
 export function collectAgents({ home = os.homedir(), projectDir, plugins = [], userPermission } = {}) {
   const agent = {};
   const command = {};
+  const commandSource = {}; // name -> translateCommand's `source`, same precedence as `command`
   const unknown = [];
   const hasProject = projectDir && path.resolve(projectDir) !== path.resolve(home);
   const sources = [];
@@ -357,9 +445,10 @@ export function collectAgents({ home = os.homedir(), projectDir, plugins = [], u
         const r = translateCommand(file, rel, s.prefix, { pluginRoot: s.root, projectDir });
         if (!r) continue;
         command[r.name] = r.command;
+        commandSource[r.name] = r.source;
         unknown.push(...r.unknown);
       }
     }
   }
-  return { agent, command, unknown };
+  return { agent, command, commandSource, unknown };
 }

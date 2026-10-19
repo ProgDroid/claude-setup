@@ -357,6 +357,151 @@ for c in 'find . -print0 | xargs -0 wc -l' "git ls-files | xargs -d '\\n' wc -l"
   [ "$(warn_kind "$c")" = NONE ] && ok "rule e silent: $c" || bad "rule e false positive: $c"
 done
 
+# ---------------------------------------------------------------------------
+# Added 2026-10-18, BEFORE the builtin rewrite that removed ~50 process spawns per
+# run. Rules 3-6, c and d, the tool gate, and the output format had no test at
+# all, so a rewrite could have broken any of them and failed nothing. Each block
+# was run against the grep/sed implementation first, to pin what it actually did.
+# ---------------------------------------------------------------------------
+
+# verdict_tool <tool> <command> -> DENY | ALLOW | SILENT (no output at all)
+verdict_tool() {
+  local out
+  out=$(jq -n --arg t "$1" --arg c "$2" '{tool_name:$t,tool_input:{command:$c}}' | bash "$HOOK" 2>&1)
+  [ -z "$out" ] && { echo SILENT; return; }
+  case "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)" in
+    deny) echo DENY ;;
+    *)    echo ALLOW ;;
+  esac
+}
+
+echo "== rule 3: git commit -m with command substitution =="
+
+[ "$(verdict_any 'git commit -m "fix $(date)"')" = DENY ] \
+  && ok "git commit -m with \$( denied" \
+  || bad "rule 3 missed \$( in a commit message"
+
+[ "$(verdict_any 'git commit -m "use `make`"')" = DENY ] \
+  && ok "git commit -m with a backtick denied" \
+  || bad "rule 3 missed a backtick in a commit message"
+
+[ "$(verdict_any 'git commit -m "plain message"')" = ALLOW ] \
+  && ok "a plain git commit -m allowed" \
+  || bad "rule 3 fires on a plain commit message"
+
+# The remedy the message prescribes: the backtick lives in a heredoc body fed to git,
+# which is data, so it is stripped before rule 3 looks.
+COMMITDOC=$(printf 'git commit -F - <<%sEOF%s\nuse `make` here\nEOF' "'" "'")
+[ "$(verdict_any "$COMMITDOC")" = ALLOW ] \
+  && ok "git commit -F - with a backtick in the heredoc body allowed (the remedy)" \
+  || bad "rule 3 denies its own remedy"
+
+# grep is per LINE: 'git' and 'commit' on different lines never matched together.
+# Pinned because a whole-string regex would read the newline as [[:space:]].
+SPLITGIT=$(printf 'git\ncommit -m "$(x)"')
+[ "$(verdict_any "$SPLITGIT")" = ALLOW ] \
+  && ok "git and commit on separate lines do not match (per-line semantics)" \
+  || bad "a rule matched across a line break - per-line semantics lost"
+
+echo "== rule 4: Get-Content -replace | Set-Content =="
+
+[ "$(verdict_any '(Get-Content f -Raw) -replace "a","b" | Set-Content f')" = DENY ] \
+  && ok "Get-Content -replace | Set-Content denied" \
+  || bad "rule 4 missed the bulk-edit pipeline"
+
+[ "$(verdict_any 'Get-Content f -Raw')" = ALLOW ] \
+  && ok "a bare Get-Content allowed" \
+  || bad "rule 4 fires on a bare Get-Content"
+
+echo "== rule 5: WSL argument-form scripts =="
+
+[ "$(verdict_any "wsl.exe -d nixos -- sh -lc 'ls /etc'")" = DENY ] \
+  && ok "wsl sh -lc denied" \
+  || bad "rule 5 missed sh -lc through wsl"
+
+WSLDOC=$(printf 'wsl.exe -d nixos -- sh -s <<%sEOF%s\nls /etc\nEOF' "'" "'")
+[ "$(verdict_any "$WSLDOC")" = ALLOW ] \
+  && ok "wsl sh -s on stdin allowed (the remedy)" \
+  || bad "rule 5 denies its own remedy"
+
+echo "== rule 6: claude mcp add, and the tool gate =="
+
+[ "$(verdict_tool Bash 'claude mcp add foo -- npx -y foo')" = DENY ] \
+  && ok "claude mcp add denied under Bash" \
+  || bad "rule 6 missed claude mcp add"
+
+[ "$(verdict_tool PowerShell 'claude mcp add foo -- npx -y foo')" = SILENT ] \
+  && ok "claude mcp add allowed under PowerShell" \
+  || bad "rule 6 fires under PowerShell, the tool it tells you to use"
+
+[ "$(verdict_tool PowerShell "$PY x.py")" = SILENT ] \
+  && ok "rule 1 does not fire under the PowerShell tool" \
+  || bad "rule 1 fires under PowerShell"
+
+[ "$(verdict_tool PowerShell 'sed -i s/a/b/ C:\x.txt')" = DENY ] \
+  && ok "tool-agnostic rules still fire under PowerShell" \
+  || bad "rule 2 stopped firing under PowerShell"
+
+[ "$(verdict_tool Read 'sed -i s/a/b/ C:\x.txt')" = SILENT ] \
+  && ok "a non-shell tool is ignored entirely" \
+  || bad "the hook acts on a tool that is neither Bash nor PowerShell"
+
+[ "$(verdict_tool Bash '')" = SILENT ] \
+  && ok "an empty command is ignored" \
+  || bad "an empty command produced output"
+
+echo "== rule c: oversized heredoc (boundary at 60 lines) =="
+
+# opener + N body lines + terminator = N+2 lines; the rule fires above 60.
+big_heredoc() { { printf 'cat > f.txt <<%sEOF%s\n' "'" "'"; for _ in $(seq "$1"); do echo body; done; printf 'EOF'; } ; }
+[ "$(warn_kind "$(big_heredoc 59)")" = HEREDOC ] \
+  && ok "a 61-line heredoc warns" \
+  || bad "rule c missed a 61-line heredoc"
+
+[ "$(warn_kind "$(big_heredoc 58)")" = NONE ] \
+  && ok "a 60-line heredoc does not warn (boundary)" \
+  || bad "rule c fires at exactly 60 lines"
+
+echo "== rule d: Set-Content without -Encoding =="
+
+[ "$(warn_kind 'Set-Content out.txt $x')" = ENCODING ] \
+  && ok "Set-Content without -Encoding warns" \
+  || bad "rule d missed Set-Content"
+
+[ "$(warn_kind 'Add-Content out.txt $x')" = ENCODING ] \
+  && ok "Add-Content without -Encoding warns" \
+  || bad "rule d missed Add-Content"
+
+[ "$(warn_kind 'Set-Content out.txt $x -Encoding utf8')" = NONE ] \
+  && ok "Set-Content with -Encoding is quiet" \
+  || bad "rule d fires when -Encoding is already passed"
+
+echo "== output format =="
+
+# The hook's JSON must be exactly what jq would pretty-print for the same object,
+# key order and line endings included -- consumers were written against jq's output.
+canon_ok() {
+  local out
+  out=$(jq -n --arg c "$1" '{tool_name:"Bash",tool_input:{command:$c}}' | bash "$HOOK" 2>/dev/null)
+  [ -n "$out" ] && [ "$out" = "$(printf '%s' "$out" | jq .)" ]
+}
+canon_ok "node x.js" && ok "deny output is canonical jq pretty-print" \
+  || bad "deny output is not byte-identical to jq's rendering"
+canon_ok 'pytest -q | tail -20' && ok "warn output is canonical jq pretty-print" \
+  || bad "warn output is not byte-identical to jq's rendering"
+
+# A deny wins outright: the warning stage is never reached.
+DW=$(jq -n --arg c 'node x.js | tail -3; echo "rc=$?"' '{tool_name:"Bash",tool_input:{command:$c}}' | bash "$HOOK" 2>/dev/null)
+[ "$(printf '%s' "$DW" | jq -r '[.hookSpecificOutput.permissionDecision, (.systemMessage // "none")] | join(",")')" = "deny,none" ] \
+  && ok "a deny suppresses any warning" \
+  || bad "a deny and a warning were emitted together"
+
+WM=$(jq -n --arg c 'pytest -q | tail -20' '{tool_name:"Bash",tool_input:{command:$c}}' | bash "$HOOK" 2>/dev/null)
+case "$(printf '%s' "$WM" | jq -r '.systemMessage + "|" + .hookSpecificOutput.additionalContext + "|" + .hookSpecificOutput.hookEventName')" in
+  "windows-guard: Exit code"*"|WINDOWS GUARD WARNING -- Exit code"*"|PreToolUse") ok "warning carries both prefixes and the event name" ;;
+  *) bad "warning JSON lost a prefix or the event name" ;;
+esac
+
 echo
 echo "passed: $pass   failed: $fail   known-fail: $known"
 [ "$fail" -eq 0 ] || exit 1

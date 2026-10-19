@@ -57,6 +57,6 @@ so the cost is per-environment, not per-session.
   `bad interpreter: No such file or directory`, an error that names bash and not the real cause.
 - **One source of truth.** A skill lives here *or* in `~/.claude/skills/`, never both — two copies drift
   and you cannot tell which one loaded.
-- **A disabled plugin flag does not mean the capability is unused.** `context7` and `serena` are both
-  `false` under `enabledPlugins` because they are registered as user-scope MCP servers instead. That
-  route does not reach cloud sessions; the plugin route does.
+- **A disabled or missing plugin flag does not mean the capability is unused.** `context7` is not
+  enabled as a plugin locally because it is registered as a user-scope MCP server instead. That route
+  does not reach cloud sessions; the plugin route does.

@@ -4,6 +4,9 @@ import path from "node:path";
 import { makeHome } from "./helpers.js";
 import { evaluate, fromConfig, defaults } from "./oc-matcher.js";
 import { collectAgents, parseFrontmatter, mapModel, mapTool, COMMAND_SEP } from "../core/agents.js";
+import * as agents from "../core/agents.js";
+
+const SHELL_NOTE = agents.SHELL_NOTE;
 
 let h;
 afterEach(() => h && h.cleanup());
@@ -143,6 +146,24 @@ test("(I2) $N inside single quotes (awk) is reported; escaped \\$N is reported a
   const r = collectAgents({ home: h.home, projectDir: h.projectDir });
   expect(r.command.g.template).toBe("git branch | awk '{print $2}'\nprice \\$1.00");
   expect(r.unknown.map((u) => u.note).length).toBe(2);
+  // command.execute.before re-renders this body with CC's rules on a verified OC, so both notes
+  // are marked as resolved there; the raw body is kept for it.
+  expect(r.unknown.map((u) => u.hookFixable)).toEqual([true, true]);
+  expect(r.commandSource.g).toMatchObject({ raw: "git branch | awk '{print $1}'\nprice \\$1.00", indexed: true, shell: false });
+});
+
+test("(I2) $N in a body with an OC shell block: SHELL_NOTE, and no note is hook-fixable", () => {
+  h = makeHome({
+    ".claude/commands/s.md": "Branch: !`git branch --show-current`\nawk '{print $1}' for $0",
+    ".claude/commands/t.md": "Branch: !`git branch --show-current`, no index here",
+  });
+  const r = collectAgents({ home: h.home, projectDir: h.projectDir });
+  const notes = r.unknown.filter((u) => u.key === "command:s");
+  expect(notes.map((u) => u.note)).toEqual(["$N inside single quotes (shell text): CC leaves an unfilled index literal, OC blanks it", SHELL_NOTE]);
+  expect(notes.some((u) => u.hookFixable)).toBe(false);
+  expect(r.commandSource.s).toMatchObject({ indexed: true, shell: true });
+  expect(r.unknown.filter((u) => u.key === "command:t")).toEqual([]);
+  expect(r.commandSource.t).toMatchObject({ indexed: false, shell: true });
 });
 
 test("model map: haiku/sonnet/opus, inherit and absent omit, full id, junk -> unknown", () => {
@@ -253,7 +274,7 @@ test("a missing plugin and exists:false are not read; a plugin without agents/co
     projectDir: h.projectDir,
     plugins: [plug("gone", path.join(h.home, "nope"), false), plug("empty", path.join(h.home, "empty"))],
   });
-  expect(r).toEqual({ agent: {}, command: {}, unknown: [] });
+  expect(r).toEqual({ agent: {}, command: {}, commandSource: {}, unknown: [] });
 });
 
 test("precedence: project beats user beats plugin for the same name", () => {

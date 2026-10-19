@@ -27,6 +27,12 @@ lib_ok=0
 # Runs in a subshell so a cd or a failure in one repo never affects another.
 commit_repo() (
   cd "$1" 2>/dev/null || exit 0
+
+  # Opt-out marker: a repo whose work in progress must stay on the PC (e.g.
+  # switchboard). Checked first so not even a memory sync touches the repo.
+  root0="$(git rev-parse --show-toplevel 2>/dev/null)"
+  [ -n "${root0:-}" ] && [ -e "$root0/.claude/no-auto-commit" ] && exit 0
+
   branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" || exit 0
 
   # Never auto-commit a default branch. Cloud sessions work on their own branch;

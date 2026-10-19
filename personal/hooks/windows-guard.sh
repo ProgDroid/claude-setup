@@ -7,18 +7,48 @@
 #
 # PLATFORM GATE: exits silently off Windows. Several rules (notably the python one) describe
 # MSYS/winpty behaviour and would produce false denials in a Linux cloud session.
+#
+# SPEED (rewritten 2026-10-18). This runs before EVERY Bash/PowerShell call, and it used to
+# cost ~2.0 s per call (~2.8 s on a warning) because each rule was its own `echo | grep`
+# pipeline: ~50 process spawns per run, at 50-80 ms apiece under MSYS. 46 runs in the
+# transcripts hit the hook timeout. Now the input is parsed by ONE jq call and every rule is a
+# bash builtin ([[ =~ ]], globs, parameter expansion); the output JSON is printed directly.
+# Behaviour is pinned by test-windows-guard.sh and was diffed byte-for-byte against the
+# grep version over a ~3,900-payload corpus.
+#
+# Two grep semantics the builtins must reproduce, or the rules silently change meaning:
+#   - grep matches per LINE. `^`/`$` anchor at line breaks and [[:space:]] never spans one,
+#     whereas [[ =~ ]] sees the whole string. Rules with an anchor or a class that could
+#     cross a newline therefore go through any_line; pure substrings test the whole string.
+#   - jq here is a native Windows binary: it writes CRLF, so a multi-line command arrives
+#     with a CR before every LF, and MSYS's $() strips a trailing (CR)LF run. Both are kept
+#     exactly as the old pipelines produced them rather than "cleaned up".
 
-case "$(uname -s 2>/dev/null)" in
-    MINGW*|MSYS*|CYGWIN*) ;;
-    *) exit 0 ;;
-esac
+if [[ "$OSTYPE" != msys* && "$OSTYPE" != cygwin* ]]; then
+    # $OSTYPE answers for Git Bash / MSYS2 / Cygwin without a spawn; anything else gets the
+    # original uname check.
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*) ;;
+        *) exit 0 ;;
+    esac
+fi
 
-json_input=$(cat)
+have_jq=0
+command -v jq >/dev/null 2>&1 && have_jq=1
 
-if command -v jq >/dev/null 2>&1; then
-    tool=$(echo "$json_input" | jq -r '.tool_name // empty')
-    cmd=$(echo "$json_input" | jq -r '.tool_input.command // empty')
+if [[ $have_jq -eq 1 ]]; then
+    # One jq call yields the tool, jq's own line ending, and the command, separated by
+    # \x1f. The command comes LAST and keeps jq -r's trailing newline, so $() strips it
+    # exactly as it did when the command was extracted by a call of its own.
+    _raw=$(jq -j '(.tool_name // empty), "\u001f\n\u001f", (.tool_input.command // empty), "\n"')
+    tool=${_raw%%$'\x1f'*}
+    _rest=${_raw#*$'\x1f'}
+    eol=${_rest%%$'\x1f'*}
+    cmd=${_rest#*$'\x1f'}
+    [[ "$_raw" == *$'\x1f'*$'\x1f'* ]] || cmd=""
+    unset _raw _rest
 else
+    json_input=$(cat)
     tool=$(echo "$json_input" | grep -o '"tool_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
         | sed 's/.*:[[:space:]]*"\([^"]*\)".*/\1/')
     cmd=$(echo "$json_input" | sed -n 's/.*"command"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p')
@@ -26,6 +56,13 @@ fi
 
 [[ -z "$cmd" ]] && exit 0
 case "$tool" in Bash|PowerShell) ;; *) exit 0 ;; esac
+
+# The command's lines, as `printf '%s\n' "$cmd" | while read` would see them.
+if [[ "$cmd" == *$'\n'* ]]; then
+    mapfile -t cmd_lines <<< "$cmd"
+else
+    cmd_lines=("$cmd")
+fi
 
 # ---------- heredoc stripping (shared by every rule below) ----------
 #
@@ -46,42 +83,72 @@ case "$tool" in Bash|PowerShell) ;; *) exit 0 ;; esac
 # ABOUT heredocs and must see the body it is measuring.
 #
 # Quote characters are matched via octal escapes (\042 ", \047 ') so that no
-# literal quote appears inside a pattern in this function.
-strip_inert_heredocs() {
-    local line probe delim trimmed in_doc=0
-    while IFS= read -r line || [[ -n "$line" ]]; do
+# literal quote appears inside a pattern here.
+re_hd_open='<<-?[[:space:]]*[^[:space:];&|<>()]+'
+re_hd_shell='(^|[;&|(]|&&)[[:space:]]*(bash|sh|zsh|dash|ksh)([[:space:]]|$)'
+re_wsl='(^|[[:space:]/])wsl(\.exe)?([[:space:]]|$)'
+
+kept=()
+if [[ "$cmd" == *'<<'* ]]; then
+    in_doc=0
+    for line in "${cmd_lines[@]}"; do
         if [[ $in_doc -eq 1 ]]; then
             trimmed="${line#"${line%%[![:space:]]*}"}"
             trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
             [[ "$trimmed" == "$delim" ]] && in_doc=0
             continue
         fi
-        printf '%s\n' "$line"
+        kept+=("$line")
         # Mask herestrings first so `<<<WORD` cannot be read as a heredoc opener.
         probe="${line//<<</@@HERESTRING@@}"
-        case "$probe" in
-            *"<<"*) ;;
-            *) continue ;;
-        esac
-        delim=$(printf '%s' "$probe" \
-            | grep -oE '<<-?[[:space:]]*[^[:space:];&|<>()]+' \
-            | head -1 \
-            | sed -E 's/^<<-?[[:space:]]*//' \
-            | tr -d '\042\047')
+        [[ "$probe" == *'<<'* ]] || continue
+        # The FIRST opener on the line, minus `<<`, `-` and leading space, minus quotes.
+        [[ "$probe" =~ $re_hd_open ]] || continue
+        delim=${BASH_REMATCH[0]}
+        delim=${delim#<<}
+        delim=${delim#-}
+        delim=${delim#"${delim%%[![:space:]]*}"}
+        delim=${delim//[$'\042\047']/}
         [[ "$delim" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
         # A shell on the opening line means the body IS shell source: keep it
         # in scope so the rules still see it.
-        if printf '%s' "$probe" | grep -qE '(^|[;&|(]|&&)[[:space:]]*(bash|sh|zsh|dash|ksh)([[:space:]]|$)'; then
-            continue
-        fi
-        if printf '%s' "$probe" | grep -qE '(^|[[:space:]/])wsl(\.exe)?([[:space:]]|$)'; then
-            continue
-        fi
+        [[ "$probe" =~ $re_hd_shell ]] && continue
+        [[ "$probe" =~ $re_wsl ]] && continue
         in_doc=1
     done
-}
+else
+    kept=("${cmd_lines[@]}")
+fi
 
-scan=$(printf '%s\n' "$cmd" | strip_inert_heredocs)
+# $scan was `$(... | strip_inert_heredocs)`, and $() drops trailing empty lines and the one
+# CR before each dropped LF. Reproduce that on the line array, then join.
+while [[ ${#kept[@]} -gt 0 ]]; do
+    _last=${kept[-1]}
+    _last=${_last%$'\r'}
+    if [[ -n "$_last" ]]; then kept[-1]=$_last; break; fi
+    unset 'kept[-1]'
+done
+printf -v scan '%s\n' "${kept[@]}"
+scan=${scan%$'\n'}
+scan_lines=("${kept[@]}")
+[[ ${#scan_lines[@]} -eq 0 ]] && scan_lines=("")
+
+# any_line RE NEEDLE... -- true when some line of $scan matches the ERE, exactly as
+# `echo "$scan" | grep -qE RE` did. Only lines containing one of the literal NEEDLEs reach
+# the regex; every needle is a substring RE cannot match without, so this only skips work.
+any_line() {
+    local re=$1 l n
+    shift
+    for l in "${scan_lines[@]}"; do
+        for n in "$@"; do
+            if [[ "$l" == *"$n"* ]]; then
+                [[ "$l" =~ $re ]] && return 0
+                break
+            fi
+        done
+    done
+    return 1
+}
 
 deny=""   # set to a reason string to block
 
@@ -97,57 +164,73 @@ deny=""   # set to a reason string to block
 #    powershell/pwsh is the LEADING command. `python x.py && powershell.exe ...` stays denied,
 #    because there python leads. Regression test: personal/hooks/test-windows-guard.sh.
 leads_with_powershell=0
-if printf '%s' "$scan" | grep -qE '^[[:space:]]*(powershell(\.exe)?|pwsh(\.exe)?)([[:space:]]|$)'; then
+if any_line '^[[:space:]]*(powershell(\.exe)?|pwsh(\.exe)?)([[:space:]]|$)' powershell pwsh; then
     leads_with_powershell=1
 fi
 
 if [[ "$tool" == "Bash" ]] && [[ "$leads_with_powershell" -eq 0 ]] \
-   && echo "$scan" | grep -qE '(^|[;&|]|&&|\|\||[[:space:]]\$\()[[:space:]]*(python3?|node)[[:space:]]'; then
+   && any_line '(^|[;&|]|&&|\|\||[[:space:]]\$\()[[:space:]]*(python3?|node)[[:space:]]' python node; then
     deny="Bash tool cannot run python/node on this machine -- winpty makes it exit non-zero with 'stdin is not a tty' while printing nothing, so the step looks like it ran and did nothing. Write the script to a file and run: powershell.exe -NoProfile -Command \"python <script.py>\" -- or use py."
 fi
 
 # 2. sed touching a Windows drive path -> backslash escapes are live in the REPLACEMENT half.
 #    \r becomes a literal CR, \f a form-feed; exits 0, corrupts quietly, and then blocks Edit
 #    because the on-disk text contains bytes you never typed.
-if [[ -z "$deny" ]] && echo "$scan" | grep -qE '(^|[[:space:]/|])sed([[:space:]]|$)' \
-   && echo "$scan" | grep -qE '[A-Za-z]:\\'; then
+if [[ -z "$deny" ]] && any_line '(^|[[:space:]/|])sed([[:space:]]|$)' sed \
+   && [[ "$scan" == *[A-Za-z]:\\* ]]; then
     deny="Never sed a Windows path -- backslashes are live escapes in the replacement half (\\r -> CR, \\f -> form-feed), it exits 0, and only od -c reveals the corruption. Use the Edit/Write tool, or write the path with forward slashes (G:/...) which Python, Git Bash and Win32 all accept."
 fi
 
 # 3. git commit -m containing a backtick or $( -> bash command substitution silently
 #    rewrites the commit message.
-if [[ -z "$deny" ]] && echo "$scan" | grep -qE 'git[[:space:]]+commit' \
-   && echo "$scan" | grep -qE '\-m' \
-   && echo "$scan" | grep -qE '`|\$\('; then
+if [[ -z "$deny" ]] && any_line 'git[[:space:]]+commit' commit \
+   && [[ "$scan" == *-m* ]] \
+   && [[ "$scan" == *'`'* || "$scan" == *'$('* ]]; then
     deny="git commit -m with a backtick or \$( triggers command substitution and mangles the message silently. Use: git commit -F - with a single-quoted heredoc (<<'EOF' ... EOF)."
 fi
 
 # 4. PowerShell (Get-Content -Raw) -replace ... | Set-Content -> BOM-less UTF-8 is read as ANSI
 #    and every multibyte char is double-encoded to mojibake.
-if [[ -z "$deny" ]] && echo "$scan" | grep -q 'Get-Content' \
-   && echo "$scan" | grep -q '\-replace' \
-   && echo "$scan" | grep -q 'Set-Content'; then
+if [[ -z "$deny" ]] && [[ "$scan" == *Get-Content* ]] \
+   && [[ "$scan" == *-replace* ]] \
+   && [[ "$scan" == *Set-Content* ]]; then
     deny="Never bulk-edit source via (Get-Content -Raw) -replace | Set-Content -- BOM-less UTF-8 is read as ANSI and every emoji/em-dash is double-encoded to mojibake. Use the Edit tool with replace_all. If already run: git checkout -- <file>."
 fi
 
 # 5. Driving WSL with an argument-form script -> a quoting layer is lost in the
 #    Bash->wsl->sh chain; loop vars expand to empty and sed silently no-ops, both exiting 0.
-if [[ -z "$deny" ]] && echo "$scan" | grep -qE '(^|[[:space:]/])wsl(\.exe)?([[:space:]]|$)' \
-   && echo "$scan" | grep -qE 'sh[[:space:]]+-[a-z]*c'; then
+if [[ -z "$deny" ]] && any_line "$re_wsl" wsl \
+   && any_line 'sh[[:space:]]+-[a-z]*c' sh; then
     deny="Do not pass a WSL script as an argument (sh -lc '...') -- a quoting layer is lost in the Bash->wsl->sh chain: loop variables expand to empty and sed expressions fail to apply while still exiting 0. Pass it on stdin instead: wsl.exe -d <distro> -- sh -s <<'EOF' ... EOF"
 fi
 
 # 6. claude mcp add from Bash -> MSYS path conversion rewrites a bare /c to C:/ before the
 #    CLI sees it, silently storing a broken launcher in ~/.claude.json.
 if [[ -z "$deny" ]] && [[ "$tool" == "Bash" ]] \
-   && echo "$scan" | grep -qE 'claude[[:space:]]+mcp[[:space:]]+add'; then
+   && any_line 'claude[[:space:]]+mcp[[:space:]]+add' mcp; then
     deny="Run 'claude mcp add' from PowerShell, not Bash -- MSYS path conversion rewrites a bare /c argument to C:/ before the CLI sees it, silently storing a broken launcher (args: [\"C:/\", \"npx\", ...]) in ~/.claude.json."
 fi
 
+# json_str S -- sets _json to S as a JSON string body, escaped as jq escapes it. Returns 1
+# for a control character, whose escape form the caller leaves to jq itself.
+json_str() {
+    case "$1" in
+        *[$'\001'-$'\037\177']*) return 1 ;;
+    esac
+    _json=${1//\\/\\\\}
+    _json=${_json//\"/\\\"}
+}
+
 if [[ -n "$deny" ]]; then
-    if command -v jq >/dev/null 2>&1; then
-        jq -n --arg r "$deny" \
-          '{hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"deny", permissionDecisionReason:$r}}'
+    if [[ $have_jq -eq 1 ]]; then
+        # Byte-identical to `jq -n` pretty-printing this object, jq's line ending included.
+        if json_str "$deny"; then
+            printf '{%s  "hookSpecificOutput": {%s    "hookEventName": "PreToolUse",%s    "permissionDecision": "deny",%s    "permissionDecisionReason": "%s"%s  }%s}%s' \
+              "$eol" "$eol" "$eol" "$eol" "$_json" "$eol" "$eol" "$eol"
+        else
+            jq -n --arg r "$deny" \
+              '{hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"deny", permissionDecisionReason:$r}}'
+        fi
     else
         printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' \
           "$(printf '%s' "$deny" | sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/')"
@@ -168,8 +251,9 @@ warn=""
 #    own rationale ("query tools that exit 0 and print nothing on no result") does not
 #    describe it at all. The exclusion now covers everything whose exit status IS the
 #    answer: test builtins, command -v, and the comparison tools.
-if echo "$scan" | grep -qE '&&[[:space:]]*echo' && echo "$scan" | grep -qE '\|\|[[:space:]]*echo' \
-   && ! echo "$scan" | grep -qE '(^|[[:space:]/|(])(grep|rg|test|\[|\[\[|diff|cmp)([[:space:]]|$)|command[[:space:]]+-v'; then
+if any_line '&&[[:space:]]*echo' '&&' && any_line '\|\|[[:space:]]*echo' '||' \
+   && ! any_line '(^|[[:space:]/|(])(grep|rg|test|\[|\[\[|diff|cmp)([[:space:]]|$)|command[[:space:]]+-v' \
+        grep rg test '[' diff cmp command; then
     warn="This is the grep-only idiom. Non-grep query tools (git ls-files, git log, find, jq) exit 0 and print nothing on no result, so the && branch fires on an EMPTY result and reports the opposite of the truth. Capture into a variable and test emptiness instead."
 fi
 
@@ -213,28 +297,36 @@ fi
 #    the trailing class was ([[:space:]]|$), so `| head;` matched neither branch and
 #    never fired at all. Only `| head -20;` was ever caught, because the space before
 #    the flag satisfied it.
-if [[ -z "$warn" ]] && echo "$scan" | grep -qE '(\||;)[[:space:]]*(tail|head)([[:space:]]|[;&|]|$)'; then
+if [[ -z "$warn" ]] && any_line '(\||;)[[:space:]]*(tail|head)([[:space:]]|[;&|]|$)' tail head; then
     # Newlines become ';', NOT spaces. A newline is a command separator, and
     # flattening it to a space merged `| head` with the next line's command, erasing
     # the boundary the check below depends on.
-    _flat=$(printf '%s' "$scan" | tr '\n' ';')
-    # Greedy .* strips up to and including the LAST tail/head, leaving what follows.
-    _after=$(printf '%s' "$_flat" | sed -E 's/.*(\||;)[[:space:]]*(tail|head)//')
+    _flat=${scan//$'\n'/;}
+    # Greedy .* runs to the LAST tail/head; what follows it is kept.
+    _after=$_flat
+    _re_last='^.*(\||;)[[:space:]]*(tail|head)'
+    if [[ "$_flat" =~ $_re_last ]]; then
+        _after=${_flat:${#BASH_REMATCH[0]}}
+    fi
 
     # Drop tail/head's own arguments, drop the separator, keep exactly one command.
-    _next=$(printf '%s' "$_after" | sed -E 's/^[^;&|]*//; s/^[;&|]+[[:space:]]*//; s/[;&|].*//')
+    _next=${_after#"${_after%%[;&|]*}"}
+    _next=${_next#"${_next%%[!;&|]*}"}
+    _next=${_next#"${_next%%[![:space:]]*}"}
+    _next=${_next%%[;&|]*}
 
     _status_after_pipe=0
-    if printf '%s' "$_next" | grep -q '\$?'; then _status_after_pipe=1; fi
+    if [[ "$_next" == *'$?'* ]]; then _status_after_pipe=1; fi
 
     _build_verb=0
-    if printf '%s' "$_flat" | grep -qE '(^|[[:space:];&|(])(npm|yarn|pnpm|bun|cargo|pytest|tox|go|make|ninja|cmake|bazel|gradle|gradlew|\./gradlew|flutter|dotnet|mvn|jest|vitest|ctest|docker|terraform|ansible)([[:space:]]|$)'; then
+    _re_build='(^|[[:space:];&|(])(npm|yarn|pnpm|bun|cargo|pytest|tox|go|make|ninja|cmake|bazel|gradle|gradlew|\./gradlew|flutter|dotnet|mvn|jest|vitest|ctest|docker|terraform|ansible)([[:space:]]|$)'
+    if [[ "$_flat" =~ $_re_build ]]; then
         _build_verb=1
     fi
 
     # The remedy is already applied. Saying it again is pure noise.
     _remedy_applied=0
-    if printf '%s' "$_flat" | grep -q 'REAL_EXIT='; then _remedy_applied=1; fi
+    if [[ "$_flat" == *REAL_EXIT=* ]]; then _remedy_applied=1; fi
 
     if [[ "$_remedy_applied" -eq 0 ]] \
        && { [[ "$_status_after_pipe" -eq 1 ]] || [[ "$_build_verb" -eq 1 ]]; }; then
@@ -244,14 +336,15 @@ fi
 
 # c. a very large heredoc through the Bash tool can die with a bogus 'unexpected EOF'.
 #    The quoting hypotheses were all tested and ruled out; size/transport is the variable.
-if [[ -z "$warn" ]] && echo "$cmd" | grep -q '<<' \
-   && [[ $(echo "$cmd" | wc -l) -gt 60 ]]; then
+#    (${#cmd_lines[@]} is what `echo "$cmd" | wc -l` counted.)
+if [[ -z "$warn" ]] && [[ "$cmd" == *'<<'* ]] \
+   && [[ ${#cmd_lines[@]} -gt 60 ]]; then
     warn="Large heredocs through the Bash tool can fail with a bogus 'unexpected EOF while looking for matching' error and write nothing. Quoting is NOT the cause -- do not re-test that. Use the Write tool for file content over ~50 lines."
 fi
 
 # d. PowerShell Set-Content/Add-Content default to the system ANSI codepage.
-if [[ -z "$warn" ]] && echo "$scan" | grep -qE '(Set|Add)-Content' \
-   && ! echo "$scan" | grep -q '\-Encoding'; then
+if [[ -z "$warn" ]] && [[ "$scan" == *Set-Content* || "$scan" == *Add-Content* ]] \
+   && [[ "$scan" != *-Encoding* ]]; then
     warn="Set-Content/Add-Content default to the system ANSI codepage in PS 5.1. Pass -Encoding utf8 explicitly when other tools will read the file."
 fi
 
@@ -267,15 +360,20 @@ fi
 #    --replace). Only option-shaped tokens directly after xargs count as ITS flags, so
 #    the -i in `xargs grep -i` belongs to grep and does not silence the rule.
 if [[ -z "$warn" ]] \
-   && echo "$scan" | grep -qE '(^|[;&|(][[:space:]]*)(find|ls|fd|git[[:space:]]+(ls-files|diff[^|]*--name-only|status)|grep[^|]*[[:space:]]-[a-zA-Z]*l[a-zA-Z]*|rg[^|]*[[:space:]](-[a-zA-Z]*l[a-zA-Z]*|--files))([[:space:]][^|]*)?\|[[:space:]]*xargs([[:space:]]|$)' \
-   && ! echo "$scan" | grep -qE "xargs([[:space:]]+-[^[:space:]]*)*[[:space:]]+(-0|--null|-d|--delimiter|-I|-i|--replace)"; then
+   && any_line '(^|[;&|(][[:space:]]*)(find|ls|fd|git[[:space:]]+(ls-files|diff[^|]*--name-only|status)|grep[^|]*[[:space:]]-[a-zA-Z]*l[a-zA-Z]*|rg[^|]*[[:space:]](-[a-zA-Z]*l[a-zA-Z]*|--files))([[:space:]][^|]*)?\|[[:space:]]*xargs([[:space:]]|$)' xargs \
+   && ! any_line 'xargs([[:space:]]+-[^[:space:]]*)*[[:space:]]+(-0|--null|-d|--delimiter|-I|-i|--replace)' xargs; then
     warn="xargs splits on whitespace, and the home path here contains a space: a file list piped into plain xargs turns one path into two arguments and silently drops matches. Use xargs -d '\\n' (or find -print0 / git ls-files -z with xargs -0), or -I{} to take one line at a time."
 fi
 
 if [[ -n "$warn" ]]; then
-    if command -v jq >/dev/null 2>&1; then
-        jq -n --arg w "$warn" \
-          '{systemMessage:("windows-guard: " + $w), hookSpecificOutput:{hookEventName:"PreToolUse", additionalContext:("WINDOWS GUARD WARNING -- " + $w)}}'
+    if [[ $have_jq -eq 1 ]]; then
+        if json_str "$warn"; then
+            printf '{%s  "systemMessage": "windows-guard: %s",%s  "hookSpecificOutput": {%s    "hookEventName": "PreToolUse",%s    "additionalContext": "WINDOWS GUARD WARNING -- %s"%s  }%s}%s' \
+              "$eol" "$_json" "$eol" "$eol" "$eol" "$_json" "$eol" "$eol" "$eol"
+        else
+            jq -n --arg w "$warn" \
+              '{systemMessage:("windows-guard: " + $w), hookSpecificOutput:{hookEventName:"PreToolUse", additionalContext:("WINDOWS GUARD WARNING -- " + $w)}}'
+        fi
     fi
 fi
 

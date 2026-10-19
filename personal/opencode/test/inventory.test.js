@@ -28,7 +28,7 @@ describe("buildInventory (end-to-end fake home)", () => {
       env: {},
     });
     expect(Object.keys(inv).sort()).toEqual(
-      ["agent", "command", "degraded", "hooks", "instructions", "mcp", "merged", "permission", "plugins", "problems", "probeMismatches", "skillPaths", "unknown"].sort(),
+      ["agent", "command", "commandSource", "degraded", "hooks", "instructions", "mcp", "merged", "permission", "plugins", "problems", "probeMismatches", "skillPaths", "unknown"].sort(),
     );
     // settings + plugins
     expect(inv.merged.env.CC_TEST_ENV).toBe("on");
