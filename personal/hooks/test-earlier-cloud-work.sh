@@ -82,7 +82,8 @@ clone_proj() {
 
 run_hook() { # run_hook <cwd> [env assignments...]
   local cwd="$1"; shift
-  ( cd "$cwd" && env CLAUDE_CLOUD_SESSION=1 "$@" bash "$HOOK" 2>&1 )
+  # SWITCHBOARD_STATE_DIR defaults to a place with no state repo, never the real /home/user one.
+  ( cd "$cwd" && env CLAUDE_CLOUD_SESSION=1 SWITCHBOARD_STATE_DIR="$cwd/.no-state-dir" "$@" bash "$HOOK" 2>&1 )
 }
 
 echo "== earlier-cloud-work.sh =="
@@ -127,7 +128,8 @@ case "$first" in "- claude/b7 ("*) ok "newest first" ;; *) bad "newest first (fi
 # 4. Nothing to report -> silence
 P="$(mktemp -d)"; mkproj "$P" proj; mkbranch "$P" proj claude/done 1 merged; clone_proj "$P" proj
 out="$(run_hook "$P/proj")"
-empty "nothing unmerged: no output" "$out"
+lacks "nothing unmerged: no branch report" "$out" "Earlier cloud work"
+lacks "nothing unmerged: no couldn't-check line" "$out" "couldn't check proj"
 
 # 5. Unreachable origin -> a "couldn't check" line, exit 0
 P="$(mktemp -d)"; mkproj "$P" proj; clone_proj "$P" proj
@@ -234,7 +236,7 @@ has   "companion wait: short named line" "$out" "switchboard: ProgDroid/claude-s
 lacks "companion wait: no reason list" "$out" "51 commits"
 P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"
 out="$(run_hook "$P/proj")"
-empty "no switchboard-state sibling: nothing" "$out"
+lacks "no switchboard-state sibling: no verdict line" "$out" "must wait for the PC"
 
 # 12. M1: an unreachable origin must not suppress the local wait verdict
 P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"; mkstate "$P" wait
@@ -258,6 +260,59 @@ chmod +x "$shim/git"
 out="$( cd "$P/proj" && PATH="$shim:$PATH" EARLIER_CLOUD_WORK_BUDGET=3 CLAUDE_CLOUD_SESSION=1 bash "$HOOK" 2>&1 )"
 has   "budget gone at the fetch step: out-of-time line" "$out" "couldn't check proj for earlier cloud branches (out of time)"
 lacks "budget gone at the fetch step: nothing listed" "$out" "claude/y"
+
+# 14. The state repo is not attached: the hook asks the model to attach it.
+P="$(mktemp -d)"; mkproj "$P" alpha; clone_proj "$P" alpha; mkproj "$P" beta; clone_proj "$P" beta
+out="$(run_hook "$P")"
+count "no state repo: instruction once" "$out" "isn't attached to this session" 1
+has   "instruction names add_repo" "$out" "add_repo"
+has   "instruction forbids register_repo_root" "$out" "register_repo_root"
+has   "instruction names the repo" "$out" "ProgDroid/switchboard-state"
+has   "instruction gives the re-run command with the script's absolute path" "$out" "CLAUDE_CLOUD_SESSION=1 bash \"$DIR/earlier-cloud-work.sh\" --switchboard-only"
+
+P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"; mkstate "$P" can_continue
+out="$(run_hook "$P/proj")"
+lacks "state repo present (sibling): no instruction" "$out" "isn't attached"
+P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"; mkstate "$P" can_continue
+mv "$P/switchboard-state" "$P/elsewhere"
+out="$(run_hook "$P/proj" SWITCHBOARD_STATE_DIR="$P/elsewhere")"
+lacks "state repo present (SWITCHBOARD_STATE_DIR): no instruction" "$out" "isn't attached"
+
+P="$(mktemp -d)"; mkproj "$P" claude-setup; clone_proj "$P" claude-setup
+out="$(run_hook "$P")"
+lacks "companions only: no instruction" "$out" "isn't attached"
+
+# 15. --switchboard-only
+sbo() { # sbo <cwd> [env assignments...]: the flag run, gate variable set
+  local cwd="$1"; shift
+  ( cd "$cwd" && env CLAUDE_CLOUD_SESSION=1 "$@" bash "$HOOK" --switchboard-only 2>&1 )
+}
+shim="$(mktemp -d)"
+cat > "$shim/git" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do [ "\$a" = ls-remote ] && { echo "ls-remote was run" >&2; exit 1; }; done
+exec "$REAL_GIT" "\$@"
+SHIM
+chmod +x "$shim/git"
+P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"; mkstate "$P" wait; mkbranch "$P" proj claude/y 1
+out="$(sbo "$P/proj" PATH="$shim:$PATH")"
+has   "switchboard-only, waiting: the wait line" "$out" "switchboard: o/r must wait for the PC (PC has 3 unpushed commits), as of 2026-10-16."
+has   "switchboard-only, waiting: the checked-against line" "$out" "switchboard: checked against the PC's state of 2026-10-16."
+lacks "switchboard-only, waiting: no ls-remote, no branch report" "$out" "ls-remote"
+lacks "switchboard-only: no branch report" "$out" "Earlier cloud work"
+P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"; mkstate "$P" can_continue
+out="$(sbo "$P/proj")"
+[ "$out" = "switchboard: checked against the PC's state of 2026-10-16." ] && ok "switchboard-only, can continue: exactly the checked-against line" || { bad "switchboard-only, can continue: wrong output"; echo "$out" | sed 's/^/      | /'; }
+P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"
+out="$(sbo "$P/proj" SWITCHBOARD_STATE_DIR="$P/.no-state-dir")"
+[ "$out" = "switchboard: couldn't check the PC's state (the state repo isn't attached)." ] && ok "switchboard-only, still absent: the couldn't-check line" || { bad "switchboard-only, still absent: wrong output"; echo "$out" | sed 's/^/      | /'; }
+P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"; mkstate "$P" wait
+out="$( cd "$P/proj" && env -u CLAUDE_CLOUD_SESSION SWITCHBOARD_STATE_DIR="$P/.no-state-dir" bash "$HOOK" --switchboard-only 2>&1 )"
+has "switchboard-only without the gate variable: still prints the wait line" "$out" "switchboard: o/r must wait for the PC"
+# The state repo is at SWITCHBOARD_STATE_DIR rather than beside the project.
+P="$(mktemp -d)"; slugrepo "$P" "https://github.com/o/r.git"; mkstate "$P" wait; mv "$P/switchboard-state" "$P/elsewhere"
+out="$(sbo "$P/proj" SWITCHBOARD_STATE_DIR="$P/elsewhere")"
+has "switchboard-only, state at SWITCHBOARD_STATE_DIR: the wait line" "$out" "switchboard: o/r must wait for the PC"
 
 echo "-- $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

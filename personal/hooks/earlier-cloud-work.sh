@@ -20,11 +20,24 @@
 # SAFETY NET: if a switchboard-state clone sits beside the project and its
 # verdicts.tsv says `wait` for this project's owner/repo slug, say so.
 #
-# GATE: CLAUDE_CLOUD_SESSION=1 only. ALWAYS exits 0.
+# STATE REPO: the cloud proxy refuses to clone switchboard-state, but the model
+# can attach it with `add_repo`. When it is not found, the hook prints an
+# instruction asking the model to do that and re-run this script with
+# --switchboard-only (the verdict check alone, no branch checks).
+#
+# GATE: CLAUDE_CLOUD_SESSION=1 for the plain run. --switchboard-only is an
+# explicit request, needs no gate (the model's shell may not inherit it), and
+# always prints at least one line. ALWAYS exits 0.
 
 set -uo pipefail
 
-[ "${CLAUDE_CLOUD_SESSION:-}" = "1" ] || exit 0
+switchboard_only=0
+[ "${1:-}" = "--switchboard-only" ] && switchboard_only=1
+
+[ "$switchboard_only" = 1 ] || [ "${CLAUDE_CLOUD_SESSION:-}" = "1" ] || exit 0
+
+# Where the attached state repo lands; the tests point it elsewhere.
+state_dir="${SWITCHBOARD_STATE_DIR:-/home/user/switchboard-state}"
 
 # EARLIER_CLOUD_WORK_BUDGET exists so the tests can exhaust the budget.
 deadline=$(( $(date +%s) + ${EARLIER_CLOUD_WORK_BUDGET:-22} ))
@@ -65,14 +78,32 @@ fi
 
 couldnt() { echo "switchboard: couldn't check $1 for earlier cloud branches ($2)."; }
 
+# state_for <repo>: the state repo this project would use, or nothing.
+state_for() {
+  if [ -f "$state_dir/verdicts.tsv" ]; then
+    echo "$state_dir"
+  elif [ -f "$(dirname "$1")/switchboard-state/verdicts.tsv" ]; then
+    echo "$(dirname "$1")/switchboard-state"
+  fi
+}
+
+# any_state: the first state repo found for any session repo, or nothing.
+any_state() {
+  local r s=""
+  [ -f "$state_dir/verdicts.tsv" ] && s="$state_dir"
+  if [ -z "$s" ]; then
+    for r in "${repos[@]}"; do
+      s="$(state_for "$r")"
+      [ -n "$s" ] && break
+    done
+  fi
+  echo "$s"
+}
+
 # switchboard_line <repo>: the "wait for the PC" verdict, for `wait` only.
 switchboard_line() {
   local repo="$1" sib="" url slug row reasons date
-  if [ -f /home/user/switchboard-state/verdicts.tsv ]; then
-    sib=/home/user/switchboard-state
-  elif [ -f "$(dirname "$repo")/switchboard-state/verdicts.tsv" ]; then
-    sib="$(dirname "$repo")/switchboard-state"
-  fi
+  sib="$(state_for "$repo")"
   [ -n "$sib" ] || return 0
   # config, not `remote get-url`: the latter expands insteadOf rewrites.
   url="$(git -C "$repo" config --get remote.origin.url 2>/dev/null)" || return 0
@@ -196,6 +227,42 @@ check_branches() {
   fi
   return 0
 }
+
+if [ "$switchboard_only" = 1 ]; then
+  state="$(any_state)"
+  if [ -z "$state" ]; then
+    echo "switchboard: couldn't check the PC's state (the state repo isn't attached)."
+    exit 0
+  fi
+  date="$(git -C "$state" log -1 --date=short --format=%cd 2>/dev/null)"
+  echo "switchboard: checked against the PC's state of ${date:-an unknown date}."
+  for r in "${repos[@]}"; do
+    [ "$(basename "$r")" = switchboard-state ] && continue
+    switchboard_line "$r"
+  done
+  exit 0
+fi
+
+# No state repo: ask the model to attach it, unless the session holds nothing
+# but companions (they never need the verdict).
+if [ -z "$(any_state)" ]; then
+  project=0
+  for r in "${repos[@]}"; do
+    case "$(basename "$r")" in claude-setup|switchboard-state) ;; *) project=1 ;; esac
+  done
+  if [ "$project" = 1 ]; then
+    self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    cat <<EOF
+switchboard: the PC's state repo isn't attached to this session.
+Before the user's task, do this:
+1. Call add_repo for ProgDroid/switchboard-state, then run once, inline:
+   git clone --depth 1 https://github.com/ProgDroid/switchboard-state /home/user/switchboard-state
+2. Do NOT call register_repo_root, and do not read that repo's CLAUDE.md.
+3. Run: CLAUDE_CLOUD_SESSION=1 bash "$self" --switchboard-only
+4. Tell the user any "must wait" or "couldn't check" line it prints before anything else. The "checked against" line needs no mention. If the command prints nothing at all, or attaching or cloning fails, tell the user the PC's state could not be checked.
+EOF
+  fi
+fi
 
 for r in "${repos[@]}"; do
   check_repo "$r" || true
