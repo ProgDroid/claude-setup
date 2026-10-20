@@ -476,6 +476,121 @@ echo "== rule d: Set-Content without -Encoding =="
   && ok "Set-Content with -Encoding is quiet" \
   || bad "rule d fires when -Encoding is already passed"
 
+# ---------------------------------------------------------------------------
+# Rules 7 and 8, added 2026-10-20 from the escalation queue: two trap classes that
+# recurred three times each with only prose behind them. Every DENY case below was
+# measured to fail on this machine (grep 3.0 exit 134; git "ambiguous argument"), and
+# every ALLOW case was measured to work, so neither list is a guess.
+# ---------------------------------------------------------------------------
+
+# deny_rule <command> -> GREP_IF | REV_PATH | OTHER | ALLOW  (which rule denied it)
+# jq gets the command with MSYS_NO_PATHCONV=1: it is a native exe, so a command starting with
+# / would otherwise be rewritten to C:/Program Files/Git/... before the hook ever saw it.
+deny_rule() {
+  local out reason
+  out=$(MSYS_NO_PATHCONV=1 jq -n --arg c "$1" '{tool_name:"Bash",tool_input:{command:$c}}' | bash "$HOOK" 2>&1)
+  [ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // "allow"' 2>/dev/null)" = deny ] \
+    || { echo ALLOW; return; }
+  reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason')
+  case "$reason" in
+    *"grep aborts on -i"*)      echo GREP_IF ;;
+    *"MSYS rewrites"*)          echo REV_PATH ;;
+    *)                          echo OTHER ;;
+  esac
+}
+
+expect_rule() {  # expect_rule <want> <command> <label>
+  local got
+  got=$(deny_rule "$2")
+  [ "$got" = "$1" ] && ok "$3" || bad "$3 (want $1, got $got)"
+}
+
+echo "== rule 7: grep with -i and -F aborts (every spelling measured at exit 134) =="
+
+expect_rule GREP_IF 'grep -iF needle file.txt'                 "grep -iF denied"
+expect_rule GREP_IF 'grep -Fi needle file.txt'                 "grep -Fi denied"
+expect_rule GREP_IF 'grep -i -F needle file.txt'               "grep -i -F denied"
+expect_rule GREP_IF 'grep -F -i needle file.txt'               "grep -F -i denied"
+expect_rule GREP_IF 'grep --ignore-case -F needle f'           "grep --ignore-case -F denied"
+expect_rule GREP_IF 'grep -i --fixed-strings needle f'         "grep -i --fixed-strings denied"
+expect_rule GREP_IF 'grep -ciF needle f'                       "grep -ciF denied (bundled with c)"
+expect_rule GREP_IF 'grep -iFf pats f'                         "grep -iFf denied (f takes the next word)"
+expect_rule GREP_IF 'grep -y -F needle f'                      "grep -y -F denied (y is -i)"
+expect_rule GREP_IF 'grep needle file.txt -i -F'               "options after the pattern denied"
+expect_rule GREP_IF 'fgrep -i needle f'                        "fgrep -i denied"
+expect_rule GREP_IF 'git diff | grep -iF needle'               "grep -iF after a pipe denied"
+expect_rule GREP_IF 'cd x && grep -ciF needle f; echo done'    "grep -iF mid-chain denied"
+expect_rule GREP_IF 'n=$(grep -ciF needle f)'                  "grep -iF in a substitution denied"
+expect_rule GREP_IF 'git ls-files | xargs grep -il -F needle'  "xargs grep -il -F denied"
+expect_rule GREP_IF 'LC_ALL=C grep -iF needle f'               "grep -iF behind an env assignment denied"
+expect_rule GREP_IF '/usr/bin/grep -iF needle f'               "grep by path denied"
+
+expect_rule ALLOW 'grep -i needle f'                           "grep -i alone allowed"
+expect_rule ALLOW 'grep -F needle f'                           "grep -F alone allowed"
+expect_rule ALLOW 'grep -iE "a|b" f'                           "grep -iE allowed"
+expect_rule ALLOW 'grep -i -f pats f'                          "grep -i -f (lowercase f, a file) allowed"
+expect_rule ALLOW 'git grep -iF needle'                        "git grep -iF allowed (git's own grep works)"
+expect_rule ALLOW 'rg -iF needle f'                            "rg -iF allowed"
+expect_rule ALLOW 'grep -e -iF f'                              "-iF as the argument of -e allowed"
+expect_rule ALLOW 'grep -Fe -i f'                              "-i as the argument of a bundled -e allowed"
+expect_rule ALLOW 'grep -Fei f'                               "letters after a bundled -e are its argument, allowed"
+expect_rule ALLOW 'grep -F --regexp -i f'                      "-i as the argument of --regexp allowed"
+expect_rule ALLOW 'grep -F -- -i f'                            "-i after -- is a pattern, allowed"
+expect_rule ALLOW 'grep -i needle f | grep -F other'           "-i and -F in separate greps allowed"
+expect_rule ALLOW "tr 'A-Z' 'a-z' < f | grep -F needle"        "the remedy (tr, then grep -F) allowed"
+expect_rule ALLOW 'echo grep -iF is broken'                    "grep as an argument, not a command, allowed"
+
+# The corpus pass (816 transcript commands, 2026-10-20) found six false positives, every one
+# a command that MENTIONS the trap inside quotes -- the docs this trap keeps generating. And
+# two true hits that sit inside "$(...)", including the pre-push scan this rule exists for.
+expect_rule ALLOW "grep -rn -i 'memory pressure\\|grep -iF\\|grep -qiF' dir"          "a quoted pattern naming grep -iF allowed"
+expect_rule ALLOW "grep -n -e 'grep -iF' -e 'iF' *.md"                              "-e with a quoted pattern containing a space allowed"
+expect_rule ALLOW "grep -c 'x | grep -qiF y' f"                                    "a pipe inside a single-quoted pattern allowed"
+expect_rule ALLOW 'printf "%s\n" "use \`grep -iF\` never" >> notes.md'             "escaped backticks in double quotes allowed"
+expect_rule ALLOW 'echo "never run grep -iF; it aborts" >> notes.md'                 "a double-quoted sentence allowed"
+expect_rule ALLOW 'printf "%s\n" "a | grep -qiF b" > notes.md'                     "a pipe then grep -iF inside double quotes allowed"
+expect_rule ALLOW "$(printf 'echo "first line\nx | grep -qiF y" > notes.md')"      "a quote spanning lines stays open on the next line"
+expect_rule GREP_IF 'printf "%s=%s " "$p" "$(grep -ciF -- "$p" <<<"$D")"'           "grep -iF inside \"\$(...)\" denied (the original scan)"
+expect_rule GREP_IF 'n="`grep -ciF x f`"'                                          "grep -iF in a backtick inside double quotes denied"
+expect_rule GREP_IF 'grep -rlF "word sensitivity" -i dir'                          "-i after a quoted pattern denied"
+expect_rule GREP_IF "grep -F \\'x -i f"                                            "an escaped quote opens no quoting, denied"
+expect_rule GREP_IF 'n="$( (cd d); grep -ciF y f)"'                                "a subshell nested in \"\$(...)\" does not end it, denied"
+
+HDGREP=$(printf 'cat > notes.md <<%sEOF%s\nuse grep -iF here\nEOF' "'" "'")
+expect_rule ALLOW "$HDGREP"                                    "grep -iF inside a heredoc body allowed"
+
+[ "$(verdict_tool PowerShell 'grep -iF needle f')" != DENY ] \
+  && ok "rule 7 is Bash-only" \
+  || bad "rule 7 denied under the PowerShell tool"
+
+echo "== rule 8: MSYS rewrites <rev>:<path> when the rev has a slash and the path starts with a dot =="
+
+expect_rule REV_PATH 'git show origin/main:.claude-plugin/marketplace.json'       "the recorded incident denied"
+expect_rule REV_PATH 'git -C G:/repo show origin/main:.github/workflows/ci.yml'  "with -C denied"
+expect_rule REV_PATH "git show 'origin/main:.gitignore'"                         "single-quoted denied (rewrite is after unquoting)"
+expect_rule REV_PATH 'git show "origin/main:.gitignore"'                         "double-quoted denied"
+expect_rule REV_PATH 'git cat-file -p refs/heads/main:.x'                        "cat-file denied"
+expect_rule REV_PATH 'git show origin/main~2:.github/x'                          "rev with ~N denied"
+expect_rule REV_PATH 'git diff origin/main:.x HEAD:.x'                           "diff denied"
+expect_rule REV_PATH 'git show origin/main:..'                                   "path .. denied"
+
+expect_rule ALLOW 'git show origin/main:personal/.claude-plugin/plugin.json'     "path not starting with a dot allowed (measured unchanged)"
+expect_rule ALLOW 'git show HEAD:.gitignore'                                     "rev without a slash allowed (measured unchanged)"
+expect_rule ALLOW 'git show HEAD~1:.x'                                           "HEAD~1 allowed"
+expect_rule ALLOW 'git show origin/main:a/.b'                                    "dot later in the path allowed"
+expect_rule ALLOW 'MSYS_NO_PATHCONV=1 git show origin/main:.gitignore'           "the remedy (one-command prefix) allowed"
+expect_rule ALLOW 'git show origin/main:README.md'                               "a plain rev:path allowed"
+expect_rule ALLOW 'git show origin/main:README.md && echo a:.b'                  "a plain rev:path allowed when :. appears elsewhere"
+expect_rule ALLOW 'git clone git@github.com:org/.dotfiles'                       "scp-style URL allowed (no slash before the colon)"
+expect_rule ALLOW 'ls origin/main:.x'                                            "not a git command, allowed"
+
+HDREV=$(printf 'cat > notes.md <<%sEOF%s\ngit show origin/main:.gitignore\nEOF' "'" "'")
+expect_rule ALLOW "$HDREV"                                                       "inside a heredoc body allowed"
+
+[ "$(verdict_tool PowerShell 'git show origin/main:.gitignore')" != DENY ] \
+  && ok "rule 8 is Bash-only (PowerShell does no MSYS conversion)" \
+  || bad "rule 8 denied under the PowerShell tool"
+
 echo "== output format =="
 
 # The hook's JSON must be exactly what jq would pretty-print for the same object,

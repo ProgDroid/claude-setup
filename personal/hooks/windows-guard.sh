@@ -211,6 +211,173 @@ if [[ -z "$deny" ]] && [[ "$tool" == "Bash" ]] \
     deny="Run 'claude mcp add' from PowerShell, not Bash -- MSYS path conversion rewrites a bare /c argument to C:/ before the CLI sees it, silently storing a broken launcher (args: [\"C:/\", \"npx\", ...]) in ~/.claude.json."
 fi
 
+# Rules 7 and 8 look at SIMPLE COMMANDS rather than lines: a line is cut at ; & | ( ) and
+# backticks and each piece is split into words.
+#
+# for_each_command FN -- calls FN once per simple command of the lines in _fe_lines, with
+# the words in _w and the index of the command word in _c (leading VAR=x assignments and
+# wrapper words such as xargs, time or env skipped). Stops at the first FN that returns 0.
+for_each_command() {
+    local fn=$1 line seg segs
+    for line in "${_fe_lines[@]}"; do
+        line=${line//[;&|()\`]/$'\n'}
+        mapfile -t segs <<< "$line"
+        for seg in "${segs[@]}"; do
+            read -ra _w <<< "$seg"
+            _c=0
+            while [[ $_c -lt ${#_w[@]} ]]; do
+                case "${_w[_c]}" in
+                    [A-Za-z_]*=*|'!'|time|command|exec|env|nice|xargs|sudo) _c=$((_c + 1)) ;;
+                    timeout) _c=$((_c + 2)) ;;
+                    -*) [[ $_c -gt 0 ]] || break; _c=$((_c + 1)) ;;
+                    *) break ;;
+                esac
+            done
+            [[ $_c -lt ${#_w[@]} ]] || continue
+            "$fn" && return 0
+        done
+    done
+    return 1
+}
+
+# 7. grep with -i and -F together -> Git Bash's grep 3.0 aborts: exit 134, no output even on
+#    stderr, a grep.exe.stackdump in the cwd. Every spelling was measured 2026-10-20 (-iF,
+#    -i -F, the long forms, -y, fgrep -i, options after the pattern). Every term reads as
+#    absent, so a pre-push privacy scan reported "clean" -- three times, twice on releases
+#    of a public repo. rg -iF and git grep -iF work, and are not matched.
+_grep_if() {
+    local k=$_c word ci=0 cf=0 j ch
+    case "${_w[k]##*/}" in
+        grep|egrep) ;;
+        fgrep) cf=1 ;;
+        *) return 1 ;;
+    esac
+    for (( k = k + 1; k < ${#_w[@]}; k++ )); do
+        word=${_w[k]}
+        case "$word" in
+            --) break ;;
+            --ignore-case) ci=1 ;;
+            --fixed-strings) cf=1 ;;
+            --regexp|--file|--max-count|--after-context|--before-context|--context|--directories|--devices|--include|--exclude|--exclude-dir|--exclude-from|--label|--binary-files)
+                k=$((k + 1)) ;;
+            --*) ;;
+            -?*)
+                # A short-option bundle. An option taking an argument swallows the rest
+                # of the bundle, or the next word when it ends the bundle.
+                for (( j = 1; j < ${#word}; j++ )); do
+                    ch=${word:j:1}
+                    case "$ch" in
+                        i|y) ci=1 ;;
+                        F) cf=1 ;;
+                        e|f|m|A|B|C|d|D) [[ $j -eq $((${#word} - 1)) ]] && k=$((k + 1)); break ;;
+                    esac
+                done ;;
+        esac
+    done
+    [[ $ci -eq 1 && $cf -eq 1 ]]
+}
+
+# mask_quotes -- fills _fe_lines with the lines of $scan, quoted LITERAL text replaced by '_'
+# and each quote by a space, so a quoted pattern can be neither options nor separators. Code
+# bash RUNS inside double quotes -- "$(...)" and unescaped backticks -- is kept, ending in ';'.
+#
+# Rule 7 needs this and the quote-blind rules do not: an 816-command transcript pass found
+# six false positives, every one a command MENTIONING the trap in quotes (a search pattern
+# for the notes about it, a printf writing those notes), and two true hits inside "$(...)",
+# one of them the pre-push scan the rule exists for. Masking ALL double-quoted text would
+# have lost that one. Quoting state is tracked as a stack in $st, carried from line to line:
+# N top level, S single, D double, C "$(" inside D, B a backtick inside D, P a parenthesis
+# inside C.
+#
+# SPEED: work is per LINE, and within a line the text up to the next character that matters
+# is copied in one step. A ${s:i:1} loop over the whole command rescans the string on every
+# call, so it is quadratic: ~1 s per call on an 8,800-character command, the class the
+# builtin rewrite removed. Each step still copies the rest of its line, so one very long
+# line is the slow case (~0.5 s at 8,800 characters with 400 quotes). Measured over the 738
+# transcript commands that reach this function: no line was longer than 470 characters.
+mask_quotes() {
+    local LC_ALL=C
+    local line st=N
+    _fe_lines=()
+    for line in "${scan_lines[@]}"; do
+        mask_line "$line"
+        _fe_lines+=("$_masked")
+    done
+    return 0
+}
+
+# mask_line LINE -- one line of mask_quotes, reading and updating the caller's $st.
+mask_line() {
+    local rest=$1 lit ch top
+    _masked=""
+    while [[ -n "$rest" ]]; do
+        top=${st: -1}
+        case "$top" in
+            S) lit=${rest%%\'*} ;;
+            D) lit=${rest%%[\\\"\`\$]*} ;;
+            *) lit=${rest%%[\\\'\"\`\(\)]*} ;;
+        esac
+        if [[ "$top" == [SD] ]]; then _masked+=${lit//?/_}; else _masked+=$lit; fi
+        rest=${rest:${#lit}}
+        [[ -n "$rest" ]] || break
+        ch=${rest:0:1}
+        rest=${rest:1}
+        case "$top" in
+            S)
+                st=${st%?}; _masked+=" " ;;
+            D)
+                case "$ch" in
+                    \\) _masked+="__"; rest=${rest:1} ;;
+                    '"') st=${st%?}; _masked+=" " ;;
+                    '`') st+=B; _masked+=";" ;;
+                    '$') if [[ "$rest" == '('* ]]; then st+=C; _masked+=";"; rest=${rest:1}; else _masked+="_"; fi ;;
+                esac ;;
+            *)
+                case "$ch" in
+                    \\) _masked+="__"; rest=${rest:1} ;;
+                    "'") st+=S; _masked+=" " ;;
+                    '"') st+=D; _masked+=" " ;;
+                    '`') if [[ "$top" == B ]]; then st=${st%?}; _masked+=";"; else _masked+='`'; fi ;;
+                    '(') [[ "$top" == C || "$top" == P ]] && st+=P; _masked+="(" ;;
+                    ')') if [[ "$top" == C ]]; then st=${st%?}; _masked+=";"
+                         elif [[ "$top" == P ]]; then st=${st%?}; _masked+=")"
+                         else _masked+=")"; fi ;;
+                esac ;;
+        esac
+    done
+}
+
+if [[ -z "$deny" ]] && [[ "$tool" == "Bash" ]] && [[ "$scan" == *grep* ]] \
+   && [[ "$scan" == *-*[iy]* || "$scan" == *ignore-case* ]] \
+   && [[ "$scan" == *-*F* || "$scan" == *fixed-strings* || "$scan" == *fgrep* ]] \
+   && mask_quotes && for_each_command _grep_if; then
+    deny="Git Bash's grep aborts on -i combined with -F, in every spelling (-iF, -i -F, --ignore-case --fixed-strings, fgrep -i): exit 134, NO output even on stderr, and a grep.exe.stackdump in the cwd. Every term then reads as absent -- that is how a pre-push privacy scan reported 'clean' three times. Lowercase both sides and drop -i (tr 'A-Z' 'a-z' < f | grep -F term), or drop -F and escape the pattern. rg -iF and git grep -iF both work."
+fi
+
+# 8. git <rev>:<path> where the rev has a slash and the path starts with a dot -> MSYS reads
+#    the argument as a path list and rewrites it: origin/main:.github/x reaches git as
+#    origin\main;.github\x ("ambiguous argument"). Measured 2026-10-20 over 45 shapes: only
+#    that combination is rewritten (HEAD:.x and origin/main:x/.y are not), and quoting does
+#    not help because the rewrite happens after bash unquotes. Hit three times, all on
+#    post-release version checks; the follow-on trap is exporting MSYS_NO_PATHCONV, which
+#    silently breaks every /g/... path in the same command. A quoted word needs no
+#    unquoting here: a leading quote cannot change what the pattern matches.
+_re_rev_dot_path='^[^:]*[/\\][^:]*:\.'
+_git_rev_dot_path() {
+    local k
+    case "${_w[_c]##*/}" in git|git.exe) ;; *) return 1 ;; esac
+    for (( k = _c + 1; k < ${#_w[@]}; k++ )); do
+        [[ "${_w[k]}" =~ $_re_rev_dot_path ]] && return 0
+    done
+    return 1
+}
+
+if [[ -z "$deny" ]] && [[ "$tool" == "Bash" ]] && [[ "$scan" == *:.* ]] \
+   && [[ "$scan" != *MSYS_NO_PATHCONV* && "$scan" != *MSYS2_ARG_CONV_EXCL* ]] \
+   && _fe_lines=("${scan_lines[@]}") && for_each_command _git_rev_dot_path; then
+    deny="MSYS rewrites a <rev>:<path> argument whose rev contains a slash and whose path starts with a dot: origin/main:.github/x reaches git as origin\\main;.github\\x and fails with 'ambiguous argument'. Quoting does not help. Prefix this ONE command with MSYS_NO_PATHCONV=1. Never export it: /g/... paths then stop converting and every probe in the command fails, some as plausible zeros -- write G:/... paths alongside it."
+fi
+
 # json_str S -- sets _json to S as a JSON string body, escaped as jq escapes it. Returns 1
 # for a control character, whose escape form the caller leaves to jq itself.
 json_str() {
