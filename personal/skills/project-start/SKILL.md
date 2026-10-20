@@ -110,7 +110,9 @@ when absent and adds the house parking-lot rule to `CLAUDE.md`. The output is
 - `parking-lot` `absent` with "different rule exists (line N)" means the project has its own
   parking-lot rule; it is kept, and adding the house rule becomes an ask in step 5.
 - `beads-metrics` `absent` means bd telemetry is on. It is a machine-wide setting: tell the user and
-  offer to turn it off, then re-run `check beads-metrics` and record what it says.
+  offer to turn it off with `bd config set metrics.disabled true` (the detail names it; it writes
+  the user-level bd config from any directory), then re-run `check beads-metrics` and record what
+  it says.
 - **A result whose detail starts "step ended without a result" is a ritual bug**, not an
   environment gap: that step crashed. Tell the user which step it was and quote its stderr from the
   detail. Do not retry it silently. Record it `unknown` so the record keeps it open.

@@ -120,6 +120,24 @@ t0=$SECONDS; out="$(stub_path "$TMPROOT/stub-slow"; bash "$RITUAL" check public-
 [ "$(st "$out")" = unknown ] && [ "$(jq -r .detail <<<"$out")" = "gh timed out" ] && [ "$el" -lt 35 ] \
   && ok "gh_timeout_unknown_fast (${el}s)" || bad "gh_timeout: ${el}s $out"
 
+# run_timeout with neither timeout(1) nor gtimeout on PATH, as on stock macOS: the bash watchdog.
+# common.sh is sourced before PATH narrows to a dir holding only a sleep wrapper (the watchdog's
+# one external), and the commands run by absolute path.
+SLEEP="$(command -v sleep)"; BASHX="$(command -v bash)"; nt="$TMPROOT/no timeout bin"; mkdir -p "$nt"
+printf '#!%s\nexec %q "$@"\n' "$BASHX" "$SLEEP" > "$nt/sleep"; chmod +x "$nt/sleep"
+res="$( . "$SKILL_DIR/lib/common.sh"; PATH="$nt"
+  impl="$(command -v timeout || command -v gtimeout || echo none)"
+  t0=$SECONDS; run_timeout 2 "$SLEEP" 120; rc=$?; echo "$impl $rc $((SECONDS - t0))" )"
+read -r impl rc el <<<"$res"
+# good ~2 s, bad 120 s (the sleep never stopped)
+[ "$impl" = none ] && [ "$rc" = 124 ] && [ "$el" -lt 20 ] && ok "run_timeout_without_timeout_bin_stops_and_says_124 (${el}s)" \
+  || bad "watchdog timeout: impl=$impl rc=$rc ${el}s"
+t0=$SECONDS
+out="$( . "$SKILL_DIR/lib/common.sh"; PATH="$nt"; run_timeout 30 "$BASHX" -c 'echo hi; exit 3' )"; rc=$?; el=$((SECONDS - t0))
+# good ~1 s; a watchdog holding the $(...) open makes it the full 30 s
+[ "$out" = hi ] && [ "$rc" = 3 ] && [ "$el" -lt 10 ] && ok "run_timeout_without_timeout_bin_passes_output_and_status (${el}s)" \
+  || bad "watchdog passthrough: out=$out rc=$rc ${el}s"
+
 # non-repo
 bash "$RITUAL" candidates "$TMPROOT" >/dev/null 2>&1; [ $? -eq 2 ] && ok "candidates_requires_repo" || bad "candidates_requires_repo"
 finish

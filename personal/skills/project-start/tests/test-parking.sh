@@ -140,5 +140,28 @@ r="$(mkrepo)"; mkdir -p "$r/docs"
 R fix parking-lot "$r" >/dev/null
 [ "$(st "$(R check parking-lot "$r")")" = present ] && ok "existing_docs_dir_ok" || bad "docs dir"
 
+# --- the scan reads fences as the insert does: a rule or a parking-lot mention quoted in an example
+# block is neither the rule nor a different rule. Each case pairs with the same text unfenced.
+r="$(mkrepo)"; mkdir -p "$r/docs"; cp "$HOUSE_LOT" "$r/docs/parking-lot.md"
+{ printf '# Proj\n\nExample of the rule:\n\n```md\n'; cat "$HOUSE_RULE"; printf '```\n'; } > "$r/CLAUDE.md"
+out="$(R check parking-lot "$r")"
+[ "$(st "$out")" = absent ] && jq -r .detail <<<"$out" | grep -qF 'lacks the parking-lot rule' \
+  && ok "fenced_rule_is_not_the_rule" || bad "fenced rule: $out"
+R fix parking-lot "$r" >/dev/null
+[ "$(st "$(R check parking-lot "$r")")" = present ] && [ "$(count_rule "$r/CLAUDE.md")" = 2 ] \
+  && ok "fenced_rule_fix_adds_the_real_rule" || bad "fenced rule fix: rules=$(count_rule "$r/CLAUDE.md") $(R check parking-lot "$r")"
+r="$(mkrepo)"; mkdir -p "$r/docs"; cp "$HOUSE_LOT" "$r/docs/parking-lot.md"
+{ printf '# Proj\n\n'; cat "$HOUSE_RULE"; } > "$r/CLAUDE.md"
+[ "$(st "$(R check parking-lot "$r")")" = present ] && ok "unfenced_rule_is_the_rule (control)" || bad "unfenced rule control"
+r="$(mkrepo)"; mkdir -p "$r/docs"; cp "$HOUSE_LOT" "$r/docs/parking-lot.md"
+printf '# Proj\r\n\r\n~~~\r\nWe keep ideas in docs/parking-lot.md.\r\n~~~\r\n' > "$r/CLAUDE.md"
+out="$(R check parking-lot "$r")"
+[ "$(st "$out")" = absent ] && ! jq -r .detail <<<"$out" | grep -qF 'different rule' \
+  && ok "fenced_mention_is_not_a_different_rule (crlf)" || bad "fenced mention: $out"
+r="$(mkrepo)"; mkdir -p "$r/docs"; cp "$HOUSE_LOT" "$r/docs/parking-lot.md"
+printf '# Proj\r\n\r\nWe keep ideas in docs/parking-lot.md.\r\n' > "$r/CLAUDE.md"
+jq -r .detail <<<"$(R check parking-lot "$r")" | grep -qF 'different rule exists (line 3)' \
+  && ok "unfenced_mention_is_a_different_rule (control)" || bad "unfenced mention control: $(R check parking-lot "$r")"
+
 # --- other steps untouched: unknown step still dies
 finish

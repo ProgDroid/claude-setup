@@ -125,7 +125,9 @@ check_beads_metrics() {
   v="${v//[[:space:]]/}"
   case "$v" in
     true)  emit beads-metrics present "metrics.disabled is true (bd telemetry off)" ;;
-    false) emit beads-metrics absent "metrics.disabled is false (bd telemetry on)" ;;
+    # Measured on bd 1.2.2: `config set` writes this key to the USER-level config from any cwd, a
+    # repo included (it names the file it wrote), and never to .beads/config.yaml.
+    false) emit beads-metrics absent "metrics.disabled is false (bd telemetry on); turn it off machine-wide with: bd config set metrics.disabled true" ;;
     *)     emit beads-metrics unknown "bd config get metrics.disabled answered '$v'" ;;
   esac
 }

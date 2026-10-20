@@ -8,15 +8,24 @@ _PARK_LOT_PATH='docs/parking-lot.md'
 
 # _park_scan <claude-md> -> prints "rule" if the house rule bullet is present, and/or
 # "other:<N>" for the first line mentioning the parking lot that is not part of that bullet.
-# CRs are stripped before matching so a CRLF file is read like an LF one.
+# CRs are stripped before matching so a CRLF file is read like an LF one. Lines inside a ``` or ~~~
+# fence are skipped through md_fence, the predicate _park_insert_rule uses: a rule quoted in an
+# example block is not the rule.
 _park_scan() {
   [ -f "$1" ] || return 0
-  tr -d '\r' < "$1" | awk -v p="$_PARK_LOT_PATH" '
-    /^- \*\*Parking lot\.\*\*/ { rule = 1; inrule = 1; next }
-    inrule && /^[ \t]/ { next }
-    { inrule = 0 }
-    index($0, p) && !other { other = NR }
-    END { if (rule) print "rule"; if (other) print "other:" other }'
+  local -a lines; local i l rule=0 inrule=0 other=0
+  mapfile -t lines < "$1"
+  MD_FENCE=""
+  for i in "${!lines[@]}"; do
+    l="${lines[$i]%$'\r'}"
+    if md_fence "$l"; then inrule=0; continue; fi
+    if [[ "$l" == '- **Parking lot.**'* ]]; then rule=1; inrule=1; continue; fi
+    if [ "$inrule" = 1 ] && [[ "$l" == [$' \t']* ]]; then continue; fi
+    inrule=0
+    if [ "$other" = 0 ] && [[ "$l" == *"$_PARK_LOT_PATH"* ]]; then other=$((i + 1)); fi
+  done
+  [ "$rule" = 0 ] || echo rule
+  [ "$other" = 0 ] || echo "other:$other"
 }
 
 check_parking_lot() {

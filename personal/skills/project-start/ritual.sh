@@ -107,7 +107,32 @@ repo_root() {
 }
 unset _RITUAL_STACK_MEMO _RITUAL_MEMO_REPO
 
+# usage: one line per dispatch arm below. A <repo> may be any path inside the work tree.
+usage() {
+  cat <<'EOF'
+usage: ritual.sh <subcommand> <repo> [args...]
+  auto <repo>                      run the scripted steps, then print their results
+  check <step> <repo> [args...]    one step's state: present | absent | unknown
+  fix <step> <repo> [args...]      bring one step to present (or say why not)
+  due <repo>                       which steps to offer and which to skip, from the record
+  record-path <repo>               where the ritual record lives
+  record-read <repo>               the record, or {} when there is none
+  record-write <repo> <results.json>
+  preflight <repo>                 the dirty tree, with each path's bytes, before any fix
+  commit-plan <repo> <preflight.json> <wrote.json>
+  commit <repo> --preflight <preflight.json> --message-file <f> [--include-dirty] -- <path>...
+  stack <repo>                     detected languages and their directories
+  oracle <repo>                    the test and lint commands the repo's files name (never run)
+  candidates <repo>                open plan items and TODOs in tracked files, for the beads seed
+  handoff-commit <repo>            make the first handoff: commit, holding NEXT.md alone
+EOF
+}
+
 sub="${1:-}"; [ $# -gt 0 ] && shift
+case "$sub" in
+  -h|--help|help) usage; exit 0 ;;
+  '') usage >&2; exit 2 ;;
+esac
 # Every <repo> means its work tree's top, so a path below it cannot split one run's writes.
 case "$sub" in
   check|fix) [ $# -ge 2 ] && set -- "$1" "$(repo_root "$2")" "${@:3}" ;;

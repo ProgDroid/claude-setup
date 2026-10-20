@@ -79,7 +79,9 @@ out="$(R check beads "$r")"
 # ============================== check beads-metrics
 r="$(mkrepo)"
 [ "$(st "$(STUB_METRICS=true R check beads-metrics "$r")")" = present ] && ok "metrics_present_when_disabled_true" || bad "metrics true"
-[ "$(st "$(STUB_METRICS=false R check beads-metrics "$r")")" = absent ] && ok "metrics_absent_when_disabled_false" || bad "metrics false"
+out="$(STUB_METRICS=false R check beads-metrics "$r")"
+[ "$(st "$out")" = absent ] && ok "metrics_absent_when_disabled_false" || bad "metrics false"
+dt "$out" | grep -qF 'bd config set metrics.disabled true' && ok "metrics_absent_names_the_command_that_turns_it_off" || bad "metrics absent detail: $out"
 [ "$(st "$(STUB_METRICS=maybe R check beads-metrics "$r")")" = unknown ] && ok "metrics_unknown_on_unparseable_answer" || bad "metrics garbage"
 [ "$(st "$(NB check beads-metrics "$r")")" = unknown ] && ok "metrics_unknown_without_bd" || bad "metrics no bd"
 

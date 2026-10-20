@@ -5,12 +5,11 @@
 # check_public_sweep: present = repo is PUBLIC (a one-time sweep is due); absent = PRIVATE or
 # INTERNAL; unknown = no gh, no auth, no GitHub remote, any gh error or unrecognised value.
 check_public_sweep() {
-  local repo="$1" vis rc to=()
-  command -v timeout >/dev/null 2>&1 && to=(timeout 10)
+  local repo="$1" vis rc
   if ! command -v gh >/dev/null 2>&1; then
     emit public-sweep unknown "gh not installed; visibility not checked"; return 0
   fi
-  vis="$(cd "$repo" && GH_PROMPT_DISABLED=1 ${to[@]+"${to[@]}"} gh repo view --json visibility -q .visibility 2>/dev/null)"; rc=$?
+  vis="$(cd "$repo" && export GH_PROMPT_DISABLED=1 && run_timeout 10 gh repo view --json visibility -q .visibility 2>/dev/null)"; rc=$?
   vis="${vis//$'\r'/}"
   if [ "$rc" -eq 124 ]; then emit public-sweep unknown "gh timed out"; return 0; fi
   if [ "$rc" -ne 0 ]; then

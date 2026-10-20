@@ -36,6 +36,35 @@ require_repo() {
   local g; g="$(git_common_dir "$1" 2>/dev/null)" && [ -n "$g" ] || die "not a git repository: $1"
 }
 
+# run_timeout <secs> <cmd> [args...]: run <cmd>, stopping it after <secs>; exit 124 when the time
+# ran out, as timeout(1) does. Uses timeout(1), or gtimeout from Homebrew coreutils; stock macOS
+# has neither, so the fallback is a bash watchdog.
+run_timeout() {
+  local s="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then timeout "$s" "$@"; return; fi
+  if command -v gtimeout >/dev/null 2>&1; then gtimeout "$s" "$@"; return; fi
+  _watchdog_timeout "$s" "$@"
+}
+
+# _watchdog_timeout <secs> <cmd> [args...]: run_timeout without timeout(1). TERM goes to <cmd>'s
+# own pid only (a grandchild holding stdout would outlive it; gh is one process). The watchdog's
+# output goes to /dev/null, or a $(...) around the call would wait for its sleep to end. A watchdog
+# still alive when <cmd> returns means <cmd> beat the clock.
+_watchdog_timeout() {
+  local s="$1" pid wd rc; shift
+  "$@" &
+  pid=$!
+  ( sleep "$s"; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  wd=$!
+  wait "$pid"; rc=$?
+  if kill -0 "$wd" 2>/dev/null; then
+    kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null
+    return "$rc"
+  fi
+  wait "$wd" 2>/dev/null
+  return 124
+}
+
 # join_by <sep> <item...> -> the items joined with <sep> (nothing for no items).
 join_by() { local sep="$1" IFS=$'\x1f' s; shift; s="$*"; printf '%s' "${s//$'\x1f'/"$sep"}"; }
 
