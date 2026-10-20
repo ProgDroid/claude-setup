@@ -99,8 +99,10 @@ MD_FENCE=""
 
 # eol_of <file> -> crlf|lf. crlf iff the first line ends in CR; empty/missing -> lf.
 eol_of() {
-  # byte-level on purpose: under Git Bash, grep does not see the CR in $'\r$'
-  if [ -s "$1" ] && [[ "$(head -n 1 "$1" | od -An -tx1 | tr -d ' \n')" == *0d0a ]]; then echo crlf; else echo lf; fi
+  # Builtins only: this runs once per appended line, and each spawn costs ~0.1 s under Git Bash.
+  # `read` keeps the CR (grep would not see it in $'\r$'); it fails on a line with no newline -> lf.
+  local first
+  if [ -s "$1" ] && IFS= read -r first < "$1" && [[ "$first" == *$'\r' ]]; then echo crlf; else echo lf; fi
 }
 
 # append_line <file> <line>: append one line using the file's own line ending. Never rewrites
@@ -110,8 +112,8 @@ append_line() {
   local f="$1" line="$2" eol=$'\n' last
   [ "$(eol_of "$f")" = crlf ] && eol=$'\r\n'
   if [ -s "$f" ]; then
-    last="$(tail -c 1 "$f" | od -An -tx1 | tr -d ' \n')"
-    [ "$last" = 0a ] || printf '%s' "$eol" >> "$f"
+    last="$(tail -c 1 "$f")"   # $() strips a trailing LF, so empty iff the file ends in LF
+    [ -z "$last" ] || printf '%s' "$eol" >> "$f"
   fi
   printf '%s%s' "$line" "$eol" >> "$f"
 }

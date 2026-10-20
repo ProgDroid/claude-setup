@@ -68,8 +68,9 @@ cmp -s "$TMPROOT/want.crlf" "$r/.gitignore" \
 # --- eol_of directly, on exact bytes
 ( . "$SKILL_DIR/lib/common.sh"
   printf 'a\r\nb\r\n' > "$TMPROOT/e1"; printf 'a\nb\n' > "$TMPROOT/e2"; : > "$TMPROOT/e3"; printf 'a' > "$TMPROOT/e4"
+  printf 'a\r' > "$TMPROOT/e5"   # a CR with no LF after it is not a CRLF line ending
   [ "$(eol_of "$TMPROOT/e1")" = crlf ] && [ "$(eol_of "$TMPROOT/e2")" = lf ] && [ "$(eol_of "$TMPROOT/e3")" = lf ] \
-    && [ "$(eol_of "$TMPROOT/e4")" = lf ] && [ "$(eol_of "$TMPROOT/missing")" = lf ] ) \
+    && [ "$(eol_of "$TMPROOT/e4")" = lf ] && [ "$(eol_of "$TMPROOT/e5")" = lf ] && [ "$(eol_of "$TMPROOT/missing")" = lf ] ) \
   && ok "eol_of_detects_crlf_by_bytes" || bad "eol_of"
 
 # --- missing trailing newline gets terminated, not glued

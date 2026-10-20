@@ -309,11 +309,13 @@ if ln -s README.md "$r/lnk" 2>/dev/null && [ -L "$r/lnk" ]; then
 else echo "  NOTE: symlinks not creatable here; symlink case not tested"; fi
 
 # --- scale: 2000 untracked files must not take minutes
+# Measured 2026-10-20 under Git Bash: 8 s quiet, 11 s with all 22 suites in parallel; the pre-fix
+# per-file preflight (50ed949^) had not finished after 1200 s. 60 s is >5x clear of both.
 r="$(mkrepo)"; mkdir -p "$r/node_modules/pkg"
 for i in $(seq 1 2000); do : > "$r/node_modules/pkg/f$i.js"; done
 t0=$SECONDS; out="$(pf "$r")"; rc=$?; el=$((SECONDS - t0))
 echo "  (2000-file preflight took ${el}s)"
 [ $rc -eq 0 ] && [ "$(jq '.dirty|length' <<<"$out")" = 2000 ] && [ "$(jq '.bytes|length' <<<"$out")" = 2000 ] \
-  && [ "$el" -lt 20 ] && ok "preflight_2000_files_under_20s" || bad "scale: rc=$rc n=$(jq '.dirty|length' <<<"$out") ${el}s"
+  && [ "$el" -lt 60 ] && ok "preflight_2000_files_under_60s" || bad "scale: rc=$rc n=$(jq '.dirty|length' <<<"$out") ${el}s"
 
 finish

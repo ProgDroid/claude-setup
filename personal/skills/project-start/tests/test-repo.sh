@@ -112,12 +112,13 @@ out="$(cand "$r")"
 [ "$(jq -c '[.items[].text]' <<<"$out")" = '["numbered one","bullet two","still open","third"]' ] \
   && ok "candidates_open_exact_heading_fences_numbered" || bad "candidates_open: $out"
 
-# gh timeout
+# gh timeout. Good = the 10 s timeout plus overhead; bad = the stub's 120 s. The 35 s bound sits
+# near their geometric mean, so neither a loaded machine nor a lost timeout lands on the wrong side.
 r="$(mkrepo)"; mkdir -p "$TMPROOT/stub-slow"
-printf '#!/usr/bin/env bash\nexec sleep 30\n' > "$TMPROOT/stub-slow/gh"; chmod +x "$TMPROOT/stub-slow/gh"
+printf '#!/usr/bin/env bash\nexec sleep 120\n' > "$TMPROOT/stub-slow/gh"; chmod +x "$TMPROOT/stub-slow/gh"
 t0=$SECONDS; out="$(stub_path "$TMPROOT/stub-slow"; bash "$RITUAL" check public-sweep "$r")"; el=$((SECONDS - t0))
-[ "$(st "$out")" = unknown ] && [ "$(jq -r .detail <<<"$out")" = "gh timed out" ] && [ "$el" -lt 15 ] \
-  && ok "gh_timeout_unknown_fast" || bad "gh_timeout: ${el}s $out"
+[ "$(st "$out")" = unknown ] && [ "$(jq -r .detail <<<"$out")" = "gh timed out" ] && [ "$el" -lt 35 ] \
+  && ok "gh_timeout_unknown_fast (${el}s)" || bad "gh_timeout: ${el}s $out"
 
 # non-repo
 bash "$RITUAL" candidates "$TMPROOT" >/dev/null 2>&1; [ $? -eq 2 ] && ok "candidates_requires_repo" || bad "candidates_requires_repo"

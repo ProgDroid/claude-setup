@@ -5,9 +5,9 @@
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 SKILL="$SKILL_DIR/SKILL.md"
 
-# --- stubs. bd is test-beads.sh's model of bd 1.2.2, cut from that suite so the two never drift.
+# --- stubs. bd is the beads suites' model of bd 1.2.2, cut from beads-fixture.sh so the two never drift.
 STUBDIR="$TMPROOT/flow stubs"; LOG="$TMPROOT/flow tools.log"; mkdir -p "$STUBDIR"; : > "$LOG"
-awk '/^cat > "\$STUBDIR\/bd" <<'"'"'STUB'"'"'$/ { f = 1; next } f && /^STUB$/ { exit } f' "$TESTS_DIR/test-beads.sh" > "$STUBDIR/bd"
+awk '/^cat > "\$STUBDIR\/bd" <<'"'"'STUB'"'"'$/ { f = 1; next } f && /^STUB$/ { exit } f' "$TESTS_DIR/beads-fixture.sh" > "$STUBDIR/bd"
 printf '#!/usr/bin/env bash\nprintf "gh %%s\\n" "$*" >> "${STUB_BD_LOG:?}"; echo PRIVATE\n' > "$STUBDIR/gh"
 cat > "$STUBDIR/gitleaks" <<'STUB'
 #!/usr/bin/env bash
@@ -17,8 +17,8 @@ exit 0
 STUB
 printf '#!/usr/bin/env bash\nexit 0\n' > "$STUBDIR/cargo"
 chmod +x "$STUBDIR"/*
-grep -q '"init "' "$STUBDIR/bd" && [ "$(wc -l < "$STUBDIR/bd")" -gt 20 ] && ok "bd_stub_cut_from_test_beads" \
-  || bad "bd_stub_cut_from_test_beads: $(wc -l < "$STUBDIR/bd") lines"
+grep -q '"init "' "$STUBDIR/bd" && [ "$(wc -l < "$STUBDIR/bd")" -gt 20 ] && ok "bd_stub_cut_from_beads_fixture" \
+  || bad "bd_stub_cut_from_beads_fixture: $(wc -l < "$STUBDIR/bd") lines"
 
 # S <ritual args...>: ritual.sh with every tool stubbed
 S() { ( stub_path "$STUBDIR"; export STUB_BD_LOG="$LOG"; bash "$RITUAL" "$@" ); }

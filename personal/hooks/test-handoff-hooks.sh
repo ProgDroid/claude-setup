@@ -588,7 +588,9 @@ run "$PT" "$(p_edit Edit "$uwt/NEXT.md" "$uwt")"; ctl=0; has "linked worktree" &
 PATH="$SHIM:$PATH" run "$PT" "$(p_edit Edit "$uwt/NEXT.md" "$uwt")"
 [ "$ctl" = 1 ] && silent && ok "next_md_edit_silent_when_worktree_unknown" || bad "R50 edit (control warned=$ctl): $(show)"
 
-# I1: a 1 MB payload in a repo without the marker must not be read a byte at a time
+# I1: a 1 MB payload in a repo without the marker must not be read a byte at a time.
+# Measured 2026-10-20 under Git Bash: ~420-600 ms quiet, 821 ms with all 22 suites in parallel;
+# the `read -d ''` mutant ~6000 ms. 2500 ms sits near the geometric mean of 821 and 6000.
 head -c 1000000 /dev/zero | tr '\0' 'x' > "$TMPROOT/big.txt"
 for tool in Bash Write; do
   if [ "$tool" = Bash ]; then
@@ -598,7 +600,7 @@ for tool in Bash Write; do
   fi
   t0="$(date +%s%N)"; run "$PT" "$big"; t1="$(date +%s%N)"
   ms=$(( (t1 - t0) / 1000000 ))
-  [ "${#big}" -gt 1000000 ] && [ "$ms" -lt 2000 ] && silent && ok "large_payload_is_fast_${tool} (${ms} ms)" || bad "large $tool payload: ${ms} ms, ${#big} bytes, out=${#OUT}"
+  [ "${#big}" -gt 1000000 ] && [ "$ms" -lt 2500 ] && silent && ok "large_payload_is_fast_${tool} (${ms} ms)" || bad "large $tool payload: ${ms} ms, ${#big} bytes, out=${#OUT}"
 done
 
 echo "== hooks.json registration =="

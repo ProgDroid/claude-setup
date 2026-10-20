@@ -532,9 +532,10 @@ small="$(spawns_for 20)"; large="$(spawns_for 150)"
   || bad "first-sync spawns grow with file count (20 files: ${small% *}, 150: ${large% *})"
 
 # And the budget itself: a first sync plus a steady-state sync of 150 memories
-# inside 20 s, i.e. each one inside half the hook's 20 s timeout on average.
-# Measured 2026-10-18 under Git Bash: ~88 s before the fix, ~7 s after, so the
-# bound discriminates by 4x either way while leaving room for a loaded machine.
+# inside 30 s, i.e. each one inside the hook's 20 s timeout on average.
+# Measured 2026-10-18 under Git Bash: ~88 s before the fix, ~7 s after; 11.2 s on
+# 2026-10-20 with all 22 suites in parallel. 30 s sits near the geometric mean of
+# 11 and 88, so it discriminates by ~3x either way on a loaded machine.
 # Only discriminating where process creation is slow (Git Bash), which is where
 # the bug lives; the spawn counts above are the portable guard.
 now_ms() {
@@ -549,10 +550,10 @@ HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
 HOME="$fakehome" bash "$HOOK" >/dev/null 2>&1
 el=$(( $(now_ms) - t0 ))
 synced=0; for f in "$repo/.claude/memory"/gen-*.md; do [ -f "$f" ] && synced=$((synced + 1)); done
-if [ "$el" -lt 20000 ] && [ "$synced" -eq 150 ]; then
+if [ "$el" -lt 30000 ] && [ "$synced" -eq 150 ]; then
   ok "150 memories: two syncs in ${el} ms, all 150 landed"
 else
-  bad "150 memories: two syncs took ${el} ms, $synced/150 landed (budget 20000 ms)"
+  bad "150 memories: two syncs took ${el} ms, $synced/150 landed (budget 30000 ms)"
 fi
 
 # 7. Outside a git repo -> exit 0

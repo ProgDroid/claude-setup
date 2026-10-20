@@ -150,7 +150,9 @@ left="$(git -C "$P/proj" for-each-ref --format='%(refname)' refs/remotes/origin 
 out="$(run_hook "$P/proj")"
 has "resumed clone: unmerged branch still listed" "$out" "- claude/other (2 commits"
 
-# 7. An origin that hangs -> exits in < 30 s with an out-of-time line
+# 7. An origin that hangs -> exits in < 30 s with an out-of-time line. 30 s is the hook's own
+# timeout, a requirement rather than a tuned bound; 13 s measured 2026-10-20 with all 22 suites in
+# parallel, against the shim's 60 s.
 P="$(mktemp -d)"; mkproj "$P" proj; mkbranch "$P" proj claude/y 1; clone_proj "$P" proj
 shim="$(mktemp -d)"
 cat > "$shim/git" <<SHIM
