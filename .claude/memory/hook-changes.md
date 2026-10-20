@@ -2,8 +2,10 @@
 name: hook-changes
 ---
 Any change under `personal/hooks/` runs the WHOLE suite before it is committed:
-`for f in personal/hooks/test-*.sh; do bash "$f"; done` — not just the suite named
-after the file changed. `lib-memory.sh` is sourced by three hooks, so a one-line
+`bash personal/skills/project-start/tests/run-all.sh personal/hooks` — not just the
+suite named after the file changed. Pass both dirs (`… run-all.sh
+personal/skills/project-start/tests personal/hooks`) to run everything in parallel:
+~8.5 min wall here, against ~60 min serial (2026-10-20). `lib-memory.sh` is sourced by three hooks, so a one-line
 edit there moves auto-commit, sync-memory and hydrate-memory at once.
 
 **Why:** these hooks are built to fail silently — `|| return 0`, `|| exit 0`,
