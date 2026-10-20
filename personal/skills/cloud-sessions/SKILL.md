@@ -308,3 +308,12 @@ data for a check, not the session's subject, say explicitly "do NOT call `regist
 otherwise its instructions take over the session. The result also caps the attached repo at 2
 concurrent smart-HTTP operations (a third gets HTTP 429) and warns that `add_repo` may already have
 left a checkout at `/home/user/<repo>`. Check `git rev-parse HEAD` there before cloning over it.
+
+Measured live 2026-10-20, in two sessions opened from a `?repositories=` link with no companions:
+- **The model obeyed "do NOT call `register_repo_root`"** over `add_repo`'s own instruction, 2 of
+  2.
+- **`add_repo` left no checkout**, 2 of 2: the `rev-parse` check after it failed, and the model
+  cloned. Keep the check anyway, since "may" is the tool's own word.
+
+The UI labels the call "Added <owner>/<repo> to project permissions", and the failed existence
+check shows as a red "Failed" step. Both are expected, not errors.
