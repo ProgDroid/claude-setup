@@ -69,6 +69,13 @@ detect that its own premise is false.
 - **Run `scripts/sdd-workspace` with the PROJECT as the working directory, never the skill's.** It
   resolves the repo from cwd, so a call made from the skill directory created the workspace inside
   the dotfiles repo that holds the skill (2026-10-19). Check the printed path is under the project.
+- **A plan that says HOW to measure something under engine timing is a premise; probe it first.**
+  A plan offered "real time = scaled `delta` / `Engine.time_scale`" for a camera push-in. In Godot
+  4.7.2 the `_process` of the frame in which the scale drops still receives the OLD scale's delta,
+  so a 0.3 s push-in was used up on its first frame. All its tests passed because they set the scale
+  BEFORE calling `push_in`, an order the game never uses; a reviewer's 20-line probe found it
+  (2026-10-20). **A test must reproduce the production call order**, or it tests a different
+  program.
 
 ## 2. What goes in every dispatch
 
@@ -94,6 +101,10 @@ already written down still caused a park when it lived in a memory instead of th
   commit. A deliberate mutation once sat in the working tree of a security guard.
 - **Keep the tracking-issue close out of the implementer's scope.** It belongs after the final
   review.
+- **`scripts/task-brief` copies only the task's own section.** The plan's Global Constraints and
+  Review Focus, where the exact values and rows live, are not in it, though the brief refers to
+  them. Extract both once into `globals.md` in the workspace and name that file in every implementer
+  and reviewer dispatch (2026-10-20: a 24-line brief pointed at constants it did not carry).
 
 ## 3. Mutation evidence: demand a count, pre-registered
 
@@ -116,6 +127,10 @@ repeatedly audited the controller too.
 - **Run mutations against whole modules.** A `-k` filtered zero is UNKNOWN.
 - **When a fix adds a test, recount every pre-registered mutation on the lines it touches.**
 - Fail-first where possible: against the broken code before the fix lands.
+- **Revert a mutation with a targeted edit, never `git checkout <file>`.** The file usually also
+  holds the task's uncommitted work: one implementer's checkout revert wiped two of its own fixes.
+  It noticed and redid them, and the scoped re-review then had to prove the commit held them and no
+  leftover mutant (2026-10-20). Put this in the dispatch whenever a fix round includes a mutation.
 
 ## 4. Verify reports, including the reviewers'
 
