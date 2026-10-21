@@ -272,8 +272,10 @@ fix_beads() {
     return 0
   fi
   if [ "$(check_beads "$top" | jq -r .status)" = present ]; then
-    # what the house setup writes or removes; .beads/ also carries the issues export
-    emit_already beads "$top" "house beads setup already holds" .beads .gitattributes CLAUDE.md AGENTS.md .codex .agents/skills/beads
+    # what the house setup writes or removes; .beads/ also carries the issues export, which once
+    # committed changes with the user's own bd use and is no longer the ritual's to list
+    emit_already --skip-tracked .beads/issues.jsonl beads "$top" "house beads setup already holds" \
+      .beads .gitattributes CLAUDE.md AGENTS.md .codex .agents/skills/beads
     return 0
   fi
 
@@ -389,6 +391,14 @@ fix_beads() {
   # `check` does not require the interval (user-level config may supply it), so read back here
   local iv; iv="$(_beads_cfg_get "$top/.beads/config.yaml" export.interval)"
   [ "$iv" = 1ms ] || late+=("export.interval is '${iv:-unset}' in .beads/config.yaml after bd config set (want 1ms)")
+  # bd's pre-commit hook writes the issues export on every commit and stages nothing (measured, bd
+  # 1.2.2), so the ritual's own commit would leave it untracked; exported now, it is in `wrote`.
+  # Past the dirty-path gate, an existing one is tracked and clean, and the hook keeps it.
+  if [ ! -e "$top/.beads/issues.jsonl" ]; then
+    (cd "$top" && bd export -o .beads/issues.jsonl) >/dev/null 2>&1
+    [ -f "$top/.beads/issues.jsonl" ] \
+      || notes+=("bd export wrote no .beads/issues.jsonl; the first commit's hook will, and leave it untracked")
+  fi
   if [ -e "$top/.beads/PRIME.md" ]; then notes+=("kept the existing .beads/PRIME.md")
   else cp "$_BEADS_HOUSE/PRIME.md" "$top/.beads/PRIME.md"; fi
   if [ ! -e "$top/.beads/check-block.sh" ]; then

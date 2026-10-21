@@ -11,7 +11,8 @@ mkdir -p "$STUBDIR"
 # --- stub bd: logs argv, models the bd 1.2.2 side effects that matter here (measured on the real
 # binary: init writes .beads/, CLAUDE.md block, AGENTS.md, .codex/, .agents/, root .gitignore, sets
 # an ABSOLUTE core.hooksPath and commits; `dolt remote remove origin` errors when no Dolt remote
-# exists; config set writes config.yaml without committing; setup/prime exit 255 on success).
+# exists; config set writes config.yaml without committing; setup/prime exit 255 on success;
+# export -o writes the issues file).
 cat > "$STUBDIR/bd" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${STUB_BD_LOG:?}"
@@ -44,7 +45,9 @@ case "$1 ${2:-}" in
     if [ -n "${STUB_INIT_FAIL:-}" ]; then echo 'Error: produces an invalid database name' >&2; exit 1; fi
     printf '# Beads Configuration File\n# export:\n#   auto: false\nsync.remote: "git+origin"\n' > .beads/config.yaml
     printf '{"database":"dolt"}\n' > .beads/metadata.json
-    printf '#!/usr/bin/env sh\nexit 0\n' > .beads/hooks/pre-commit
+    # real bd 1.2.2's pre-commit exports the issues on every commit and stages nothing; its own
+    # init commit leaves no issues file behind (both measured)
+    printf '#!/usr/bin/env sh\nbd export -o .beads/issues.jsonl >/dev/null 2>&1\nexit 0\n' > .beads/hooks/pre-commit
     printf '# Beads / Dolt files (added by bd init)\n.dolt/\n' >> .gitignore
     paths=(.beads .gitignore AGENTS.md .codex .agents)
     if [ -z "${STUB_NO_SETUP:-}" ]; then
@@ -55,7 +58,7 @@ case "$1 ${2:-}" in
     printf 'x\n' > .codex/config.toml; printf 'x\n' > .agents/skills/beads/SKILL.md
     git config core.hooksPath "$(cygpath -w "$PWD/.beads/hooks")"
     git add -- "${paths[@]}" 2>/dev/null
-    git commit -q -m 'bd init: initialize beads issue tracking' 2>/dev/null
+    git commit -q --no-verify -m 'bd init: initialize beads issue tracking' 2>/dev/null
     if [ -n "${STUB_INIT_MUTATE:-}" ]; then printf 'bd was here\n' >> "$STUB_INIT_MUTATE"; fi
     exit "$rc" ;;
   "dolt remote")
@@ -74,6 +77,8 @@ case "$1 ${2:-}" in
   "config get")
     if [ "$3" = metrics.disabled ]; then printf '%s\n' "${STUB_METRICS-true}"; else printf '%s\n' "${STUB_GET-true}"; fi
     exit "$rc" ;;
+  "export -o")
+    printf '%s' "${STUB_ISSUES:-}" > "$3"; exit "$rc" ;;
   "setup claude")
     addblock CLAUDE.md; mkdir -p .claude; printf '{}\n' > .claude/settings.json; exit 255 ;;
   "prime "*) exit 255 ;;

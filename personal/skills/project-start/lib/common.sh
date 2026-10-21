@@ -81,16 +81,24 @@ pending_paths() {
   while IFS= read -r -d $'\036' rec; do printf '%s\0' "${rec:3}"; done <<<"$out"
 }
 
-# emit_already <id> <repo> <detail> <path>...: the result of a fix that had nothing to add. Those
-# of its own <path>... that still differ from HEAD (an earlier run set them up and was never
-# committed) go in `wrote`, so the commit step asks about them; a git that cannot answer that
-# makes the result `unknown`.
+# emit_already [--skip-tracked <file>]... <id> <repo> <detail> <path>...: the result of a fix that
+# had nothing to add. Those of its own <path>... that still differ from HEAD (an earlier run set
+# them up and was never committed) go in `wrote`, so the commit step asks about them; a git that
+# cannot answer that makes the result `unknown`. A --skip-tracked file counts only while untracked:
+# once committed, its changes are the user's own (bd's issues export).
 emit_already() {
-  local id="$1" repo="$2" detail="$3" out; shift 3
+  local -a skip=()
+  while [ "${1:-}" = --skip-tracked ]; do skip+=("$2"); shift 2; done
+  local id="$1" repo="$2" detail="$3" out s i; shift 3
   local -a p=()
   out="$(pending_paths "$repo" "$@" | tr '\0' '\036'; exit "${PIPESTATUS[0]}")" \
     || { emit "$id" unknown "$detail; could not tell whether its files are committed (git status failed)"; return 0; }
   [ -z "$out" ] || mapfile -d $'\036' -t p < <(printf '%s' "$out")
+  for s in "${skip[@]}"; do
+    git -C "$repo" --literal-pathspecs ls-files --error-unmatch -- "$s" >/dev/null 2>&1 || continue
+    for i in "${!p[@]}"; do [ "${p[$i]}" = "$s" ] && unset 'p[i]'; done
+  done
+  p=("${p[@]}")
   if [ "${#p[@]}" -gt 0 ]; then emit "$id" already "$detail; not yet committed: $(join_by ', ' "${p[@]}")" "${p[@]}"
   else emit "$id" already "$detail"; fi
 }

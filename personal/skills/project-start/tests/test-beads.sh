@@ -87,7 +87,7 @@ dt "$out" | grep -qF 'bd config set metrics.disabled true' && ok "metrics_absent
 
 # ============================== fix beads: clean tree, full sequence
 r="$(mkrepo "Beads Repo")"; logclear
-head0="$(git -C "$r" rev-parse HEAD)"
+head0="$(git -C "$r" rev-parse HEAD)"; pf "$r" > "$TMPROOT/beads-pf0.json"
 out="$(R fix beads "$r")"
 [ "$(st "$out")" = fixed ] && ok "fix_clean_tree_fixed" || bad "fix clean: $out"
 grep -qx 'init --non-interactive --prefix beadsrepo' "$LOG" && ok "fix_init_prefix_from_spaced_basename" || bad "init argv: $(cat "$LOG")"
@@ -114,9 +114,13 @@ grep -q '^init ' "$LOG" && ! grep -q 'setup claude' "$LOG" && ok "fix_setup_clau
 [ "$(st "$(R check beads "$r")")" = present ] && ok "fix_then_check_present" || bad "check after fix: $(R check beads "$r")"
 [ "$(git -C "$r" rev-list --count "$head0"..HEAD)" = 1 ] && ok "fix_only_bd_init_committed" || bad "commits: $(git -C "$r" log --oneline "$head0"..HEAD)"
 w="$(jq -c '.wrote|sort' <<<"$out")"
-for p in .beads/config.yaml .beads/PRIME.md .beads/check-block.sh .beads/.gitignore .gitattributes .beads/interactions.jsonl CLAUDE.md AGENTS.md .codex/config.toml .agents/skills/beads/SKILL.md; do
+for p in .beads/config.yaml .beads/PRIME.md .beads/check-block.sh .beads/.gitignore .gitattributes .beads/interactions.jsonl .beads/issues.jsonl CLAUDE.md AGENTS.md .codex/config.toml .agents/skills/beads/SKILL.md; do
   jq -e --arg p "$p" 'index($p)' <<<"$w" >/dev/null || { bad "wrote lacks $p: $w"; w=MISSING; }; done
-[ "$w" != MISSING ] && [ "$(jq length <<<"$w")" = 10 ] && ok "fix_wrote_lists_exactly_the_changed_paths" || bad "wrote: $w"
+[ "$w" != MISSING ] && [ "$(jq length <<<"$w")" = 11 ] && ok "fix_wrote_lists_exactly_the_changed_paths" || bad "wrote: $w"
+# bd's pre-commit hook writes the issues export on the ritual's own commit; exported here first, it
+# is in that commit instead of left behind untracked (measured on real bd 1.2.2, 2026-10-21)
+grep -qx 'export -o .beads/issues.jsonl' "$LOG" && [ -f "$r/.beads/issues.jsonl" ] \
+  && ok "fix_exports_the_issues_file" || bad "no issues export: $(cat "$LOG")"
 grep -qx 'dolt remote list' "$LOG" && ! dt "$out" | grep -q 'unverified' && ok "fix_dolt_no_remotes_answer_is_verified" || bad "no-remotes answer: $out"
 
 # rerun
@@ -125,12 +129,28 @@ logclear; out="$(R fix beads "$r")"
 [ "$(st "$out")" = already ] && [ "$(logn)" = 0 ] \
   && ok "fix_rerun_already" || bad "rerun: $out; log=$(cat "$LOG")"
 # I1: the fix was never committed, so the rerun lists exactly what the fix wrote, for the commit step
-[ "$(jq -c '.wrote|sort' <<<"$out")" = "$w1" ] && [ "$(jq length <<<"$w1")" = 10 ] && dt "$out" | grep -qF 'not yet committed' \
+[ "$(jq -c '.wrote|sort' <<<"$out")" = "$w1" ] && [ "$(jq length <<<"$w1")" = 11 ] && dt "$out" | grep -qF 'not yet committed' \
   && ok "fix_rerun_lists_the_uncommitted_house_files" || bad "rerun wrote: $(jq -c '.wrote|sort' <<<"$out") vs fix $w1"
-git -C "$r" add -A && git -C "$r" commit -q --no-verify -m 'ritual'
+# the ritual's own commit, with bd's hook running, leaves nothing behind
+printf 'ritual\n' > "$TMPROOT/beads-msg"; mapfile -t P < <(jq -r '.[]' <<<"$w1" | tr -d '\r')
+c="$(R commit "$r" --preflight "$TMPROOT/beads-pf0.json" --message-file "$TMPROOT/beads-msg" -- "${P[@]}")"
+[ "$(st "$c")" = fixed ] && [ -z "$(git -C "$r" status --porcelain=v1 --untracked-files=all)" ] \
+  && ok "ritual_commit_with_the_export_hook_leaves_a_clean_tree" || bad "ritual commit: $c; status: $(git -C "$r" status --porcelain=v1 --untracked-files=all)"
 logclear; out="$(R fix beads "$r")"
 [ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = '[]' ] && [ "$(logn)" = 0 ] \
   && ok "fix_rerun_after_the_commit_lists_nothing" || bad "rerun after commit: $out; log=$(cat "$LOG")"
+# once tracked, the issues file changes with the user's own bd use: their data, not a leftover
+printf '{"id":"beadsrepo-1"}\n' >> "$r/.beads/issues.jsonl"
+out="$(R fix beads "$r")"
+[ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = '[]' ] \
+  && ok "already_skips_a_tracked_issues_file_the_user_changed" || bad "tracked issues file: $out"
+git -C "$r" checkout -q -- .beads/issues.jsonl
+# ...but an untracked one is what an older ritual's commit left behind, so it is still listed
+git -C "$r" rm -q --cached -- .beads/issues.jsonl && git -C "$r" commit -q --no-verify -m untrack
+out="$(R fix beads "$r")"
+[ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = '[".beads/issues.jsonl"]' ] \
+  && ok "already_lists_an_untracked_issues_file" || bad "untracked issues file: $out"
+git -C "$r" add -- .beads/issues.jsonl && git -C "$r" commit -q --no-verify -m retrack
 # R58: SKILL.md runs `fix beads` with no flags when check beads says present. On a set-up repo that
 # is a no-op even with the user's work dirty: no bd call (so no init), no stash, no byte written.
 snap() {
@@ -174,6 +194,19 @@ if [ "${RITUAL_REAL_BD:-}" = 1 ]; then
     [ "$(git -C "$r" config core.hooksPath)" = .beads/hooks ] && ok "real_bd_hookspath_relative" || bad "real bd hooksPath: $(git -C "$r" config core.hooksPath)"
     grep -q 'invalid database name' <<<"$out" && bad "real bd rejected the prefix" || ok "real_bd_prefix_accepted_in_spaced_dir"
     same_user_state "$pre" "$post" && [ -z "$(git -C "$r" stash list)" ] && ok "real_bd_stash_roundtrip_exact" || bad "real bd stash: pre=$pre post=$post"
+    # the `already` path: the ritual's commit runs bd's real pre-commit export, then reruns
+    printf '%s' "$pre" > "$TMPROOT/real-pf.json"; printf 'ritual\n' > "$TMPROOT/real-msg"
+    mapfile -t P < <(jq -r '.wrote[]' <<<"$out" | tr -d '\r')
+    c="$(bash "$RITUAL" commit "$r" --preflight "$TMPROOT/real-pf.json" --message-file "$TMPROOT/real-msg" -- "${P[@]}")"
+    [ "$(st "$c")" = fixed ] && [ -z "$(git -C "$r" status --porcelain=v1 --untracked-files=all -- .beads)" ] \
+      && ok "real_bd_ritual_commit_leaves_no_beads_leftover" || bad "real bd commit: $c; $(git -C "$r" status --porcelain=v1 --untracked-files=all -- .beads)"
+    o2="$(bash "$RITUAL" fix beads "$r")"
+    [ "$(st "$o2")" = already ] && [ "$(jq -c .wrote <<<"$o2")" = '[]' ] \
+      && ok "real_bd_rerun_after_the_commit_lists_nothing" || bad "real bd rerun: $o2"
+    (cd "$r" && bd create "probe issue" >/dev/null 2>&1)
+    o3="$(bash "$RITUAL" fix beads "$r")"
+    [ -n "$(git -C "$r" status --porcelain=v1 -- .beads/issues.jsonl)" ] && [ "$(st "$o3")" = already ] && [ "$(jq -c .wrote <<<"$o3")" = '[]' ] \
+      && ok "real_bd_already_skips_the_users_new_issue (control: the export changed)" || bad "real bd after create: $o3; $(git -C "$r" status --porcelain=v1 -- .beads)"
     echo "  (real bd commits: $(git -C "$r" log --format='%h %s' -3 | paste -sd '|' -))"
   fi
 else
