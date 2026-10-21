@@ -180,7 +180,12 @@ Ask only what `due` offered and what is not already in place.
 - **`workspace`.** No script answers this one. If `CLAUDE.md` is missing, draft one. If it exists
   (including one `bd init` just wrote), propose **additions** as a diff: the test command from
   `oracle`, the stack, and the decision record (`docs/superpowers/specs`). Also propose a
-  `.claude/settings.json` permission allow-list covering the oracle's commands.
+  `.claude/settings.json` permission allow-list covering the oracle's commands. **`bd init`
+  writes a `.claude/settings.json` of its own**, holding a SessionStart hook that runs
+  `bd prime --hook-json`. So read the file first and merge the `permissions` key into it, and
+  check `git diff` shows additions only. A Write that reports "updated" rather than "created" has
+  replaced a file you had not seen: measured 2026-10-21 in swarm-music, where it dropped bd's
+  hook, which was restored before the commit.
 - **`untracked-docs`.** `present` lists untracked files under `docs/`. Leave out every path this
   run already wrote (such as `docs/parking-lot.md` from `auto`: it is in the commit already), and
   offer to commit the rest with the ritual's commit.
@@ -188,7 +193,12 @@ Ask only what `due` offered and what is not already in place.
   `house/parking-rule.md` beside this file) under `## Working rules`, leaving the existing line
   alone.
 - **`beads-seed`**, only when Beads is set up. Show `candidates`' items (text and source) as a list,
-  and let the user pick which become issues. Create each picked one with `bd create`, and confirm
+  and let the user pick which become issues. **Look at where the candidates come from first.**
+  `candidates` lists unchecked plan boxes, and in a repo whose plans never tick their boxes those
+  are finished milestones: in swarm-music on 2026-10-21, all 50 came from the shipped M1 plan.
+  When that is the case, say so. Then offer the open work the records and the parent plan name, or
+  a read-only sweep of the docs and memory. Have that sweep mark each item OPEN, DONE or UNKNOWN
+  with what it searched, because a deferred list decays like the code it tracks. Create each picked one with `bd create`, and confirm
   it by listing the issues: bd's exit code is not evidence, since several bd commands exit 255 on
   success. When `bd create` ran, put `.beads/issues.jsonl` in `model.json` (below): neither
   `bd create` nor bd's hook stages it, and it is how the issues reach other clones.
