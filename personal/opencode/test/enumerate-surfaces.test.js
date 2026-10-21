@@ -167,3 +167,16 @@ describe("guards (M3)", () => {
     expect(keys(enumerate({ ocTools: ["_leading", "x_y"], mcpServers: [""] }))).toEqual(["_leading", "x_y"]);
   });
 });
+
+describe("core and personal layout (0.15.2)", () => {
+  test("core's rules/ and scripts/ and personal's dependencies key are not reported", () => {
+    const core = plug("core", { "rules/a.md": "x", "scripts/promote-to-core.sh": "x", ".claude-plugin/plugin.json": { name: "core" } });
+    const personal = plug("personal", { ".claude-plugin/plugin.json": { name: "personal", version: "0.15.2", dependencies: ["core"] }, "opencode/adapter.js": "1" });
+    expect(enumerate({ plugins: [core, personal] })).toEqual([]);
+  });
+  test("rules/ and scripts/ in a plugin not named core are still reported", () => {
+    const other = plug("not-core", { "rules/a.md": "x", "scripts/x.sh": "x" });
+    const r = enumerate({ plugins: [other] });
+    expect(r.map((u) => `${u.where}|${u.key}`).sort()).toEqual(["plugin:not-core|rules", "plugin:not-core|scripts"]);
+  });
+});

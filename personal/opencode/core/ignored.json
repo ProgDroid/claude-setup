@@ -145,7 +145,8 @@
     "license": "plugin metadata, no behaviour",
     "keywords": "plugin metadata, no behaviour",
     "displayName": "plugin metadata, no behaviour",
-    "homepage": "plugin metadata, no behaviour"
+    "homepage": "plugin metadata, no behaviour",
+    "dependencies": "OC loads each enabled plugin on its own; the key only affects which plugins CC installs"
   },
   "pluginEntries": {
     "README.md": "repo metadata",
@@ -187,6 +188,8 @@
     "claude-code-setup:automation-recommender-example.png": "documentation or repository metadata inside a plugin; not a load surface",
     "claude-md-management:claude-md-improver-example.png": "documentation or repository metadata inside a plugin; not a load surface",
     "claude-md-management:revise-claude-md-example.png": "documentation or repository metadata inside a plugin; not a load surface",
+    "core:rules": "reaches OC through the ~/.claude/rules/core link, which rules.js walks (following symlinks) and v1/plugin.js passes to OC as instructions; not a load surface by directory name",
+    "core:scripts": "promote-to-core.sh runs by path from the dev clone; CC never loads it",
     "explanatory-output-style:hooks-handlers": "plugin payload (scripts, templates, data) reached through CLAUDE_PLUGIN_ROOT by its hooks or commands; not itself a load surface",
     "personal:opencode": "this adapter itself; loaded by the user's OC config loader, not a CC load surface",
     "qmd:qmd": "qmd skill directories (spec 5.3); loaded through the skills path",
