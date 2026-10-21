@@ -26,8 +26,16 @@ STUB="$TMPROOT/stub-empty"; mkgh "$STUB" "" 0
 out="$(sweep "$r")"; [ "$(st "$out")" = unknown ] && ok "gh_empty_output_unknown" || bad "gh_empty: $out"
 STUB="$TMPROOT/stub-weird"; mkgh "$STUB" "SOMETHING" 0
 out="$(sweep "$r")"; [ "$(st "$out")" = unknown ] && ok "gh_unknown_value_unknown" || bad "gh_weird: $out"
-out="$(PATH="$(path_without gh)" bash "$RITUAL" check public-sweep "$r")"
-[ "$(st "$out")" = unknown ] && ok "gh_missing_unknown" || bad "gh_missing_unknown: $out"
+# No gh by any route: a PATH of only the tools check public-sweep runs (dirname, git, jq, base64).
+# Not path_without gh: on CI gh shares /usr/bin with bash. The control proves gh is really unreachable.
+NOGH="$(sealed_bin "$TMPROOT/sealed-no-gh" dirname git jq base64)" || NOGH=""
+if [ -n "$NOGH" ] && ! PATH="$NOGH" command -v gh >/dev/null 2>&1; then
+  out="$(PATH="$NOGH" "$ABS_BASH" "$RITUAL" check public-sweep "$r")"
+  [ "$(st "$out")" = unknown ] && [ "$(jq -r .detail <<<"$out")" = "gh not installed; visibility not checked" ] \
+    && ok "gh_missing_unknown" || bad "gh_missing_unknown: $out"
+else
+  bad "gh_missing_unknown: could not build a gh-free PATH (control)"
+fi
 # gh must run from inside the repo
 mkdir -p "$TMPROOT/stub-pwd"
 printf '#!/usr/bin/env bash\ncase "$PWD" in *"ritual fixtures"*) echo PUBLIC;; *) echo PRIVATE;; esac\n' > "$TMPROOT/stub-pwd/gh"; chmod +x "$TMPROOT/stub-pwd/gh"

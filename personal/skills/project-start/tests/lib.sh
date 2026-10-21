@@ -51,3 +51,21 @@ path_without() {
   set +f
   printf '%s\n' "$out"
 }
+
+# sealed_bin <dir> <tool>...: make <dir> hold a wrapper for each <tool>, resolved from the current
+# PATH, and print <dir>. A PATH of just that directory reaches exactly those tools. Use it where
+# path_without would be a trap: on GitHub's ubuntu-latest gh sits in /usr/bin with bash and
+# coreutils, so dropping gh's directory drops bash. Run the script under test by absolute path
+# (ABS_BASH), since bash itself is not on a sealed PATH. Fails (and prints nothing) when a tool is
+# not found, so a missing tool is an error here rather than a silent hole in the test.
+ABS_BASH="$(command -v bash)"
+sealed_bin() {
+  local dir="$1" t p; shift
+  mkdir -p "$dir"
+  for t in "$@"; do
+    p="$(command -v "$t")" && [ -n "$p" ] && [ -x "$p" ] || { echo "sealed_bin: no $t on PATH" >&2; return 1; }
+    printf '#!%s\nexec "%s" "$@"\n' "$ABS_BASH" "$p" > "$dir/$t"
+    chmod +x "$dir/$t"
+  done
+  printf '%s\n' "$dir"
+}
