@@ -41,7 +41,7 @@ claude plugin install core@progdroid
 claude plugin update personal@progdroid
 ```
 
-`personal` loads again at 0.15.0. An existing cloud environment needs the same treatment: its setup
+`personal` loads again at its current version. An existing cloud environment needs the same treatment: its setup
 script now lists `core@progdroid` ahead of `personal@progdroid`, so paste the current
 `snippets/cloud-setup.sh` into the environment once.
 

@@ -145,7 +145,7 @@ _ss_interrupt_detail() {
 # without `git hook run`. failed = the block is in the hook git runs but the proof did not fire
 # (the cause is in detail), the proof's side effects could not be undone, or it was interrupted.
 check_secret_scan() {
-  local repo="$1" top hook gl def h swept found=() res rc sig
+  local repo="$1" top hook gl def h swept found=() res rc sig hook_usage
   top="$(git -C "$repo" rev-parse --show-toplevel)" || die "cannot resolve repo root: $repo"
   swept="$(_ss_sweep "$top")"
   hook="$(_ss_hook "$top")"
@@ -160,7 +160,11 @@ check_secret_scan() {
   if [ "${#found[@]}" -eq 0 ]; then
     emit secret-scan absent "${swept}no ritual secret-scan block in $hook"; return 0
   fi
-  if ! git -C "$top" hook run --ignore-missing ritual-nonexistent-hook </dev/null >/dev/null 2>&1; then
+  # Ask git for the subcommand's own usage rather than running a hook by name: git 2.36+ has
+  # `git hook run`, and newer git (seen on 2.55) refuses an unknown hook name outright, so the
+  # old probe (a made-up hook) read as "no git hook run" and no proof ever ran. -h runs nothing.
+  hook_usage="$(git -C "$top" hook run -h 2>&1 </dev/null)"   # exits 129 by design; read the text, not the status
+  if [[ "$hook_usage" != *'usage: git hook run'* ]]; then
     emit secret-scan unknown "${swept}this git has no 'git hook run' (needs 2.36+); the hook cannot be proved"; return 0
   fi
   # An interrupt must not return before the proof has cleaned up: these traps only record the

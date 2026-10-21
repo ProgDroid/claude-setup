@@ -1,7 +1,7 @@
 {
   "name": "personal",
   "description": "Personal agents and hard-won Claude Code behaviour",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "dependencies": ["core"],
   "author": {
     "name": "ProgDroid"
