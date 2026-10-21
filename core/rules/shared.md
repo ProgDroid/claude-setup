@@ -10,7 +10,7 @@ Source: core rules (ProgDroid/claude-setup).
 - When compacting, preserve: the file paths being edited, test failure messages, architecture decisions made this session.
 - Plain phrasing, no excess emphasis markers. With extended thinking off, avoid the word "think" (use consider, evaluate, believe).
 - Human-in-the-loop steps ask for recognition (pick from candidates, confirm a match, same or different), never recall of a name, id, date or path. Let the machine group; the human names the groups.
-- Friction decides adoption. Never design a solution that adds a step the user must remember; put the remembering on the agent.
+- Friction decides adoption: never add a step the user must remember; put the remembering on the agent.
 - Where OpenCode runs, changes to skills, hooks or plugins keep OpenCode parity, verified against the parity line (`loader ok personal@…`) and a live OpenCode start, never assumed.
 - Scratch is temporary. Before closing, move what would cost real time to re-derive out of gitignored scratch (agent workspaces, scratchpads, `/tmp`) into `docs/`: decisions and why, reversals, measured facts, near-misses, checklists a human must run later. Tell: a summary in chat while its evidence sits in a directory about to be deleted.
 
