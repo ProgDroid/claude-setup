@@ -66,7 +66,7 @@ out="$(R fix beads "$r" --stash)"; post="$(pf "$r")"
   && same_user_state "$pre" "$post" && [ -z "$(git -C "$r" stash list)" ] \
   && ok "fix_stash_roundtrip_150_dirty_files" || bad "150 roundtrip: $(st "$out"); $(dt "$out" | head -c 300); stash=$(git -C "$r" stash list)"
 w="$(jq -c '.wrote|sort' <<<"$out")"
-[ "$(jq length <<<"$w")" = 10 ] && jq -e 'index(".beads/config.yaml") and index("CLAUDE.md") and index(".gitattributes")' <<<"$w" >/dev/null \
+[ "$(jq length <<<"$w")" = 11 ] && jq -e 'index(".beads/config.yaml") and index("CLAUDE.md") and index(".gitattributes") and index(".beads/issues.jsonl")' <<<"$w" >/dev/null \
   && ok "fix_stash_150_wrote_lists_the_bd_paths" || bad "150 wrote: $w"
 
 r="$(big_fixture "Big Mutate")"; logclear
