@@ -396,6 +396,23 @@ COMMITDOC=$(printf 'git commit -F - <<%sEOF%s\nuse `make` here\nEOF' "'" "'")
   && ok "git commit -F - with a backtick in the heredoc body allowed (the remedy)" \
   || bad "rule 3 denies its own remedy"
 
+# -m is a FLAG, not a substring. Measured 2026-10-21 (swarm-music): a `git commit -F "$M"`
+# whose message file was handoff-msg.txt, in a command that also ran $(git diff ...), was
+# denied: "-msg" contained "-m". The three DENY cases pin what the fix must still catch.
+FILEMSG='M=/tmp/handoff-msg.txt; [ -z "$(git diff --cached --name-only)" ] && git commit -q -F "$M" -- NEXT.md'
+[ "$(verdict_any "$FILEMSG")" = ALLOW ] \
+  && ok "git commit -F with '-m' inside a filename allowed" \
+  || bad "rule 3 read '-m' inside a filename as the -m flag"
+[ "$(verdict_any 'git commit -qm "fix $(date)"')" = DENY ] \
+  && ok "bundled -qm with \$( denied" \
+  || bad "rule 3 missed a bundled -qm"
+[ "$(verdict_any 'git commit -am "fix $(date)"')" = DENY ] \
+  && ok "bundled -am with \$( denied" \
+  || bad "rule 3 missed a bundled -am"
+[ "$(verdict_any 'git commit --message="fix $(date)"')" = DENY ] \
+  && ok "--message= with \$( denied" \
+  || bad "rule 3 missed --message="
+
 # grep is per LINE: 'git' and 'commit' on different lines never matched together.
 # Pinned because a whole-string regex would read the newline as [[:space:]].
 SPLITGIT=$(printf 'git\ncommit -m "$(x)"')

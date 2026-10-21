@@ -183,8 +183,15 @@ fi
 
 # 3. git commit -m containing a backtick or $( -> bash command substitution silently
 #    rewrites the commit message.
+#
+#    FIXED 2026-10-21. "-m" was a substring test, which is wrong both ways. It denied
+#    `git commit -F "$M"` whose message file was handoff-msg.txt (in a command that also
+#    ran $(git diff ...)), and it passed bundled flags such as -qm and -am, where a letter
+#    sits between the dash and the m. Now -m must be a flag: a dash-led token at the start
+#    or after whitespace, letters then m, or --message. Regression: test-windows-guard.sh.
+commit_msg_flag_re='(^|[[:space:]])(-[A-Za-z]*m|--message)([[:space:]="'"'"']|$)'
 if [[ -z "$deny" ]] && any_line 'git[[:space:]]+commit' commit \
-   && [[ "$scan" == *-m* ]] \
+   && [[ "$scan" =~ $commit_msg_flag_re ]] \
    && [[ "$scan" == *'`'* || "$scan" == *'$('* ]]; then
     deny="git commit -m with a backtick or \$( triggers command substitution and mangles the message silently. Use: git commit -F - with a single-quoted heredoc (<<'EOF' ... EOF)."
 fi
