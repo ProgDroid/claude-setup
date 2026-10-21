@@ -74,11 +74,14 @@ claude plugin marketplace list 2>&1 | sed 's/^/[setup]   /' || true
 # 2. Install plugins. Each is a git clone; keep the list tight.
 #    Names must match the marketplace entry's `name`, not plugin.json's.
 # ---------------------------------------------------------------------------
-# `personal` depends on `core`: its install below also installs `core`, and on an environment that
-# already has `personal` from before 0.15.0 the per-session `claude plugin install personal@progdroid`
-# brings `core` in too (a plain `update` does not, and leaves `personal` failed to load).
+# `personal` depends on `core`, so `core@progdroid` is listed BEFORE `personal@progdroid`. On an
+# environment that already has `personal` from before 0.15.0, `claude plugin install personal@progdroid`
+# only replies "already installed" and does NOT pull `core` (measured), leaving `personal` failed to
+# load; installing `core` by name is what fixes it. This does not self-heal an existing environment
+# unless this script has been re-pasted into it.
 PLUGINS="
 superpowers@superpowers-dev
+core@progdroid
 personal@progdroid
 context7@claude-plugins-official
 commit-commands@claude-plugins-official

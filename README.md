@@ -31,11 +31,19 @@ So anything that should work both locally and in a cloud session lives here rath
 ## Upgrading from 0.14.x
 
 `personal` 0.15.0 declares `core` as a dependency. A fresh `claude plugin install personal@progdroid`
-installs both. An existing install is different: `claude plugin update personal@progdroid` moves to
-0.15.0 but does not install `core`, and `personal` then shows "failed to load" (measured on claude
-2.1.304). Run `claude plugin install personal@progdroid` once after updating; it reports
-"+ 1 dependency: core" and both load. Cloud environments do this on their own, because the setup
-script runs that install every session.
+installs both. An existing install is different. After `claude plugin marketplace update progdroid`,
+the installed `personal` 0.14.x shows "failed to load: Dependency core@progdroid is not installed",
+and `claude plugin install personal@progdroid` only replies "already installed" without pulling
+`core` (measured). Install `core` by name, then update `personal`:
+
+```bash
+claude plugin install core@progdroid
+claude plugin update personal@progdroid
+```
+
+`personal` loads again at 0.15.0. An existing cloud environment needs the same treatment: its setup
+script now lists `core@progdroid` ahead of `personal@progdroid`, so paste the current
+`snippets/cloud-setup.sh` into the environment once.
 
 ## Use it in a repo
 
