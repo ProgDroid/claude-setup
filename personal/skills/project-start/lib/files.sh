@@ -102,11 +102,15 @@ _ws_member() {
   return 1
 }
 
-# Canonical table from the include (RITUAL_RUST_INCLUDE overrides the path, for tests): from
-# "[lints.clippy]" up to the next blank line or next "[" header. Prints nothing when the include
-# or the table is missing.
+# Where the canonical table lives: the core plugin's rust-standards skill (RITUAL_RUST_INCLUDE
+# overrides the path, for tests).
+_clippy_src() { printf '%s' "${RITUAL_RUST_INCLUDE:-$HOME/.claude/plugins/marketplaces/progdroid/core/skills/rust-standards/SKILL.md}"; }
+
+# Canonical table from that file: from "[lints.clippy]" up to the next blank line, next "[" header
+# or code fence. Prints nothing when the file or the table is missing; fix_stack_checks turns an
+# empty table into an explicit unknown result naming the path.
 _clippy_table() {
-  local src="${RITUAL_RUST_INCLUDE:-$HOME/.claude/includes/rust.md}"
+  local src; src="$(_clippy_src)"
   [ -r "$src" ] || return 0
   tr -d '\r' < "$src" | awk '/^\[lints\.clippy\][[:space:]]*$/ { on = 1; print; next }
        on && (/^[[:space:]]*$/ || /^\[/ || /^```/) { exit }
@@ -167,7 +171,7 @@ fix_stack_checks() {
     # only a single-crate root ([package], no [workspace]); anything else is the user's call
     if [[ "${res#*$'\t'}" == *"workspace: needs ask"* ]]; then asks="${asks:+$asks; }$rel: workspace: needs ask"; continue; fi
     if ! _cargo_has "$f" package; then asks="${asks:+$asks; }$rel: no [package]: needs ask"; continue; fi
-    if [ -z "$table" ]; then unk="${unk:+$unk; }canonical [lints.clippy] table not found in the rust include"; continue; fi
+    if [ -z "$table" ]; then unk="${unk:+$unk; }canonical clippy table not found at $(_clippy_src)"; continue; fi
     bak="$(mktemp)" || { unk="${unk:+$unk; }cannot make backup"; continue; }
     cp -p "$f" "$bak"
     lock="$base/Cargo.lock"; lockbak=""   # cargo metadata may create or rewrite Cargo.lock

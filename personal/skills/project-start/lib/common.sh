@@ -48,21 +48,21 @@ run_timeout() {
 
 # _watchdog_timeout <secs> <cmd> [args...]: run_timeout without timeout(1). TERM goes to <cmd>'s
 # own pid only (a grandchild holding stdout would outlive it; gh is one process). The watchdog's
-# output goes to /dev/null, or a $(...) around the call would wait for its sleep to end. A watchdog
-# still alive when <cmd> returns means <cmd> beat the clock.
+# output goes to /dev/null, or a $(...) around the call would wait for its sleep to end. Whether
+# <cmd> timed out is decided by what the watchdog DID, never by whether it is still alive (it can
+# be alive for an instant after sending TERM): it exits 124 once it has sent TERM, so after <cmd>
+# returns the watchdog is killed and reaped, and 124 means it got there first, while 143 (killed
+# while sleeping) means <cmd> beat the clock.
 _watchdog_timeout() {
-  local s="$1" pid wd rc; shift
+  local s="$1" pid wd rc wrc; shift
   "$@" &
   pid=$!
-  ( sleep "$s"; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  ( sleep "$s"; kill -TERM "$pid" 2>/dev/null; exit 124 ) >/dev/null 2>&1 &
   wd=$!
   wait "$pid"; rc=$?
-  if kill -0 "$wd" 2>/dev/null; then
-    kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null
-    return "$rc"
-  fi
-  wait "$wd" 2>/dev/null
-  return 124
+  kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null; wrc=$?
+  [ "$wrc" = 124 ] && return 124
+  return "$rc"
 }
 
 # join_by <sep> <item...> -> the items joined with <sep> (nothing for no items).

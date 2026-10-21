@@ -11,6 +11,16 @@ sessions clone the pushed repo, not your working tree.
 two marketplaces and nine plugins produced `No plugins installed` and only the built-in marketplace
 registered. See the root `README.md`. Pair this snippet with `cloud-setup.sh`.
 
+## `work-machine-setup.md`
+
+A prompt for a Claude Code-only work machine (Linux) whose `~/.claude` dotfiles have drifted. Run
+`claude plugin marketplace add ProgDroid/claude-setup` once, then hand a session the file at
+`~/.claude/plugins/marketplaces/progdroid/snippets/work-machine-setup.md`. It walks the session through six
+steps, each of which reports and waits for approval before anything destructive: inventory what the
+dotfiles track, sweep for secrets (history included), script the plugin install and rules link, retire the
+hand-copied `capture-learnings` and includes, trim `CLAUDE.md` of what `core` rules carry, and verify by
+effect after a restart.
+
 ## `cloud-setup.sh`
 
 The script that actually installs what `project-settings.json` declares.
@@ -45,7 +55,7 @@ the checkout via git sparse-checkout, which would cut clone time on large market
 | Plugin | Reason |
 |---|---|
 | `superpowers` | brainstorming / writing-plans / TDD workflow — the core process toolkit |
-| `personal` | own agents, commands, working-style skill |
+| `personal` | own agents, commands (depends on `core`, installed with it) |
 | `context7` | live library docs |
 | `frontend-design`, `commit-commands`, `claude-md-management`, `security-guidance` | general-purpose, cheap to carry |
 

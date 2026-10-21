@@ -224,6 +224,28 @@ out="$(RITUAL_RUST_INCLUDE="$TMPROOT/nonexistent.md" PATH="$stubs:$PATH" R fix s
 [ "$(st "$out")" = unknown ] && cmp -s "$r/Cargo.toml" "$TMPROOT/cargo.before" \
   && ok "clippy_missing_include_is_unknown" || bad "no include: $out"
 
+# default include path (no RITUAL_RUST_INCLUDE): every test above injects a fixture, which is how
+# the dependency on the real rust-standards skill file went unseen. The fixture HOME holds a copy
+# of the worktree's REAL core/skills/rust-standards/SKILL.md.
+REAL_RUST_SKILL="$SKILL_DIR/../../../core/skills/rust-standards/SKILL.md"
+fxhome="$TMPROOT/fx home"; rel_skill=".claude/plugins/marketplaces/progdroid/core/skills/rust-standards/SKILL.md"
+mkdir -p "$fxhome/$(dirname "$rel_skill")"; cp "$REAL_RUST_SKILL" "$fxhome/$rel_skill"
+tbl="$( . "$SKILL_DIR/lib/common.sh"; . "$SKILL_DIR/lib/files.sh"; unset RITUAL_RUST_INCLUDE; HOME="$fxhome" _clippy_table )"
+[ -n "$tbl" ] && [ "$(printf '%s\n' "$tbl" | head -n 1)" = '[lints.clippy]' ] && printf '%s\n' "$tbl" | grep -qx 'pedantic = { level = "warn", priority = -1 }' \
+  && ok "clippy_table_default_path_reads_core_rust_standards" || bad "default path table: [$tbl]"
+r="$(mkrepo)"; printf '%s' "$cargo_single" > "$r/Cargo.toml"
+out="$(unset RITUAL_RUST_INCLUDE; HOME="$fxhome" PATH="$stubs:$PATH" R fix stack-checks "$r")"
+[ "$(st "$out")" = fixed ] && grep -qxF '[lints.clippy]' "$r/Cargo.toml" && grep -qxF 'nursery = { level = "warn", priority = -1 }' "$r/Cargo.toml" \
+  && ok "clippy_default_path_fix_appends_real_table" || bad "default path fix: $out"
+
+# default path, file missing -> unknown naming the path it looked at, nothing written
+nohome="$TMPROOT/no home"; mkdir -p "$nohome"
+r="$(mkrepo)"; printf '%s' "$cargo_single" > "$r/Cargo.toml"; cp "$r/Cargo.toml" "$TMPROOT/cargo.before2"
+out="$(unset RITUAL_RUST_INCLUDE; HOME="$nohome" PATH="$stubs:$PATH" R fix stack-checks "$r")"
+[ "$(st "$out")" = unknown ] && cmp -s "$r/Cargo.toml" "$TMPROOT/cargo.before2" \
+  && jq -r .detail <<<"$out" | grep -qF "canonical clippy table not found at $nohome/$rel_skill" \
+  && ok "clippy_missing_default_skill_is_unknown_naming_path" || bad "missing default: $out"
+
 # python / flutter: never written
 r="$(mkrepo)"; printf '[project]\nname="p"\n' > "$r/pyproject.toml"
 cp "$r/pyproject.toml" "$TMPROOT/py.before"

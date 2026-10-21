@@ -326,7 +326,20 @@ const semverDesc = (a, b) => {
 };
 function findGuard() {
   if (process.env.CCP_GUARD) return process.env.CCP_GUARD;
-  const root = path.join(os.homedir(), ".claude", "plugins", "cache", "progdroid", "personal");
+  const cache = path.join(os.homedir(), ".claude", "plugins", "cache", "progdroid");
+  // core is unversioned: its cache directory names are not semver, so take the newest by mtime.
+  const coreRoot = path.join(cache, "core");
+  const coreDirs = fs.existsSync(coreRoot)
+    ? fs.readdirSync(coreRoot, { withFileTypes: true }).filter((d) => d.isDirectory())
+        .map((d) => ({ d: path.join(coreRoot, d.name), t: fs.statSync(path.join(coreRoot, d.name)).mtimeMs }))
+        .sort((a, b) => b.t - a.t)
+    : [];
+  for (const { d } of coreDirs) {
+    const f = path.join(d, "hooks", "negative-result-guard.sh");
+    if (fs.existsSync(f)) return f;
+  }
+  // Fallback: an older personal install that still ships the guard.
+  const root = path.join(cache, "personal");
   const vers = fs.existsSync(root) ? fs.readdirSync(root).filter((v) => /^\d+\.\d+\.\d+$/.test(v)).sort(semverDesc) : [];
   for (const v of vers) {
     const f = path.join(root, v, "hooks", "negative-result-guard.sh");
@@ -341,7 +354,7 @@ const bashExe = () => {
 // Runs the guard with a scratch HOME so its debug log never touches the real one.
 function runGuard(payload) {
   const guard = findGuard();
-  if (!guard) throw new Error("negative-result-guard.sh not found: set CCP_GUARD or install the personal plugin");
+  if (!guard) throw new Error("negative-result-guard.sh not found: set CCP_GUARD or install the core plugin (cache/progdroid/core/*/hooks) or an older personal plugin (cache/progdroid/personal/<semver>/hooks)");
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "ccp-guard-"));
   try {
     const r = spawnSync(bashExe(), [guard], { input: JSON.stringify(payload), encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } });

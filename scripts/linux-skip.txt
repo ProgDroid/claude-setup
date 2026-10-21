@@ -1,0 +1,6 @@
+# <path> # reason. Honoured only when uname is Linux. Entries are test-harness problems found 2026-10-19 by the first Linux run; none was a hook bug confirmed.
+personal/hooks/test-earlier-cloud-work.sh # M5 case assumes a slow fetch (2s shimmed ls-remote vs 3s budget); local fetch finishes in budget on Linux, so 2 assertions fail
+personal/skills/project-start/tests/test-beads.sh # test calls cygpath (Windows only) for the absolute-windows-form case
+personal/skills/project-start/tests/test-e2e.sh # test calls cygpath (Windows only) for the winget route case
+personal/skills/project-start/tests/test-secretscan.sh # cygpath (Windows only) plus LOCALAPPDATA/WinGet gitleaks fallback cases; 6 assertions fail even with gitleaks installed
+personal/opencode/test/runner-d2d3.test.js # D2 case spawns a real Git Bash under a spaced home and fails on Linux (no winTest guard); the file mixes Windows-only cases

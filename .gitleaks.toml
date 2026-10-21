@@ -1,0 +1,26 @@
+# gitleaks config for this repo: the default rules, plus one rule for every Anthropic key shape.
+#
+# Measured on gitleaks 8.30.1 (2026-10-17): the defaults catch the api03 and
+# admin01 shapes but NOT the usr shape (106 characters in all), so a key of a kind
+# the defaults have not heard of yet would go through. `anthropic-any-key` matches any
+# `<vendor>-<kind><digits?>-` prefix followed by a body of realistic length.
+#
+# The dotfiles repo tests this config by planting one full-length fake per shape and
+# asserting which RuleIDs fire.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "anthropic-any-key"
+description = "Anthropic key of any kind (vendor prefix, any kind and number), including shapes the default rules miss"
+regex = '''\bsk[-]ant[-][a-z]{2,10}[0-9]{0,3}-[A-Za-z0-9_\-]{80,120}'''
+keywords = ["sk-an"]
+
+# Fixture value in the adapter's tests (a made-up env var value the test asserts is never leaked).
+# Anchored to the whole captured secret and scoped to that one file, so a real key that merely
+# contains the marker, or the marker anywhere else, still fires.
+[allowlist]
+description = "test fixture secrets"
+regexes = ['''^SECRET-ENV-[0-9a-f]{6}$''']
+paths = ['''personal/opencode/test/v1\.test\.js''']

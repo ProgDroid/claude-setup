@@ -101,8 +101,8 @@ bash "$R" auto "$REPO" > "$RT/out/auto.json"; cat "$RT/out/auto.json"
 when absent and adds the house parking-lot rule to `CLAUDE.md`. The output is
 `{"results": [...], "wrote": [...]}`. Report each result in one line.
 
-- `stack`'s `output` lists the languages (nested ones included) and the include files to load.
-  Read the matching `~/.claude/includes/<name>.md` files now.
+- `stack`'s `output` lists the languages (nested ones included) and the standards skills to load.
+  Invoke the matching `core:<name>-standards` skills now.
 - `oracle`'s `output` holds the test and lint commands it found. Nothing is run here. "No test
   command found" is a result, not a gap.
 - `stack-checks` writes the canonical case itself. `absent` with "needs ask" (a Cargo workspace, a
@@ -172,8 +172,8 @@ Ask only what `due` offered and what is not already in place.
   hooks, inside Beads' hook when Beads is set up. `unknown` with "gitleaks not found": offer to
   install gitleaks; until then the step stays open. `failed`: show the detail; the proof names what
   went wrong.
-- **`stack-checks`**, when step 3 left it `absent` with "needs ask": show the policy the include
-  file prescribes (for a Cargo workspace, `[workspace.lints.clippy]` in the root and
+- **`stack-checks`**, when step 3 left it `absent` with "needs ask": show the policy the standards
+  skill prescribes (for a Cargo workspace, `[workspace.lints.clippy]` in the root and
   `[lints] workspace = true` in each member; for Python a ruff config; for Flutter
   `analysis_options.yaml`) as a diff to append. On yes, append it and confirm with
   `bash "$R" check stack-checks "$REPO"`.

@@ -17,11 +17,11 @@ thorough path is chosen consistently enough that leading with the minimal one wa
 This is not a preference for *more work* — it is a preference for the option that is actually correct,
 stated plainly, with its cost named.
 
-**When he says he won't come back to it, build the end state now.** Scoping a feature into "v1 now,
-the rest out of scope", he pushed back: *"we should make the version we want this to eventually be
-now, I won't return to this much."* For a tool he will run but not revisit, a deferred phase is a
+**When the user says they won't come back to it, build the end state now.** Scoping a feature into "v1 now,
+the rest out of scope", they pushed back: *"we should make the version we want this to eventually be
+now, I won't return to this much."* For a tool they will run but not revisit, a deferred phase is a
 phase that never ships. Pull the out-of-scope list back in and plan the finished version, rather than
-proposing a phased roadmap he would have to remember to resume. (A data-analysis project, 2026-10-02)
+proposing a phased roadmap they would have to remember to resume. (A data-analysis project, 2026-10-02)
 
 **A date-gated follow-up is the same failure.** Twice in one session: *"I'd rather not have date
 gated stuff"* and *"settle it as keep today, I don't want date-gated stuff that I will forget."*
@@ -29,22 +29,22 @@ gated stuff"* and *"settle it as keep today, I don't want date-gated stuff that 
 route that un-gates it today. A live check waiting for a budget reset ran the same afternoon on
 another provider's key, and cost $0.05. When a measurement window is what gates it, score it now on
 the evidence in hand, state how strong that evidence is, and replace the calendar date with an event
-that reopens the decision by itself (e.g. a new `recurred:` date). Never leave him a date to remember.
+that reopens the decision by itself (e.g. a new `recurred:` date). Never leave the user a date to remember.
 
-**Passion projects are the exception: there the scope growth is the risk.** For a project he cares
-about (a game, 2026-10-06), he named his own stall pattern: *"I put too much baggage
-in them and then get too stuck to finish them"*. Asked to be specific, he pointed to setup and
+**Passion projects are the exception: there the scope growth is the risk.** For a project the user cares
+about (a game, 2026-10-06), they named their own stall pattern: *"I put too much baggage
+in them and then get too stuck to finish them"*. Asked to be specific, they pointed to setup and
 architecture perfectionism, plus losing momentum after a break. So in a passion project, endorsed ideas go to a
-**parking lot**, not into the current milestone, and he agreed to that override. Milestones are
-things he can play rather than systems. The first build is deliberately throwaway, and nothing is
+**parking lot**, not into the current milestone, and they agreed to that override. Milestones are
+things they can play rather than systems. The first build is deliberately throwaway, and nothing is
 abstracted until it exists twice. The tell is "passion" or "I've had this idea for a while", not
 "tool I'll run". Ask which kind of project it is when that's unclear, because the two rules point
 in opposite directions.
 
-## LLM features run on agents and his subscription, not API keys
+## LLM features run on agents and their subscription, not API keys
 
 When a feature needs an LLM (extraction, classification, analysis), do not build an API-key-backed
-call into the application. Deliver it as something Claude Code agents drive on his subscription: an
+call into the application. Deliver it as something Claude Code agents drive on their subscription: an
 MCP tool surface plus a skill or a sandboxed agent. Stated directly: *"I don't want to have to set up
 API keys and use it that way, I want to use agents via subscription."* The application stays
 deterministic (it stores, validates and counts); the model work happens in the session. Ship the
@@ -105,7 +105,7 @@ an otherwise-strong option fails on this alone, rather than presenting it and le
 
 ## GCP and Cloud Run are familiar ground
 
-He has substantial professional GCP experience, Cloud Run specifically. Do not price "time to learn the
+The user has substantial professional GCP experience, Cloud Run specifically. Do not price "time to learn the
 platform" into a GCP recommendation, and do not explain Cloud Run, Cloud SQL or Cloud Scheduler basics
 unprompted. More generally, when a trade-off rests partly on familiarity, **ask** rather than assume: a
 learning-curve argument once pushed a recommendation the wrong way. (promoted from a
@@ -113,7 +113,7 @@ private memory, 2026-10-02)
 
 ## Give odds, not hedges
 
-He deliberately reasons in probabilities. Give base rates, rough odds and explicit tail sizes, not hedged
+The user deliberately reasons in probabilities. Give base rates, rough odds and explicit tail sizes, not hedged
 certainty or a list of risks without magnitudes; an unsized risk is noise. Separate "unlikely" from
 "unlikely **and** cheap to insure against", since they lead to opposite actions. Inverting the question
 ("what would have to be true for X to be the wrong call?") lands better than advocacy. (promoted from a
@@ -121,16 +121,16 @@ private memory, 2026-10-02)
 
 ## Concurrent sessions are normal
 
-He works the same repository from several Claude sessions at once, so files can change mid-session
+The user works the same repository from several Claude sessions at once, so files can change mid-session
 that this session never touched. That is in-flight work, not cruft.
 
 - **Never revert, stash or check out over a foreign change.** Read the diff, say what it is, and ask.
 - **Commit with explicit paths**, never `git add -A` or `commit -a`. Explicit paths are necessary but
   not sufficient: a file that was already dirty before you edited it carries another session's work
   into your commit, so check each file's state **before** editing it.
-- **The dotfiles / memory repo is the most contended surface**: expect many unrelated modified files
-  there as the normal state.
-- A fixed `/tmp` path is shared between sessions; use the session scratchpad.
+- **A shared config or notes repo is the most contended surface**: expect many unrelated modified
+  files there as the normal state.
+- Fixed `/tmp` paths: see core rules § Probe discipline (the-log-was-not-only-yours).
 
 (promoted from a private memory, 2026-10-02)
 
@@ -182,22 +182,22 @@ Measured 2026-09-22, in a web-app project. Two platform decisions had been stall
 Both "constraints" came from our own source. Neither belonged in a vendor comparison, and the
 comparison could not be settled while they were in it.
 
-He does this himself, which is the signal to do it first: asked to confirm a Redis choice, he
+The user does this themselves, which is the signal to do it first: asked to confirm a Redis choice, they
 replied *"is the production version not allowing a higher ceiling? do we need those connections
-in the first place?"* — interrogating the constraint rather than picking a side. Meet him there.
+in the first place?"* — interrogating the constraint rather than picking a side. Meet them there.
 
-**And when he says "I'm not 100% sure" and gives a reason, the reason is the real question.**
+**And when the user says "I'm not 100% sure" and gives a reason, the reason is the real question.**
 "The cost is concerning since I have no idea what the user base will be like" was not a statement
 about Cloud SQL versus Neon; it was an unresolved question about whether the environment is a
 bounded pre-launch campaign or permanent infrastructure. Restating the options in more detail does
-nothing. Name the premise his reason depends on and put *that* to him — including the option
+nothing. Name the premise their reason depends on and put *that* to them — including the option
 neither of you listed, which here was "do not build a second environment at all".
 
 ## The descriptions on a question's options are claims too
 
-He decides on the premises an option states, without seeing the code behind them. A false clause in
+The user decides on the premises an option states, without seeing the code behind them. A false clause in
 an option description produces a real decision about the wrong thing. Measured 2026-09-22
-(a music project): an option promised a renderer would replay "exactly what you played", he picked it,
+(a music project): an option promised a renderer would replay "exactly what you played", they picked it,
 and the code's own doc said the two only agree within a tolerance. Retracted and re-asked, the
 corrected question produced a different design.
 
@@ -218,10 +218,7 @@ recomputation is.
 
 ## Verify before asserting
 
-A search that finds nothing proves that *the search* missed, not that the thing is absent. Before
-reporting that something does not exist — no test, no caller, no handler — search by concept and by
-neighbouring identifiers, or open the file. When only one method has been tried, report the evidence
-("grep for X found nothing"), not the conclusion ("there is no X").
+Absence claims: core rules § Probe discipline; cases in `core:probe-discipline` § grep-missed-the-synonym.
 
 The same applies to partitioning: verify a set is covered by computing the complement, never by summing
 the parts. Summing proves internal consistency, not coverage.
@@ -236,12 +233,11 @@ not "files were copied" but "the session can see them"; not "the commit was crea
 Tests written from an implementation inherit its assumptions. If a test asserts the same thing the
 code already believes, it confirms nothing. Assert on the channel the consumer actually reads.
 
-**A README, a description field, a config file or a docstring states INTENT.** It is evidence of
-what someone meant, never of what works, who wrote it, or whether it is reachable. When recommending
-a repo, tool or action, ask the API for the field that decides it — `isFork`, visibility, the real
-compensation field — rather than inferring it from prose; one pass recommended two forks as his own
-work and a private repo as an installable Action. For anything he has personally run, **ask him how
-it behaved**: no artefact on disk holds that.
+**A README, a description field, a config file or a docstring states INTENT** (core rules § Probe
+discipline, metadata-is-not-state). What this adds: when recommending a repo, tool or action, ask the
+API for the field that decides it — `isFork`, visibility, the real compensation field — rather than
+inferring it from prose; one pass recommended two forks as the user's own work and a private repo as an
+installable Action.
 
 This matters most for silent failures — a wrong path, an ignored directory, a hook that runs too
 late. None of them produce an error; they produce a confident success message and no effect.
@@ -271,11 +267,11 @@ assumption is self-consistent; if the shape is wrong, the test is wrong in the s
 
 ## CLAUDE.md holds standing rules, never status
 
-He has corrected this twice (2026-09-06). An always-loaded file is the wrong place for anything
+The user has corrected this twice (2026-09-06). An always-loaded file is the wrong place for anything
 whose truth expires:
 
 - **No status or progress registers.** An "In flight" section listing what is adopted, trialled or
-  parked reads as current and quietly rots. When he wants a project pointed at something, he says
+  parked reads as current and quietly rots. When the user wants a project pointed at something, they say
   so at session start for that project.
 - **No duplicating what the harness already injects.** The harness lists available skills and
   commands every session. A "Custom commands" section documenting them went stale without anyone
@@ -306,7 +302,7 @@ your employer, clients, third parties in examples — and scan per party. Greppi
 your own name feels thorough and covers exactly one of them.
 
 **When a recommendation involves publishing anything, ship the risks with it — do not wait to be
-asked.** Offered a choice about committing derived data to a public repo, he declined to pick and
+asked.** Offered a choice about committing derived data to a public repo, they declined to pick and
 replied only *"any issues you can foresee with this?"*. Enumerating them changed the plan: a row
 carrying third-party vendor values, licensed as a derived-only snapshot, came out of the set. None
 of that was a credential, which is why a credentials-and-my-name scan had already passed it. So
@@ -345,33 +341,33 @@ Quality bar is expected to rise over time; concrete suggestions for raising it a
 offered proactively rather than waiting to be asked.
 
 
-## Text that goes out under his name: no comma before "and"
+## Text that goes out under their name: no comma before "and"
 
-He never puts a comma before "and": no Oxford comma and none before an "and" that joins two
-clauses. Split a long sentence instead. A draft that has one does not sound like him.
+The user never puts a comma before "and": no Oxford comma and none before an "and" that joins two
+clauses. Split a long sentence instead. A draft that has one does not sound like them.
 
-**The scope is external communication written as him**: cover letters, application answers,
-profiles, emails, messages he will send. Before showing him such a draft, grep it for `, and` and fix
-every hit, including any your own edits introduced. It does NOT apply to internal artifacts in his
-own systems — he said so outright (2026-10-05) about his Obsidian vault's wiki pages, which are
-written in his first person but never leave it.
+**The scope is external communication written as them**: cover letters, application answers,
+profiles, emails, messages they will send. Before showing the user such a draft, grep it for `, and` and fix
+every hit, including any your own edits introduced. It does NOT apply to internal artifacts in their
+own systems — they said so outright (2026-10-05) about the pages in their personal knowledge base, which
+are written in their first person but never leave it.
 
 ## Show, don't describe, when the question is visual
 
 For any decision whose answer is a layout, a density, a spacing, or a piece of copy in place, build a
 rendered mockup and hand it over. A written list of options describing a layout is not a substitute, and
-he will say so: on one UI session he asked to "visualise" at four separate decision points and rejected
+they will say so: on one UI session they asked to "visualise" at four separate decision points and rejected
 two written option sets outright before any mockup existed. Once a render was on screen, each decision
 came back in a single line.
 
-His sharpest contributions come off the render rather than the prose. The same session produced
+Their sharpest contributions come off the render rather than the prose. The same session produced
 "chaotic lines with different spacing" about a chip block, and "what does 'these are set for you' mean?"
 about a caption -- neither of which any amount of description had surfaced.
 
 **Build the mockup with the FIRST option set, not after a rejected round.** Keep text questions -- scope,
 sequencing, which behaviour to pick -- in the terminal; take layout and copy to a render.
 
-Two conditions on this, both learned the hard way. He will act on **measurements** taken from the mockup,
+Two conditions on this, both learned the hard way. They will act on **measurements** taken from the mockup,
 so the mockup must reproduce the real component rather than a simplified silhouette; omitting a small
-element once produced a confident, wrong recommendation that he then chose. And check the render against
+element once produced a confident, wrong recommendation that they then chose. And check the render against
 the real code before drawing conclusions from it -- render the worst case, not the default one.

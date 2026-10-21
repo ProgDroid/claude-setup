@@ -14,7 +14,7 @@ r="$(mkrepo)"; mk "$r/server/Cargo.toml" '[package]'; mk "$r/server/src/lib.rs" 
 out="$(stk "$r")"
 eq "stack_nested_rust_flutter_plus_root_python" "$(jq -c .stacks <<<"$out")" \
   '[{"lang":"python","dir":"."},{"lang":"flutter","dir":"app"},{"lang":"rust","dir":"server"}]'
-eq "stack_includes_mapped_and_testing_when_oracle" "$(jq -c .includes <<<"$out")" '["python.md","rust.md","testing.md"]'
+eq "stack_includes_mapped_and_testing_when_oracle" "$(jq -c .includes <<<"$out")" '["core:python-standards","core:rust-standards","core:testing-standards"]'
 o="$(orc "$r")"
 eq "oracle_orders_by_dir_then_cmd" "$(jq -c '[.test[]|[.dir,.cmd]]' <<<"$o")" '[[".","pytest"],["server","cargo test"]]'
 
@@ -46,7 +46,7 @@ mk "$r/.github/workflows/ci.yml" 'jobs:
       - run: echo hello'
 o="$(orc "$r")"
 eq "ci_only_command" "$o" '{"status":"present","test":[{"cmd":"just test","dir":".","source":".github/workflows/ci.yml"}],"lint":[]}'
-eq "ci_only_no_stack_testing_include" "$(stk "$r")" '{"stacks":[],"includes":["testing.md"]}'
+eq "ci_only_no_stack_testing_include" "$(stk "$r")" '{"stacks":[],"includes":["core:testing-standards"]}'
 
 # --- CI: lint vs test classification, multi-line block takes first line, CRLF tolerated
 r="$(mkrepo)"; mkdir -p "$r/.github/workflows"
@@ -95,7 +95,7 @@ eq "skips_pruned_dirs_stacks" "$(jq -c .stacks <<<"$(stk "$r")")" '[]'
 r="$(mkrepo)"; mk "$r/web/package.json" '{"dependencies":{"react":"18"},"scripts":{"test":"vitest","lint":"eslint ."}}'
 o="$(orc "$r")"
 eq "node_test_and_lint_scripts" "$(jq -c '[.test[0].cmd,.lint[0].cmd,.test[0].dir]' <<<"$o")" '["npm test","npm run lint","web"]'
-eq "node_react_include" "$(jq -c .includes <<<"$(stk "$r")")" '["react.md","testing.md"]'
+eq "node_react_include" "$(jq -c .includes <<<"$(stk "$r")")" '["core:react-standards","core:testing-standards"]'
 r="$(mkrepo)"; mk "$r/package.json" '{"dependencies":{"left-pad":"1"},"scripts":{"test":"echo \"Error: no test specified\" && exit 1"}}'
 eq "node_placeholder_test_not_reported" "$(jq -r .status <<<"$(orc "$r")")" absent
 eq "node_without_react_has_no_include" "$(stk "$r")" '{"stacks":[{"lang":"node","dir":"."}],"includes":[]}'
@@ -104,7 +104,7 @@ eq "node_without_react_has_no_include" "$(stk "$r")" '{"stacks":[{"lang":"node",
 r="$(mkrepo)"; mk "$r/go.mod" 'module m'; mk "$r/x_test.go"
 o="$(orc "$r")"
 eq "go_test_and_vet" "$(jq -c '[.test[0].cmd,.lint[0].cmd]' <<<"$o")" '["go test ./...","go vet ./..."]'
-eq "go_include_is_golang_md" "$(jq -c .includes <<<"$(stk "$r")")" '["golang.md","testing.md"]'
+eq "go_include_is_golang_md" "$(jq -c .includes <<<"$(stk "$r")")" '["core:golang-standards","core:testing-standards"]'
 r="$(mkrepo)"; mk "$r/go.mod" 'module m'
 eq "go_without_test_files_is_absent" "$(jq -r .status <<<"$(orc "$r")")" absent
 r="$(mkrepo)"; mk "$r/pubspec.yaml"; mk "$r/test/a_test.dart"

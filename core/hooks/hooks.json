@@ -1,0 +1,28 @@
+{
+  "description": "Shared hooks: negative-result guard (an empty search is evidence, not proof) and the memory-index nudge (bytes)",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/negative-result-guard.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/memory-index-nudge.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

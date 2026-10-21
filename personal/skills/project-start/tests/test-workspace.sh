@@ -173,6 +173,7 @@ out="$(rc_ "$r" "$TMPROOT/c3g.json" -- docs/notes.md t.txt)"
 
 # a path missing from the work tree is a deletion; the real index's mode is kept
 r="$(mkrepo)"; echo h > "$r/hook.sh"; git -C "$r" add hook.sh; git -C "$r" update-index --chmod=+x hook.sh
+chmod +x "$r/hook.sh"  # the work tree too: with core.fileMode=true (Linux) a 644 file against a 755 index reads as dirty
 git -C "$r" commit -q -m h; pf "$r" > "$TMPROOT/c4.json"
 rm "$r/README.md"; echo h2 >> "$r/hook.sh"; git -C "$r" add hook.sh
 out="$(rc_ "$r" "$TMPROOT/c4.json" -- README.md hook.sh)"

@@ -29,7 +29,7 @@ Walk this top-to-bottom for each candidate. Stop at the first match.
 5. **Is it a workflow or convention that applies to EVERY session in this project** and is short enough to read on every turn?
    → **CLAUDE.md** (project-local). Use the `claude-md-management:revise-claude-md` or `claude-md-management:claude-md-improver` skill if available; otherwise edit directly. Keep entries tight — CLAUDE.md is always loaded.
 6. **Is it a multi-step procedure that you will re-execute across multiple sessions or projects**, with reusable scripts/templates/decision trees?
-   → **New or updated skill** (use the `skill-creator` skill). Project-specific → project-local skill (the repo's `.claude/skills/`). Cross-project → the **`personal` plugin** in the `claude-setup` repo, under `personal/skills/`, then commit and push.
+   → **New or updated skill** (use the `skill-creator` skill). Project-specific → project-local skill (the repo's `.claude/skills/`). Cross-project → the **`core` plugin** (shared, every machine) or the **`personal` plugin** (home-only) in the `claude-setup` repo, via the **promotion flow** below. A home-only skill goes under `personal/skills/`, a shared one under `core/skills/`.
 
    `~/.claude/skills/` is no longer a valid destination for anything that should be available beyond this machine. It does not reach cloud sessions — user-scope config is not part of the repo clone — and a skill that lives both there and in the plugin will drift with no way to tell which copy loaded.
 7. **Is it an automated behavior tied to a specific event** (PreToolUse, Stop, SessionStart, PreCompact, etc.) that should fire without the user asking?
@@ -43,29 +43,58 @@ different question and the one that determines whether the learning survives.
 
 | Content | Destination | Why |
 |---|---|---|
-| How the user works — decision style, what they want defended, delivery preferences | `personal/skills/working-style/` in the `claude-setup` repo | Needed on brand-new projects, and reaches cloud sessions |
+| How the user works — decision style, what they want defended, delivery preferences | `core/skills/working-style/` in the `claude-setup` repo, via the promotion flow | Needed on brand-new projects, and reaches cloud sessions and the work machine |
+| A shared always-on rule (should hold in every session on every machine) | `core/rules/shared.md`, via the promotion flow | The rules budget applies (`scripts/check-rules-budget.sh`). On overflow, move the least load-bearing tell to the `probe-discipline` skill; do not grow the file |
+| A probe lesson (a way a check lied) | The `probe-discipline` skill, via the promotion flow, plus a stub entry in the home queue `learnings/probe-failures.md`: title, `recurred: never`, `routed: …`, a pointer to the skill | The skill carries the substance; the queue entry is what the `recurred:` dates and escalation hang from |
 | Facts true only of this codebase | the repo's own `CLAUDE.md` or `.claude/` | Travels with the repo, so cloud sessions get it from the clone |
 | Private observations, or anything you would not want a collaborator reading | `~/.claude/projects/<slug>/memory/` | Stays local by design, and correctly does not travel |
 
 Two consequences worth stating explicitly:
 
-- **A learning routed to the plugin is invisible until pushed.** Say so, and commit it — an
-  uncommitted working-style change reaches no cloud session and no other machine.
-- **In a cloud session, write memories to the local memory dir exactly as you would locally.**
-  The VM is reclaimed, but the `personal` plugin's hooks already close that loop: `hydrate-memory.sh`
+- **A learning routed to a plugin is invisible until pushed.** Say so, and commit it — an
+  uncommitted working-style change reaches no cloud session and no other machine. The promotion
+  flow below does the commit and push in one step.
+- **If the `personal` plugin is installed, in a cloud session write memories to the local memory dir
+  exactly as you would locally.** The VM is reclaimed, but the `personal` plugin's hooks already close that loop: `hydrate-memory.sh`
   copies the repo's `.claude/memory/` into `~/.claude/projects/<key>/memory/` at SessionStart, and at
   Stop `sync-memory.sh` (local) or `auto-commit.sh` (cloud) copies it back out and commits it. Write
   normally and let the sync carry it.
-- **That loop is opt-in per repo, and silent when it is off.** Both hooks do nothing unless
+- **If the `personal` plugin is installed: that loop is opt-in per repo, and silent when it is off.** Both hooks do nothing unless
   `<repo>/.claude/memory/` already exists, so in a repo that has not opted in a memory written
   during a cloud session dies with the VM exactly as the old advice warned. **Check for the
   directory before writing.** If it is missing: create it, commit it, and then write the memory —
   or, when the learning is cross-project anyway, route it to a plugin skill instead.
-- **Never edit a repo's `.claude/memory/` files directly.** The sync is one-way — local overwrites
+- **If the `personal` plugin is installed, never edit a repo's `.claude/memory/` files directly.** The sync is one-way — local overwrites
   repo — so a direct edit is reverted the moment it is older than the local copy, and in a cloud
   session auto-commit.sh commits the revert. Route the change through the local memory dir instead.
   (This entry used to say the opposite, and following it is what exposed the overwrite bug fixed in
   `lib-memory.sh` on 2026-09-15.)
+
+## Promotion flow (home only)
+
+How a cross-project lesson reaches the shared plugin without a second decision from the user. It is
+home-only because it needs the dev clone of `claude-setup`.
+
+- **`CLAUDE_SETUP_CLONE` is set** (home): propose the exact edit in the report: the file, the diff, and
+  whether it lands in `core` or `personal`. On the user's yes, edit the file in `$CLAUDE_SETUP_CLONE`,
+  stage it, write the commit message to a file, run
+  `bash "$CLAUDE_SETUP_CLONE/core/scripts/promote-to-core.sh" <msgfile>`, and report the
+  `PROMOTED <sha>` line it prints. The script pulls, runs the privacy scan on the staged content, the
+  secret scan, the rules budget and the core tests, then commits and pushes. Every refusal before the
+  commit exits non-zero with the reason and commits nothing. A push rejected after the commit also
+  exits 1: the script prints the local sha ("committed locally as <sha> but git push failed; it is NOT
+  published") and the recovery, either `git push` once the remote accepts it or `git reset --soft
+  HEAD~1` to undo the commit and keep the changes staged. Report a refusal verbatim and do not retry
+  around it. The script runs only the `core` tests, so a `personal/` edit promoted this way leaves
+  personal's tests to CI, which runs the full suite on every push.
+- **`CLAUDE_SETUP_CLONE` is unset, on a work machine**: never touch `core`. Sync is one way, home to
+  work, so nothing recorded here flows back. Cross-project lessons go to the machine's own
+  `~/.claude/CLAUDE.md`.
+- **`CLAUDE_SETUP_CLONE` is unset, in a cloud session**: never touch `core`, and never write to
+  `~/.claude/CLAUDE.md`, which dies with the container. With `personal` installed, write the lesson as
+  a memory in the local memory dir and let its cloud-memory hooks carry it out (see the bullets
+  above, including the opt-in `.claude/memory/` check). Without it, record the lesson in the repo's
+  own `.claude/` or `CLAUDE.md`, or list it in the report as not promotable from a cloud session.
 
 ## The audit pass
 
@@ -89,9 +118,9 @@ Run this whenever the user invokes the skill:
    plans, status lines, memories, READMEs, commit-ready docs) for the OLD claim. The fix lands in the
    file the correction named; the same sentence survives everywhere written from the same
    understanding. Counting occurrences cannot prove a retraction (a retraction names what it
-   retracts), so read the hits. Same sweep: for any `learnings/probe-failures.md` class hit this
-   session, append today's date to that entry's `recurred:` line — the escalation queue is only as
-   good as those dates. (Added 2026-10-05: a design doc's status line said "read due 09-24" one turn
+   retracts), so read the hits. Same sweep, and only if `~/.claude/learnings/probe-failures.md` exists (otherwise skip silently):
+   for any class in it hit this session, append today's date to that entry's `recurred:` line — the
+   escalation queue is only as good as those dates. (Added 2026-10-05: a design doc's status line said "read due 09-24" one turn
    after the section below it recorded the read as done.)
 7. **Report back** with a tight summary: what was saved, what was updated, what was considered and dropped.
 

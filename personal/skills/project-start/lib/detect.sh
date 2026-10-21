@@ -260,8 +260,8 @@ oracle_json() {
       + (if ($u | length) > 0 then {detail: ("could not parse: " + ($u | join(", ")))} else {} end)'
 }
 
-# stack_json <repo> [oracle-status]: {"stacks":[{lang,dir}],"includes":[...]}. testing.md is
-# included when the oracle's status is present. A caller that already knows that status, or that
+# stack_json <repo> [oracle-status]: {"stacks":[{lang,dir}],"includes":[...]} (core skill names).
+# core:testing-standards is included when the oracle's status is present. A caller that already knows that status, or that
 # needs only the languages ("-"), passes it, and the oracle is not scanned again.
 stack_json() {
   local repo="$1" lines="" d l p status
@@ -274,20 +274,20 @@ stack_json() {
           [ -n "$l" ] || continue
           printf 'stack\t%s\t%s\n' "$d" "$l"
           case "$l" in
-            rust) printf 'include\trust.md\n' ;;
-            python) printf 'include\tpython.md\n' ;;
-            go) printf 'include\tgolang.md\n' ;;
+            rust) printf 'include\tcore:rust-standards\n' ;;
+            python) printf 'include\tcore:python-standards\n' ;;
+            go) printf 'include\tcore:golang-standards\n' ;;
             node)
               p="$(_det_path "$d" package.json)"
               if jq -e '((.dependencies // {}) + (.devDependencies // {})) | has("react")' "$p" >/dev/null 2>&1; then
-                printf 'include\treact.md\n'; fi ;;
+                printf 'include\tcore:react-standards\n'; fi ;;
           esac
         done < <(_det_langs "$d")
         # every manifest the scan tried to parse: a failure is reported, never invisible
         p="$(_det_path "$d" package.json)"
         if [ -f "$p" ] && ! jq -e . "$p" >/dev/null 2>&1; then printf 'unparsed\t%s\n' "$p"; fi
       done < <(_det_dirs))" || die "cannot scan: $repo"
-  [ "$status" = present ] && lines="$lines"$'\n'"include	testing.md"
+  [ "$status" = present ] && lines="$lines"$'\n'"include	core:testing-standards"
   printf '%s\n' "$lines" | jq -Rnc '
     [inputs | select(length > 0) | split("\t")] as $r
     | ([$r[] | select(.[0] == "unparsed") | .[1]] | unique) as $u

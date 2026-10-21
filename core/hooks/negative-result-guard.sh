@@ -32,7 +32,9 @@
 
 set -uo pipefail
 
-DEBUG_LOG="${HOME}/.claude/negative-result-guard.debug"
+# HOME may be unset (a bare container, a CI step): no debug log then, and still exit 0.
+DEBUG_LOG=""
+[ -n "${HOME:-}" ] && DEBUG_LOG="${HOME}/.claude/negative-result-guard.debug"
 
 emit() {
   local msg="NEGATIVE RESULT. That search returned nothing, which is the moment the absent/unknown distinction gets collapsed. Before treating this as evidence of absence, prove the probe can return something -- ask for a count, query the metadata, or run it against a case you KNOW exists. State the evidence (this command found nothing), never the conclusion (there is no X). Note also that only grep exits 1 on no match: find, git ls-files and jq exit 0 and print nothing."
@@ -80,7 +82,7 @@ if [ "$tool" = "Grep" ] || [ "$tool" = "Glob" ]; then
     empty) emit ;;
     unknown)
       keys=$(printf '%s' "$json_input" | jq -rc '.tool_response | if type=="object" then keys else type end' 2>/dev/null)
-      printf '%s  unknown %s tool_response shape: %s\n' "$(date -u +%FT%TZ)" "$tool" "$keys" >> "$DEBUG_LOG" 2>/dev/null ;;
+      [ -n "$DEBUG_LOG" ] && printf '%s  unknown %s tool_response shape: %s\n' "$(date -u +%FT%TZ)" "$tool" "$keys" >> "$DEBUG_LOG" 2>/dev/null ;;
   esac
   exit 0
 fi
@@ -141,7 +143,7 @@ if [ -z "$out" ]; then
   # `"string"`. Getting that wrong made the guard silently skip the string form.
   case "$keys" in
     *stdout*|*output*|*stderr*|*content*|string) ;;   # known shape, genuinely empty
-    *) printf '%s  unknown tool_response shape: %s\n' "$(date -u +%FT%TZ)" "$keys" >> "$DEBUG_LOG" 2>/dev/null
+    *) [ -n "$DEBUG_LOG" ] && printf '%s  unknown tool_response shape: %s\n' "$(date -u +%FT%TZ)" "$keys" >> "$DEBUG_LOG" 2>/dev/null
        exit 0 ;;
   esac
 fi

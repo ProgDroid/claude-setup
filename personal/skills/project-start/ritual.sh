@@ -66,7 +66,7 @@ _auto_result() {
 # result for its id is reported `unknown`, and the remaining steps still run.
 # Detection runs once per run. The languages are scanned before any write (no auto step changes
 # them) and handed to stack-checks. The oracle is scanned after stack-checks, which can add a lint
-# command, and the stack result then takes testing.md from it, as `ritual.sh stack` would.
+# command, and the stack result then takes core:testing-standards from it, as `ritual.sh stack` would.
 auto() {
   local repo="$1" step stack_raw stack_rc
   local -A res=()
@@ -82,7 +82,7 @@ auto() {
   _auto_run _auto_oracle "$repo"; res[oracle]="$(_auto_result oracle)"
   if [ "$stack_rc" -eq 0 ]; then
     _auto_run _auto_stack "$(printf '%s' "$stack_raw" | jq -c --arg o "$(_auto_status "${res[oracle]}")" \
-      'if $o == "present" then .includes = (.includes + ["testing.md"] | unique) else . end')"
+      'if $o == "present" then .includes = (.includes + ["core:testing-standards"] | unique) else . end')"
     res[stack]="$(_auto_result stack)"
   fi
   _auto_run fix_parking_lot "$repo"; res[parking-lot]="$(_auto_result parking-lot)"

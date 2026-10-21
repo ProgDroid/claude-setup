@@ -25,6 +25,12 @@ FIX="$TMPROOT/handoff fixtures"; mkdir -p "$FIX"
 
 pass=0; fail=0
 ok()  { echo "  PASS: $1"; pass=$((pass + 1)); }
+# Assertions that build a Windows-form path need cygpath; without it (Linux) they are skipped, and counted.
+HAVE_CYG=0; command -v cygpath >/dev/null 2>&1 && HAVE_CYG=1
+skipped=0
+skip_nocyg() { echo "  SKIP: $1 (no cygpath: Windows path form)"; skipped=$((skipped + 1)); }
+# mpath: the mixed (C:/...) form under Git Bash, the path unchanged elsewhere
+mpath() { if [ "$HAVE_CYG" = 1 ]; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
 bad() { echo "  FAIL: $1"; fail=$((fail + 1)); }
 
 AGENT='Co-Authored-By: Claude <noreply@anthropic.com>'
@@ -135,8 +141,10 @@ r="$(std_repo lib1)"
 mkdir -p "$r/sub dir/deeper"
 out="$( . "$LIB"; ho_marker "$r/sub dir/deeper"; echo "rc=$?|$HO_ROOT" )"
 [ "$out" = "rc=0|$(cd "$r" && pwd)" ] && ok "ho_marker_finds_the_root_from_a_subdirectory" || bad "ho_marker subdir: $out"
-out="$( . "$LIB"; ho_marker "$(winpath "$r/sub dir")"; echo "rc=$?|$(cygpath -w "$HO_ROOT")" )"
-[ "$out" = "rc=0|$(winpath "$r")" ] && ok "ho_marker_accepts_a_windows_backslash_path" || bad "ho_marker winpath: $out"
+if [ "$HAVE_CYG" = 1 ]; then
+  out="$( . "$LIB"; ho_marker "$(winpath "$r/sub dir")"; echo "rc=$?|$(cygpath -w "$HO_ROOT")" )"
+  [ "$out" = "rc=0|$(winpath "$r")" ] && ok "ho_marker_accepts_a_windows_backslash_path" || bad "ho_marker winpath: $out"
+else skip_nocyg "ho_marker_accepts_a_windows_backslash_path"; fi
 n="$(mkrepo lib-nomark)"
 out="$( . "$LIB"; ho_marker "$n"; echo "rc=$?|${HO_ROOT:-}" )"
 [ "$out" = "rc=1|" ] && ok "ho_marker_fails_without_the_marker" || bad "ho_marker no marker: $out"
@@ -273,7 +281,9 @@ echo "== SessionStart: startup =="
 # no anchor -> the last 10 commits and PICK
 na="$(mkrepo ss-noanchor)"; mark "$na"
 for i in 01 02 03 04 05 06 07 08 09 10 11 12; do cm "$na" "commit-$i" ""; done
-run "$SS" "$(p_ss startup "$(winpath "$na")")"
+# (the Windows form where cygpath exists; the assertions below read this run, so Linux uses the POSIX path)
+if [ "$HAVE_CYG" = 1 ]; then na_cwd="$(winpath "$na")"; else na_cwd="$na"; fi
+run "$SS" "$(p_ss startup "$na_cwd")"
 lst="$(printf '%s\n' "$CTX" | grep -c 'commit-[0-9][0-9]$')"
 [ "$EVT" = SessionStart ] && has "PICK" && has "never ask for a SHA" && [ "$lst" = 10 ] \
   && has "commit-12" && has "commit-03" && ! has "commit-02" \
@@ -394,8 +404,10 @@ k="$(std_repo pt-commit)"
 cm "$k" "handoff: session notes" "$AGENT" "NEXT.md=# NEXT v2" "src/extra.rs=x"
 run "$PT" "$(p_cmd Bash 'git add -A && git commit -m "handoff: session notes"' "$k")"
 [ "$EVT" = PostToolUse ] && has "src/extra.rs" && ! has "touched: NEXT.md" && ok "commit_warning_names_the_extra_path" || bad "commit warn: $(show)"
-run "$PT" "$(p_cmd PowerShell 'git commit -F msg.txt' "$(winpath "$k")")"
-has "src/extra.rs" && ok "commit_warning_via_powershell_payload" || bad "ps commit warn: $(show)"
+if [ "$HAVE_CYG" = 1 ]; then
+  run "$PT" "$(p_cmd PowerShell 'git commit -F msg.txt' "$(winpath "$k")")"
+  has "src/extra.rs" && ok "commit_warning_via_powershell_payload" || bad "ps commit warn: $(show)"
+else skip_nocyg "commit_warning_via_powershell_payload"; fi
 run "$PT" "$(p_cmd Bash "git -C \"$k\" commit -F m" "$FIX")"
 has "src/extra.rs" && ok "commit_warning_resolves_the_repo_from_dash_C" || bad "-C commit: $(show)"
 cm "$k" "handoff: notes only" "$AGENT" "NEXT.md=# NEXT v3"
@@ -420,7 +432,9 @@ run "$PT" "$(p_cmd Bash 'git push -u origin main' "$sp")"
   && ok "push_with_pending_agent_commits_reminds" || bad "push: $(show)"
 run "$PT" "$(p_cmd Bash 'gh pr create --fill' "$sp")"; has "hand off now" && ok "gh_pr_create_reminds" || bad "gh pr create: $(show)"
 run "$PT" "$(p_cmd Bash 'git merge --squash feat' "$sp")"; has "hand off now" && ok "git_merge_reminds" || bad "merge: $(show)"
-run "$PT" "$(p_cmd PowerShell 'git push origin main; Write-Host done' "$(winpath "$sp")")"; has "hand off now" && ok "powershell_push_reminds" || bad "ps push: $(show)"
+if [ "$HAVE_CYG" = 1 ]; then
+  run "$PT" "$(p_cmd PowerShell 'git push origin main; Write-Host done' "$(winpath "$sp")")"; has "hand off now" && ok "powershell_push_reminds" || bad "ps push: $(show)"
+else skip_nocyg "powershell_push_reminds"; fi
 run "$PT" "$(p_cmd Bash 'cd sub && git push' "$sp")"; has "hand off now" && ok "push_after_cd_prefix_reminds" || bad "cd push: $(show)"
 run "$PT" "$(p_cmd Bash "git -C \"$sp\" push" "$FIX")"; has "hand off now" && ok "push_resolves_quoted_dash_C_dir_with_space" || bad "-C push: $(show)"
 run "$PT" "$(p_cmd Bash "git -C pt-ship push" "$FIX")"; has "hand off now" && ok "push_resolves_relative_dash_C_against_cwd" || bad "rel -C push: $(show)"
@@ -458,13 +472,17 @@ echo "== PostToolUse: NEXT.md edits =="
 
 e="$(std_repo pt-edit)"; et="$FIX/edit wt linked"; git -C "$e" worktree add -q -b feat "$et" 2>/dev/null
 for tool in Edit Write MultiEdit; do
-  run "$PT" "$(p_edit "$tool" "$(winpath "$et/NEXT.md")" "$(winpath "$et")")"
-  [ "$EVT" = PostToolUse ] && has "linked worktree" && has "after the merge, in the main checkout" \
-    && ok "next_md_${tool}_in_linked_worktree_warns" || bad "$tool wt: $(show)"
+  if [ "$HAVE_CYG" = 1 ]; then
+    run "$PT" "$(p_edit "$tool" "$(winpath "$et/NEXT.md")" "$(winpath "$et")")"
+    [ "$EVT" = PostToolUse ] && has "linked worktree" && has "after the merge, in the main checkout" \
+      && ok "next_md_${tool}_in_linked_worktree_warns" || bad "$tool wt: $(show)"
+  else skip_nocyg "next_md_${tool}_in_linked_worktree_warns"; fi
 done
 run "$PT" "$(p_edit Edit "$et/NEXT.md" "$e")"; has "linked worktree" && ok "next_md_edit_warns_with_posix_path_and_other_cwd" || bad "posix wt: $(show)"
 git -C "$e" checkout -q -b feature-in-main
-run "$PT" "$(p_edit Edit "$(winpath "$e/NEXT.md")" "$(winpath "$e")")"; silent && ok "next_md_edit_in_main_checkout_on_feature_branch_is_silent" || bad "main edit spoke: $(show)"
+if [ "$HAVE_CYG" = 1 ]; then
+  run "$PT" "$(p_edit Edit "$(winpath "$e/NEXT.md")" "$(winpath "$e")")"; silent && ok "next_md_edit_in_main_checkout_on_feature_branch_is_silent" || bad "main edit spoke: $(show)"
+else skip_nocyg "next_md_edit_in_main_checkout_on_feature_branch_is_silent"; fi
 mkdir -p "$et/docs"
 run "$PT" "$(p_edit Edit "$et/docs/NEXT.md" "$et")"; silent && ok "nested_next_md_in_worktree_is_silent" || bad "nested spoke"
 run "$PT" "$(p_edit Edit "$et/README.md" "$et")"; silent && ok "other_file_in_worktree_is_silent" || bad "README spoke"
@@ -522,7 +540,7 @@ out_r="$( RITUAL_SKILL_DIR="$PLUGIN/skills/project-start"; . "$RITUAL_LIB/common
 sh_src="$(std_repo fr-shallow-src)"
 for i in 1 2 3; do cm "$sh_src" "agent work $i" "$AGENT"; done
 sh_dst="$FIX/fr shallow clone"
-git clone -q --depth 1 "file://$(cygpath -m "$sh_src")" "$sh_dst" 2>/dev/null
+git clone -q --depth 1 "file://$(mpath "$sh_src")" "$sh_dst" 2>/dev/null
 shl="$(git -C "$sh_dst" rev-parse --is-shallow-repository 2>/dev/null)"
 out="$( . "$LIB"; ho_anchor "$sh_dst"; echo "rc=$?" )"
 [ "$shl" = true ] && [ "$out" = "rc=3" ] && ok "ho_anchor_shallow_clone_without_anchor_returns_3" || bad "shallow anchor (shallow=$shl): $out"
@@ -550,7 +568,7 @@ has "reminders cannot tell" && has "stay OFF" && ok "startup_shallow_clone_says_
 run "$SS" "$(p_ss compact "$sh_dst")"; c_sil=0; silent && c_sil=1
 run "$PT" "$(p_cmd Bash 'git push' "$sh_dst")"; p_sil=0; silent && p_sil=1
 # ... while the same history cloned in full does remind (control: the silence is the cut-off)
-sh_full="$FIX/fr full clone"; git clone -q "file://$(cygpath -m "$sh_src")" "$sh_full" 2>/dev/null
+sh_full="$FIX/fr full clone"; git clone -q "file://$(mpath "$sh_src")" "$sh_full" 2>/dev/null
 run "$PT" "$(p_cmd Bash 'git push' "$sh_full")"
 [ "$c_sil" = 1 ] && [ "$p_sil" = 1 ] && has "3 agent commit(s)" \
   && ok "shallow_clone_reminders_off_but_full_clone_reminds" || bad "shallow reminders: compact_silent=$c_sil push_silent=$p_sil full=$(show)"
@@ -620,11 +638,11 @@ q() { jq -r "$1" "$HJ" 2>/dev/null | tr -d '\r'; }
 [ "$(q '[(.hooks.Stop // [])[], (.hooks.UserPromptSubmit // [])[] | .hooks[] | select(.command | test("handoff"))] | length')" = 0 ] \
   && ok "no_stop_or_user_prompt_submit_handoff_hook" || bad "Stop/UPS handoff hook present"
 kept=""
-for h in hydrate-memory earlier-cloud-work auto-commit sync-memory redteam-gate negative-result-guard job-state-nudge windows-guard; do
+for h in hydrate-memory earlier-cloud-work auto-commit sync-memory redteam-gate job-state-nudge windows-guard; do
   [ "$(q "[.hooks[][] | .hooks[] | select(.command | test(\"/$h.sh\"))] | length")" = 1 ] || kept="$kept $h"
 done
 [ -z "$kept" ] && ok "existing_hook_entries_each_still_present_once" || bad "existing entries changed:$kept"
-[ "$(q '[.hooks[][] | .hooks[]] | length')" = 11 ] && ok "existing_entries_kept_total_11_commands" || bad "command count: $(q '[.hooks[][] | .hooks[]] | length')"
+[ "$(q '[.hooks[][] | .hooks[]] | length')" = 10 ] && ok "existing_entries_kept_total_10_commands" || bad "command count: $(q '[.hooks[][] | .hooks[]] | length')"
 
 echo "== SKILL.md =="
 
@@ -640,7 +658,10 @@ if [ -f "$SKILL" ]; then
     printf '%s' "$desc" | lc | grep -qF -- "$(printf '%s' "$trig" | lc)" || miss="$miss [$trig]"
   done
   [ -n "$desc" ] && [ -z "$miss" ] && ok "skill_description_carries_the_triggers" || bad "description lacks:$miss"
-  body() { lc < "$SKILL" | grep -qF -- "$(printf '%s' "$1" | lc)"; }
+  # Capture the lower-cased skill once: `lc < file | grep -q` lets grep exit at the first match, tr then dies of
+  # SIGPIPE, and under pipefail that reads as failure (seen on Linux for "squash", a match early in the file).
+  SKILL_LC="$(lc < "$SKILL")"
+  body() { printf '%s' "$SKILL_LC" | grep -qF -- "$(printf '%s' "$1" | lc)"; }
   body "\"$DEFAULT_ASK\"" && ok "skill_default_question_matches_the_hooks" || bad "skill default question"
   grep -qF "\"$DEFAULT_ASK\"" "$PLUGIN/skills/project-start/house/session-routine.md" && \
     [ "$( . "$LIB"; printf '%s' "$HO_DEFAULT_ASK")" = "$DEFAULT_ASK" ] && ok "default_question_same_in_routine_lib_and_skill" || bad "default question drift"
@@ -688,7 +709,7 @@ done
 [ "$STDERR_RUNS" = 0 ] && ok "no_hook_run_wrote_stderr" || bad "stderr in $STDERR_RUNS runs"
 
 echo
-echo "test-handoff-hooks.sh: $pass PASS, $fail FAIL"
+echo "test-handoff-hooks.sh: $pass PASS, $fail FAIL, $skipped SKIPPED"
 [ $((pass + fail)) -gt 0 ] || { echo "no assertions ran"; exit 1; }
 [ "$fail" -eq 0 ] || exit 1
 exit 0

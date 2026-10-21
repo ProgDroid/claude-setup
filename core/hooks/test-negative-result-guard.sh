@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests for negative-result-guard.sh.
 #
-# Run:  bash personal/hooks/test-negative-result-guard.sh
+# Run:  bash core/hooks/test-negative-result-guard.sh
 #
 # Payload shapes were MEASURED on 2026-10-05 from a real transcript's toolUseResult:
 # Bash is {stdout, stderr, interrupted, isImage, noOutputExpected} with no exit code;
@@ -184,6 +184,23 @@ tmphome2="$(mktemp -d)"; mkdir -p "$tmphome2/.claude"
 out=$(jq -n '{tool_name:"Grep", tool_input:{pattern:"x"}, tool_response:{someNewField:1}}' | HOME="$tmphome2" bash "$HOOK" 2>/dev/null)
 [ -z "$out" ] && ok "unknown Grep shape stays silent" || bad "fired on an unknown Grep shape"
 [ -s "$tmphome2/.claude/negative-result-guard.debug" ] && ok "unknown Grep shape is logged" || bad "unknown Grep shape was not logged"
+
+echo "== HOME unset: exit 0 on every path, nothing on stderr =="
+# Unknown Grep shape and unknown Bash shape (both would write the debug log), a genuine empty
+# search (fires), and a non-search.
+payloads=(
+  '{"tool_name":"Grep","tool_input":{"pattern":"x"},"tool_response":{"someNewField":1}}'
+  '{"tool_name":"Bash","tool_input":{"command":"grep -rn needle ."},"tool_response":{"weird":"x"}}'
+  '{"tool_name":"Bash","tool_input":{"command":"grep -rn needle ."},"tool_response":{"stdout":""}}'
+  '{"tool_name":"Bash","tool_input":{"command":"echo hi"},"tool_response":{"stdout":"hi"}}'
+)
+for payload in "${payloads[@]}"; do
+  errf="$(mktemp)"
+  printf '%s' "$payload" | env -u HOME bash "$HOOK" >/dev/null 2>"$errf"; rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -s "$errf" ]; then ok "HOME unset: exit 0, no stderr ($(printf '%s' "$payload" | cut -c1-70))"
+  else bad "HOME unset: rc=$rc stderr=$(head -c 120 "$errf") ($(printf '%s' "$payload" | cut -c1-70))"; fi
+  rm -f "$errf"
+done
 
 echo
 echo "passed: $pass   failed: $fail"

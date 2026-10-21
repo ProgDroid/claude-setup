@@ -1,0 +1,37 @@
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # The secret scan runs before the tests, so a failing test cannot hide a leak finding in the same run.
+      - name: Install gitleaks
+        run: |
+          curl -fsSL -o gitleaks.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz
+          tar -xzf gitleaks.tgz gitleaks
+          sudo mv gitleaks /usr/local/bin/
+      - name: Secret scan
+        run: gitleaks git --config .gitleaks.toml --redact --exit-code 1
+      - name: Install jq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+      - name: Install bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.0"
+          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+      - name: Install adapter dependencies
+        # personal/opencode has no lockfile today; use --frozen-lockfile once one is committed.
+        working-directory: personal/opencode
+        run: |
+          if [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; else bun install; fi
+      - name: Run all tests
+        run: bash scripts/run-all-tests.sh
+      - name: Rules budget
+        if: always()
+        run: bash scripts/check-rules-budget.sh

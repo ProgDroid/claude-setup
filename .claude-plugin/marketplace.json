@@ -7,10 +7,18 @@
   "description": "Personal Claude Code setup, published so cloud sessions can reach it",
   "plugins": [
     {
+      "name": "core",
+      "source": "./core",
+      "description": "Shared workflow: memory curation, learning capture, probe discipline, standards. Installed on every machine.",
+      "author": {
+        "name": "ProgDroid"
+      }
+    },
+    {
       "name": "personal",
       "source": "./personal",
-      "description": "Personal agents, working style, and hard-won Claude Code behaviour",
-      "version": "0.14.8",
+      "description": "Personal agents and hard-won Claude Code behaviour",
+      "version": "0.15.0",
       "author": {
         "name": "ProgDroid"
       }

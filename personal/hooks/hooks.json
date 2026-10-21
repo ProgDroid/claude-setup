@@ -55,16 +55,6 @@
         ]
       },
       {
-        "matcher": "Bash|Grep|Glob",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/negative-result-guard.sh\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
         "matcher": "Bash|PowerShell",
         "hooks": [
           {

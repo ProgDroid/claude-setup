@@ -68,7 +68,7 @@ detect that its own premise is false.
   an assertion on it.
 - **Run `scripts/sdd-workspace` with the PROJECT as the working directory, never the skill's.** It
   resolves the repo from cwd, so a call made from the skill directory created the workspace inside
-  the dotfiles repo that holds the skill (2026-10-19). Check the printed path is under the project.
+  the repo that holds the skill instead of the project (2026-10-19). Check the printed path is under the project.
 - **A plan that says HOW to measure something under engine timing is a premise; probe it first.**
   A plan offered "real time = scaled `delta` / `Engine.time_scale`" for a camera push-in. In Godot
   4.7.2 the `_process` of the frame in which the scale drops still receives the OLD scale's delta,
@@ -90,8 +90,8 @@ already written down still caused a park when it lived in a memory instead of th
   reviewer dispatches.
 - **Run long commands in the FOREGROUND, with a long timeout.** Implementers that background a
   gate and wait on a Monitor never wake.
-- **Commit from Bash with `git commit -F <file>`** (PowerShell prepends a BOM; `$(...)` in `-m` is
-  denied by the guard).
+- **Commit from Bash with `git commit -F <file>`**; on Windows see git-standards (the BOM rule). On
+  machines with a command guard, `$(...)` in `-m` is denied.
 - **Report rather than resolve** wherever the controller made a non-obvious call, and report any
   disagreement with a pre-registered number rather than reconciling it.
 - **Write the full report to a file and return verdict + path.** Long returns truncate. For long

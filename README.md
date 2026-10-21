@@ -17,11 +17,25 @@ So anything that should work both locally and in a cloud session lives here rath
 | Path | Contents |
 |---|---|
 | `.claude-plugin/marketplace.json` | Marketplace catalog |
-| `personal/` | The one plugin: agents, commands, working-style skill |
+| `core/` | Shared plugin installed on every machine: rules, memory curation, learning capture, working style, SDD controller, the home-only promotion script (no pinned version) |
+| `personal/` | Home-only plugin: agents, the OpenCode adapter; declares `core` as a dependency |
+| `scripts/` | `run-all-tests.sh`, `check-rules-budget.sh`, `privacy-scan.sh`, `linux-skip.txt` |
+| `.github/workflows/ci.yml` | CI: all tests on Linux, rules budget, gitleaks |
 | `personal/skills/project-start/` | Project-start ritual: a script that sets a repo up the house way, and a record of what it did |
 | `personal/skills/handoff/` | The NEXT.md handoff routine, with the hooks that enforce it |
 | `snippets/project-settings.json` | Block declaring marketplaces + plugins in any repo |
 | `snippets/README.md` | What is included, what is excluded, and why |
+| `snippets/work-machine-setup.md` | The prompt a work-machine session follows to bring its `~/.claude` in line (plugins, memory, the rules link) |
+| `~/.claude/rules/core` (a link, not a file in this repo) | Symlink to `~/.claude/plugins/marketplaces/progdroid/core/rules`, so the shared rules load as user rules; no hook creates or checks it |
+
+## Upgrading from 0.14.x
+
+`personal` 0.15.0 declares `core` as a dependency. A fresh `claude plugin install personal@progdroid`
+installs both. An existing install is different: `claude plugin update personal@progdroid` moves to
+0.15.0 but does not install `core`, and `personal` then shows "failed to load" (measured on claude
+2.1.304). Run `claude plugin install personal@progdroid` once after updating; it reports
+"+ 1 dependency: core" and both load. Cloud environments do this on their own, because the setup
+script runs that install every session.
 
 ## Use it in a repo
 
