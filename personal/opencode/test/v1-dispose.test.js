@@ -231,11 +231,13 @@ describe("D4: hooks in flight at exit are awaited by dispose", () => {
   test("R54 I-1: a run with only async Stop hooks is still tracked (grace deadline), so its hooks get spawned before the cancel step; nothing counted", async () => {
     const H = harness({ hooks: STOP({ async: true }), runHook: never, lookupNever: true, exitGraceMs: 300 });
     const v1 = await H.make();
-    void v1.event(idle("ses_top"));
+    // t0 before the event: the deadline is armed there, so a later t0 measured 299 on CI.
+    // The slack absorbs timer rounding; an untracked run returns in ~0 ms.
     const t0 = Date.now();
+    void v1.event(idle("ses_top"));
     await v1.dispose();
     const took = Date.now() - t0;
-    expect(took).toBeGreaterThanOrEqual(300); // waited for the run: it was tracked
+    expect(took).toBeGreaterThanOrEqual(250); // waited for the run: it was tracked
     expect(took).toBeLessThan(1500);
     expect(H.disk().failures.list().length).toBe(0);
     H.exit();
