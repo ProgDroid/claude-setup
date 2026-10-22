@@ -21,10 +21,16 @@ bad() { echo "  FAIL: $1"; fail=$((fail + 1)); }
 echo "== lib-memory.sh: memory_key =="
 . "$DIR/lib-memory.sh"
 
+# Every fixture below comes from mktemp. One root, exported as TMPDIR, catches them all (the
+# hook's own scratch dirs included), so the trap removes everything; 45 dirs used to be left
+# behind per run. `cd /` first: Windows cannot delete the current directory.
+TROOT="$(mktemp -d)" || exit 1
+export TMPDIR="$TROOT"
+trap 'cd / && rm -rf "$TROOT"' EXIT
+
 # The '/x/rest' drive rewrite depends on the shell (core's rule: only under MINGW/MSYS/CYGWIN), so
 # every case names the uname it runs under. A stub `uname` first on PATH stands in for the platform.
 STUBS="$(mktemp -d)"
-trap 'rm -rf "$STUBS"' EXIT
 for _u in "msys:MINGW64_NT-10.0" "linux:Linux"; do
   mkdir -p "$STUBS/${_u%%:*}"
   printf '#!/bin/sh\necho %s\n' "${_u#*:}" > "$STUBS/${_u%%:*}/uname"
@@ -534,9 +540,15 @@ small="$(spawns_for 20)"; large="$(spawns_for 150)"
 [ "${small#* }" = "${large#* }" ] \
   && ok "steady-state spawns independent of file count (20 files: ${small#* }, 150: ${large#* })" \
   || bad "steady-state spawns grow with file count (20 files: ${small#* }, 150: ${large#* })"
-[ "${small% *}" = "${large% *}" ] \
-  && ok "first-sync spawns independent of file count (20 files: ${small% *}, 150: ${large% *})" \
-  || bad "first-sync spawns grow with file count (20 files: ${small% *}, 150: ${large% *})"
+# The first sync copies every file, in one `cp` per 30,000 characters of paths
+# (lib-memory.sh, the Windows argument limit). Fixture paths hold $TMPDIR twice,
+# so a long TMPDIR splits 150 files into two cp calls: 10 vs 11, which this check
+# used to report as growth. Allow 2; one spawn per file adds ~130 here.
+if [ "$(( ${large% *} - ${small% *} ))" -le 2 ]; then
+  ok "first-sync spawns bounded, not per file (20 files: ${small% *}, 150: ${large% *})"
+else
+  bad "first-sync spawns grow with file count (20 files: ${small% *}, 150: ${large% *})"
+fi
 
 # And the budget itself: a first sync plus a steady-state sync of 150 memories
 # inside 30 s, i.e. each one inside the hook's 20 s timeout on average.
