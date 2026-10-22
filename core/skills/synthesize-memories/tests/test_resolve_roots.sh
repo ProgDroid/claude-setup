@@ -97,22 +97,39 @@ MEM7="$TMP/projects7"
 NLD="$TMP/nl"
 mkdir -p "$NLD"
 if mkdir "$NLD/$(printf 'a\nb')" 2>/dev/null; then
-  mkdir -p "$MEM7/$(core_memory_key "$NLD/a")/memory"
+  mkdir -p "$NLD/ok"
+  KNL="$(core_memory_key "$NLD/a")"; KOK="$(core_memory_key "$NLD/ok")"
+  mkdir -p "$MEM7/$KNL/memory" "$MEM7/$KOK/memory"
   OUT7="$(bash "$RR" --memory-root "$MEM7" --search-root "$NLD")"
-  assert_eq "$(row "$OUT7" "$(core_memory_key "$NLD/a")")" "$(core_memory_key "$NLD/a")$TAB" "newline in a dir name: the fragment before it does not resolve"
+  assert_eq "$(row "$OUT7" "$KNL")" "$KNL$TAB" "newline in a dir name: the fragment before it does not resolve"
+  assert_eq "$(printf '%s\n' "$OUT7" | wc -l | tr -d ' ')" "2" "newline fixture: exactly one row per memory dir"
+  assert_eq "$(printf '%s\n' "$OUT7" | awk -F'\t' -v n="$KNL" '$1 == n' | awk -F'\t' '{ print NF ":" $2 }')" "2:" "newline fixture: the fragment's memory row has an empty root"
+  assert_eq "$(row "$OUT7" "$KOK")" "$KOK$TAB$NLD/ok" "newline fixture: a sibling control dir is placed at its real path"
 else
   printf '    SKIP newline-name case (mkdir refused a newline name here)\n'
 fi
 
 # --- no search root, no /g, no HOME: refuse rather than scan / ---
+# A find shim goes first on PATH: it logs its argv, then execs the real find (resolved BEFORE PATH changes).
 if [ ! -d /g ]; then
-  mkdir -p "$TMP/mem8/x/memory"
-  START="$(date +%s)"
-  ERR8="$(HOME= bash "$RR" --memory-root "$TMP/mem8" 2>&1 >/dev/null)"; RC8=$?
-  ELAPSED=$(( $(date +%s) - START ))
+  mkdir -p "$TMP/mem8/x/memory" "$TMP/shim"
+  REALFIND="$(command -v find)"
+  cat > "$TMP/shim/find" <<SHIM
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$TMP/find.log"
+exec "$REALFIND" "\$@"
+SHIM
+  chmod +x "$TMP/shim/find"
+  : > "$TMP/find.log"
+  ERR8="$(HOME= PATH="$TMP/shim:$PATH" bash "$RR" --memory-root "$TMP/mem8" 2>&1 >/dev/null)"; RC8=$?
   assert_eq "$RC8" "2" "no root, no /g, no HOME: exit 2"
-  case "$ERR8" in *--search-root*) _pass "no-root refusal names --search-root" ;; *) _fail "no-root refusal names --search-root" "actual: $ERR8" ;; esac
-  if [ "$ELAPSED" -lt 5 ]; then _pass "no-root refusal returns fast (no scan of /)"; else _fail "no-root refusal returns fast (no scan of /)" "took ${ELAPSED}s"; fi
+  assert_eq "$ERR8" "resolve-roots: no search root (no /g, HOME unset); pass --search-root" "no-root refusal is the exact line"
+  # one logged argument per line: no argument of any find call may be exactly "/"
+  assert_eq "$(grep -cx / "$TMP/find.log")" "0" "no-root refusal never runs find on /"
+  # control: the shim sits on the path the script uses, so a normal run does log a call
+  : > "$TMP/find.log"
+  PATH="$TMP/shim:$PATH" bash "$RR" --memory-root "$TMP/mem8" --search-root "$TMP/mem8" >/dev/null 2>&1
+  if grep -q . "$TMP/find.log"; then _pass "control: the find shim logs a normal run"; else _fail "control: the find shim logs a normal run" "log empty"; fi
 else
   printf '    SKIP no-search-root case (this machine has /g)\n'
 fi

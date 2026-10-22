@@ -168,7 +168,7 @@ describe("guards (M3)", () => {
   });
 });
 
-describe("core and personal layout (0.15.3)", () => {
+describe("core and personal layout", () => {
   test("core's rules/ and scripts/ and personal's dependencies key are not reported", () => {
     const core = plug("core", { "rules/a.md": "x", "scripts/promote-to-core.sh": "x", ".claude-plugin/plugin.json": { name: "core" } });
     const personal = plug("personal", { ".claude-plugin/plugin.json": { name: "personal", version: "0.15.2", dependencies: ["core"] }, "opencode/adapter.js": "1" });

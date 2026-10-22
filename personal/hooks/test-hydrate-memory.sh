@@ -29,7 +29,7 @@ setup() {
   printf -- '---\nname: thing\n---\nbody\n' > "$repo/.claude/memory/thing.md"
   cd "$repo" || exit 1
   # Claude Code's rule: every character outside [A-Za-z0-9] becomes '-' (a mktemp dot included).
-  key="$(printf '%s' "$PWD" | tr -c 'A-Za-z0-9\n' '-')"
+  key="$(printf '%s' "$PWD" | tr -c 'A-Za-z0-9' '-')"
   dest="$fakehome/.claude/projects/$key/memory"
 }
 
@@ -178,8 +178,8 @@ done
 mkdir -p "$parent/not-a-repo/.claude/memory"
 echo "- [stray](stray.md)" > "$parent/not-a-repo/.claude/memory/MEMORY.md"
 out="$(cd "$parent" && HOME="$fakehome" CLAUDE_CLOUD_SESSION=1 bash "$HOOK" 2>/dev/null)"
-akey="$(printf '%s' "$parent/alpha" | tr -c 'A-Za-z0-9\n' '-')"
-bkey="$(printf '%s' "$parent/beta_two" | tr -c 'A-Za-z0-9\n' '-')"
+akey="$(printf '%s' "$parent/alpha" | tr -c 'A-Za-z0-9' '-')"
+bkey="$(printf '%s' "$parent/beta_two" | tr -c 'A-Za-z0-9' '-')"
 if [ -f "$fakehome/.claude/projects/$akey/memory/note.md" ] \
    && [ -f "$fakehome/.claude/projects/$bkey/memory/note.md" ] \
    && grep -q 'beta_two body' "$fakehome/.claude/projects/$bkey/memory/note.md"; then

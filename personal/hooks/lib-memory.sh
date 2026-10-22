@@ -6,7 +6,8 @@
 
 # memory_key <abs-path> -> the directory name under ~/.claude/projects/
 #
-# The rule (Claude Code's own, verified against 58 real project dirs): backslashes become '/', a
+# The rule (Claude Code's own; core/hooks/test-lib-key.sh pins literal keys and
+# core/tests/test-key-parity.sh keeps the twins equal): backslashes become '/', a
 # Git Bash drive form '/x/rest' (SINGLE-letter first segment only) or 'x:/rest' becomes 'X:/rest',
 # then every character that is not [A-Za-z0-9] becomes '-'. So an underscore, a dot or a space all
 # key as '-':
@@ -33,6 +34,7 @@
 memory_key() {
   _p="${1:-}"
   [ -n "$_p" ] || return 1
+  _p="${_p//$'\n'/-}"   # one path: an embedded newline keys to '-' like any other character
   _msys=0
   case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) _msys=1 ;; esac
   printf '%s\n' "$_p" | LC_ALL=C awk -v msys="$_msys" '

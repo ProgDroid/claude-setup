@@ -173,14 +173,17 @@ run_promote "${GOODENV[@]}"; rc=$?
 check_refused "diverged history (ff-only pull fails)" 1 "$rc" "$lh" "$rh"
 
 # unstaged edit to a TRACKED file: the budget check and the tests would read content that is not committed
-setup; stage core/a.md "fine"; good_env
-printf 'edited
-' >> "$CLONE/README.md"
+setup; good_env
+printf 'tracked\n' > "$CLONE/a b.txt"; git -C "$CLONE" add "a b.txt"; git -C "$CLONE" commit -q -m "add a b"
+stage core/a.md "fine"
+printf 'edited\n' >> "$CLONE/a b.txt"
+printf 'edited\n' >> "$CLONE/README.md"
 lh=$(head_of "$CLONE"); rh=$(remote_head)
 run_promote "${GOODENV[@]}"; rc=$?
 check_refused "unstaged change to a tracked file" 1 "$rc" "$lh" "$rh"
 if grep -q 'stage or stash' "$OUT"; then ok "unstaged refusal says stage or stash"; else bad "unstaged message: $(cat "$OUT")"; fi
 if grep -qx '  README.md' "$OUT"; then ok "unstaged refusal lists the unstaged file, indented"; else bad "unstaged file not listed: $(cat "$OUT")"; fi
+if grep -qx '  a b.txt' "$OUT"; then ok "unstaged refusal lists a name with a space intact on one line"; else bad "spaced name not listed intact: $(cat "$OUT")"; fi
 
 # deletion-only staging counts as nothing staged
 setup; good_env

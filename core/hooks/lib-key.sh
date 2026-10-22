@@ -9,8 +9,10 @@
 # where it undoes the shell's drive mapping. On Linux '/a/repo' is a real path and keys as '-a-repo'.
 #
 # core_memory_keys    paths on stdin, one per line -> one key per line, in ONE process
-#                     (callers with thousands of paths must not fork per path).
-# core_memory_key P   one path -> its key; returns 1 (prints nothing) on empty input.
+#                     (callers with thousands of paths must not fork per path). One path per
+#                     line BY DESIGN: a newline here separates paths, it is never part of one.
+# core_memory_key P   one path -> its key; returns 1 (prints nothing) on empty input. P is ONE path,
+#                     so an embedded newline is an ordinary non-alphanumeric character and keys to '-'.
 
 core_memory_keys() {
   local msys=0
@@ -34,5 +36,6 @@ core_memory_keys() {
 core_memory_key() {
   local p="${1:-}"
   [ -n "$p" ] || return 1
+  p="${p//$'\n'/-}"
   printf '%s\n' "$p" | core_memory_keys
 }

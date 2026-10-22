@@ -24,6 +24,7 @@ echo "== lib-memory.sh: memory_key =="
 # The '/x/rest' drive rewrite depends on the shell (core's rule: only under MINGW/MSYS/CYGWIN), so
 # every case names the uname it runs under. A stub `uname` first on PATH stands in for the platform.
 STUBS="$(mktemp -d)"
+trap 'rm -rf "$STUBS"' EXIT
 for _u in "msys:MINGW64_NT-10.0" "linux:Linux"; do
   mkdir -p "$STUBS/${_u%%:*}"
   printf '#!/bin/sh\necho %s\n' "${_u#*:}" > "$STUBS/${_u%%:*}/uname"

@@ -48,11 +48,48 @@ cases=(
   '/a/repo'
 )
 
+# Every row: parity between the twins, AND each key non-empty and made only of [A-Za-z0-9-]. Without the
+# second check, two functions that both print nothing would pass parity.
+check_key() {  # <label> <uname> <input>
+  local want got k pair
+  want="$(PATH="$T/$2:$PATH" core_memory_key "$3")"
+  got="$(PATH="$T/$2:$PATH" memory_key "$3")"
+  [ "$got" = "$want" ] && ok "$1: '$3' -> '$got'" || bad "$1: '$3': memory_key gave '$got', core gave '$want'"
+  for pair in "core:$want" "personal:$got"; do
+    k="${pair#*:}"
+    if [[ -n "$k" && "$k" =~ ^[A-Za-z0-9-]+$ ]]; then ok "$1: $pair is a non-empty [A-Za-z0-9-] key"
+    else bad "$1: ${pair%%:*} key is empty or has other characters: '$k'"; fi
+  done
+}
+
 for u in MINGW64_NT-10.0 Linux; do
   for c in "${cases[@]}"; do
-    want="$(PATH="$T/$u:$PATH" core_memory_key "$c")"
-    got="$(PATH="$T/$u:$PATH" memory_key "$c")"
-    [ "$got" = "$want" ] && ok "$u: '$c' -> '$got'" || bad "$u: '$c': memory_key gave '$got', core gave '$want'"
+    check_key "$u" "$u" "$c"
+  done
+done
+
+# Literal rows: input|key under MSYS|key under Linux. A path holding a newline is ONE path to the single
+# path entry points, so the newline keys to '-' like any other character (core_memory_keys, the stream
+# form, stays one path per line by design). The drive-root rows pin the bare-drive edge.
+NL=$'\n'
+literals=(
+  "/home/u/a${NL}b|-home-u-a-b|-home-u-a-b"
+  "/g/x/a${NL}b|G--x-a-b|-g-x-a-b"
+  'G:/|G--|G--'
+  'g:|G--|G--'
+  'G:\|G--|G--'
+  '/g|G--|-g'
+  '/g/|G--|-g-'
+)
+for row in "${literals[@]}"; do
+  in="${row%%|*}"; rest="${row#*|}"; exp_msys="${rest%%|*}"; exp_linux="${rest#*|}"
+  for u in MINGW64_NT-10.0 Linux; do
+    [ "$u" = Linux ] && exp="$exp_linux" || exp="$exp_msys"
+    check_key "$u" "$u" "$in"
+    for fn in core_memory_key memory_key; do
+      k="$(PATH="$T/$u:$PATH" "$fn" "$in")"
+      [ "$k" = "$exp" ] && ok "$u: $fn '$in' = '$exp'" || bad "$u: $fn '$in' gave '$k', wanted '$exp'"
+    done
   done
 done
 

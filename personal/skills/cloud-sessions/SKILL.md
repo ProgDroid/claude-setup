@@ -59,7 +59,7 @@ bodies on demand — that keeps startup cost flat as the corpus grows.
 
 ## Project key format
 
-`~/.claude/projects/<key>/` where the key is the absolute path with backslashes turned into `/`, a `/x/rest` path (single-letter first segment) rewritten to `X:/rest` under Git Bash/MSYS/Cygwin only, and then every character outside `[A-Za-z0-9]` (separators, spaces, underscores, dots) replaced by `-`.
+`~/.claude/projects/<key>/` where the key is the absolute path with backslashes turned into `/`, a `/x/rest` path (single-letter first segment) rewritten to `X:/rest` under Git Bash/MSYS/Cygwin only (an `x:/rest` path is upper-cased to `X:/rest` on every platform), and then every character outside `[A-Za-z0-9]` (separators, spaces, underscores, dots) replaced by `-`.
 
 | Platform | Path | Key |
 |---|---|---|

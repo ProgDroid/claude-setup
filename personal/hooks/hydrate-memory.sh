@@ -38,11 +38,11 @@ set -uo pipefail
 lib_ok=0
 . "$(dirname "$0")/lib-memory.sh" 2>/dev/null && lib_ok=1
 
-# Fallback (lib-memory.sh unreadable): the tr applies the same character class
-# as memory_key, [^A-Za-z0-9] -> '-'; the drive rewrite never applies here
+# Fallback (lib-memory.sh unreadable): the tr applies the same rule as
+# memory_key, every [^A-Za-z0-9] (newline included) -> '-'; the drive rewrite never applies here
 # because this hook is gated to Linux cloud sessions.
 key_for() {
-  if [ "$lib_ok" -eq 1 ]; then memory_key "$1"; else printf '%s' "$1" | tr -c 'A-Za-z0-9\n' '-'; fi
+  if [ "$lib_ok" -eq 1 ]; then memory_key "$1"; else printf '%s' "$1" | tr -c 'A-Za-z0-9' '-'; fi
 }
 
 # hydrate_root <key-root> <repo-memory-dir>
