@@ -52,12 +52,14 @@ run_timeout() {
 # <cmd> timed out is decided by what the watchdog DID, never by whether it is still alive (it can
 # be alive for an instant after sending TERM): it exits 124 once it has sent TERM, so after <cmd>
 # returns the watchdog is killed and reaped, and 124 means it got there first, while 143 (killed
-# while sleeping) means <cmd> beat the clock.
+# while sleeping) means <cmd> beat the clock. Once it has sent TERM it cannot be killed (it
+# ignores TERM from that point), so 124 is reported whenever it fired, even if <cmd> dies on that
+# TERM and the caller's kill lands before the watchdog has exited.
 _watchdog_timeout() {
   local s="$1" pid wd rc wrc; shift
   "$@" &
   pid=$!
-  ( sleep "$s"; kill -TERM "$pid" 2>/dev/null; exit 124 ) >/dev/null 2>&1 &
+  ( sleep "$s"; trap '' TERM; kill -TERM "$pid" 2>/dev/null; exit 124 ) >/dev/null 2>&1 &
   wd=$!
   wait "$pid"; rc=$?
   kill "$wd" 2>/dev/null; wait "$wd" 2>/dev/null; wrc=$?

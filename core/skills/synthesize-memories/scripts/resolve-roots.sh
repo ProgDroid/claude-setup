@@ -31,13 +31,19 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "${#SEARCH_ROOTS[@]}" -eq 0 ]; then
-  if [ -d /g ]; then SEARCH_ROOTS=(/g); else SEARCH_ROOTS=("${HOME:-/}"); fi
+  if [ -d /g ]; then SEARCH_ROOTS=(/g)
+  elif [ -n "${HOME:-}" ]; then SEARCH_ROOTS=("$HOME")
+  else
+    printf 'resolve-roots: no search root (no /g, HOME unset); pass --search-root\n' >&2
+    exit 2
+  fi
 fi
 [ -d "$MEMORY_ROOT" ] || { printf 'resolve-roots: memory root not found: %s\n' "$MEMORY_ROOT" >&2; exit 1; }
 for r in "${SEARCH_ROOTS[@]}"; do
   [ -d "$r" ] || { printf 'resolve-roots: search root not found: %s\n' "$r" >&2; exit 1; }
 done
 
+# Names containing a newline are pruned: the one-path-per-line table cannot hold them.
 # Encoded-name -> real-path table for every directory at depth 1..MAX_DEPTH of each root.
 # All keys come from ONE core_memory_keys process per root (lib-key.sh owns the rule).
 TABLE="$(mktemp)"
@@ -45,7 +51,7 @@ DIRS="$(mktemp)"
 trap 'rm -f "$TABLE" "$DIRS"' EXIT
 
 for root in "${SEARCH_ROOTS[@]}"; do
-  find "$root" -mindepth 1 -maxdepth "$MAX_DEPTH" \( -name .git -o -name node_modules \) -prune -o -type d -print 2>/dev/null > "$DIRS" || true
+  find "$root" -mindepth 1 -maxdepth "$MAX_DEPTH" \( -name .git -o -name node_modules -o -name "$(printf '*\n*')" \) -prune -o -type d -print 2>/dev/null > "$DIRS" || true
   core_memory_keys < "$DIRS" | paste -d '	' - "$DIRS"
 done > "$TABLE"
 

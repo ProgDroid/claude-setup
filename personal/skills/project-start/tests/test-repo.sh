@@ -146,6 +146,19 @@ out="$( . "$SKILL_DIR/lib/common.sh"; PATH="$nt"; run_timeout 30 "$BASHX" -c 'ec
 [ "$out" = hi ] && [ "$rc" = 3 ] && [ "$el" -lt 10 ] && ok "run_timeout_without_timeout_bin_passes_output_and_status (${el}s)" \
   || bad "watchdog passthrough: out=$out rc=$rc ${el}s"
 
+# Residual race: the watchdog sends TERM, then is itself killed before it can exit 124 (the cmd
+# returns on that TERM and the caller kills the watchdog). A kill() override, inherited by the
+# watchdog subshell, widens the window between its TERM and its exit. It must still report 124.
+res="$( . "$SKILL_DIR/lib/common.sh"
+  kill() { builtin kill "$@"; local r=$?; [ "$1" = -TERM ] && sleep 2; return $r; }
+  _watchdog_timeout 1 sleep 5; echo "$?"; unset -f kill )"
+[ "$res" = 124 ] && ok "watchdog_cannot_be_killed_after_it_fires_says_124" || bad "watchdog race: rc=$res (want 124)"
+t0=$SECONDS
+res="$( . "$SKILL_DIR/lib/common.sh"
+  kill() { builtin kill "$@"; local r=$?; [ "$1" = -TERM ] && sleep 2; return $r; }
+  _watchdog_timeout 5 true; echo "$?"; unset -f kill )"; el=$((SECONDS - t0))
+[ "$res" = 0 ] && [ "$el" -lt 4 ] && ok "watchdog_cmd_beats_clock_says_0_under_kill_override (${el}s)" || bad "watchdog beat: rc=$res ${el}s"
+
 # non-repo
 bash "$RITUAL" candidates "$TMPROOT" >/dev/null 2>&1; [ $? -eq 2 ] && ok "candidates_requires_repo" || bad "candidates_requires_repo"
 finish

@@ -13,8 +13,11 @@
 # into place here.
 #
 # PROJECT KEY: verified 2026-07-24 against a live cloud session. cwd is
-# /home/user/repo and the key is -home-user-repo, i.e. the path with '/'
-# replaced by '-'. Derived rather than hardcoded, so it survives a path change.
+# /home/user/repo and the key is -home-user-repo. The rule (owned by memory_key
+# in lib-memory.sh): backslashes become '/'; under Git Bash/MSYS/Cygwin only, a
+# '/x/rest' path becomes 'X:/rest'; then EVERY character that is not [A-Za-z0-9]
+# becomes '-' (so '.', '_', ' ' and '/' all do). Derived rather than hardcoded,
+# so it survives a path change.
 #
 # GATE: cloud sessions only. Locally, memories already live in
 # ~/.claude/projects/ (symlinked into the dotfiles repo), and copying the repo
@@ -35,8 +38,11 @@ set -uo pipefail
 lib_ok=0
 . "$(dirname "$0")/lib-memory.sh" 2>/dev/null && lib_ok=1
 
+# Fallback (lib-memory.sh unreadable): the tr applies the same character class
+# as memory_key, [^A-Za-z0-9] -> '-'; the drive rewrite never applies here
+# because this hook is gated to Linux cloud sessions.
 key_for() {
-  if [ "$lib_ok" -eq 1 ]; then memory_key "$1"; else printf '%s' "$1" | tr '/' '-'; fi
+  if [ "$lib_ok" -eq 1 ]; then memory_key "$1"; else printf '%s' "$1" | tr -c 'A-Za-z0-9\n' '-'; fi
 }
 
 # hydrate_root <key-root> <repo-memory-dir>

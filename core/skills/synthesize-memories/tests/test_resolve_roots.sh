@@ -91,3 +91,28 @@ MEM6="$TMP/projects6"
 mkdir -p "$MEM6/$(core_memory_key /tmp)/memory"
 OUT6="$(bash "$RR" --memory-root "$MEM6" --search-root / --max-depth 1)"
 assert_eq "$(row "$OUT6" "$(core_memory_key /tmp)")" "$(core_memory_key /tmp)$TAB/tmp" "root '/': /tmp resolves through the fallback"
+
+# --- a directory name containing a newline is skipped, not split into two bogus rows ---
+MEM7="$TMP/projects7"
+NLD="$TMP/nl"
+mkdir -p "$NLD"
+if mkdir "$NLD/$(printf 'a\nb')" 2>/dev/null; then
+  mkdir -p "$MEM7/$(core_memory_key "$NLD/a")/memory"
+  OUT7="$(bash "$RR" --memory-root "$MEM7" --search-root "$NLD")"
+  assert_eq "$(row "$OUT7" "$(core_memory_key "$NLD/a")")" "$(core_memory_key "$NLD/a")$TAB" "newline in a dir name: the fragment before it does not resolve"
+else
+  printf '    SKIP newline-name case (mkdir refused a newline name here)\n'
+fi
+
+# --- no search root, no /g, no HOME: refuse rather than scan / ---
+if [ ! -d /g ]; then
+  mkdir -p "$TMP/mem8/x/memory"
+  START="$(date +%s)"
+  ERR8="$(HOME= bash "$RR" --memory-root "$TMP/mem8" 2>&1 >/dev/null)"; RC8=$?
+  ELAPSED=$(( $(date +%s) - START ))
+  assert_eq "$RC8" "2" "no root, no /g, no HOME: exit 2"
+  case "$ERR8" in *--search-root*) _pass "no-root refusal names --search-root" ;; *) _fail "no-root refusal names --search-root" "actual: $ERR8" ;; esac
+  if [ "$ELAPSED" -lt 5 ]; then _pass "no-root refusal returns fast (no scan of /)"; else _fail "no-root refusal returns fast (no scan of /)" "took ${ELAPSED}s"; fi
+else
+  printf '    SKIP no-search-root case (this machine has /g)\n'
+fi

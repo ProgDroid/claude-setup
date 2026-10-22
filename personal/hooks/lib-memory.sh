@@ -6,50 +6,49 @@
 
 # memory_key <abs-path> -> the directory name under ~/.claude/projects/
 #
-# Two formats, because the same repo has a different path on each platform:
+# The rule (Claude Code's own, verified against 58 real project dirs): backslashes become '/', a
+# Git Bash drive form '/x/rest' (SINGLE-letter first segment only) or 'x:/rest' becomes 'X:/rest',
+# then every character that is not [A-Za-z0-9] becomes '-'. So an underscore, a dot or a space all
+# key as '-':
 #
 #   Linux / cloud VM   /home/user/repo        -> -home-user-repo
-#                      (verified 2026-07-24 against a live cloud session)
-#
 #   Windows via MSYS   /g/rustDev/aba         -> G--rustDev-aba
-#                      (drive letter uppercased, then separators -> '-')
+#   Windows, git form  G:/a/b  or  G:\a\b     -> G--a-b
+#   a mktemp dir       /tmp/tmp.CYKwCSUeAA    -> -tmp-tmp-CYKwCSUeAA
 #
-# UNDERSCORES ARE NORMALISED TO '-'. Verified 2026-07-25: the repo at
-# /g/flutterDev/my_app has its memories under
-# G--flutterDev-my-app, and no project directory anywhere on this
-# machine contains an underscore. Missing this cost nothing only because it was
-# caught before shipping -- the hook would have written to a directory nothing
-# reads, with no error and no output.
+# The '/x/rest' rewrite runs ONLY where `uname -s` is MINGW*/MSYS*/CYGWIN*: there it undoes the
+# shell's drive mapping. On Linux '/a/repo' is a real path and keys as '-a-repo'.
 #
-# Getting this wrong is silent, which is why it has direct test coverage.
+# History worth keeping: both production callers (sync-memory.sh, auto-commit.sh) derive the root
+# from `git rev-parse --show-toplevel`, which on Git Bash is the WINDOWS form G:/a/b, not /g/a/b.
+# A key built without folding that form held a colon, no such directory could exist, and both hooks
+# no-opped in silence for days (found 2026-09-05). An earlier version also left '.', '+' and '@'
+# untouched, so a dotted path (every mktemp dir, every <repo>/.claude/worktrees/<n>) keyed to a
+# directory nothing reads. Getting this wrong is silent, hence the direct test coverage.
+#
+# This is the TWIN of core_memory_key in core/hooks/lib-key.sh (the plugins install separately, so
+# personal cannot source it); core/tests/test-key-parity.sh keeps the two equal. Change both.
+#
+# Prints the key with no trailing newline; returns 1, printing nothing, on empty input.
 memory_key() {
   _p="${1:-}"
   [ -n "$_p" ] || return 1
-
-  # Normalise a Windows-form path to the MSYS form FIRST.
-  #
-  # Both production callers (sync-memory.sh, auto-commit.sh) derive the root
-  # from `git rev-parse --show-toplevel`, and on Git Bash that returns
-  # G:/pythonDev/my-service -- a Windows path with a drive colon, NOT the MSYS
-  # /g/pythonDev/my-service the matcher below was written for. So every real
-  # call fell through to the generic branch and produced a key containing a
-  # colon ('G:-pythonDev-my-service'). No such directory can exist, both hooks
-  # hit their `[ -d "$_src" ] || return 0` guard, and the whole mechanism
-  # no-opped in complete silence for days. Found 2026-09-05.
-  #
-  # Backslashes are folded too, since some Windows tools emit G:\a\b.
-  _p="$(printf '%s' "$_p" | sed -e 's|\\|/|g' -e 's|^\([a-zA-Z]\):/|/\1/|')"
-
-  # Single-letter first segment means an MSYS drive mount.
-  _drive="$(printf '%s' "$_p" | sed -n 's:^/\([a-zA-Z]\)/.*:\1:p' | tr 'a-z' 'A-Z')"
-  if [ -n "$_drive" ]; then
-    _rel="$(printf '%s' "$_p" | sed -n 's:^/[a-zA-Z]/::p')"
-    [ -n "$_rel" ] || return 1
-    printf '%s--%s' "$_drive" "$(printf '%s' "$_rel" | tr '/ _' '---')"
-    return 0
-  fi
-
-  printf '%s' "$_p" | tr '/_' '--'
+  _msys=0
+  case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) _msys=1 ;; esac
+  printf '%s\n' "$_p" | LC_ALL=C awk -v msys="$_msys" '
+    {
+      p = $0
+      gsub(/[\\]/, "/", p)
+      if (msys == 1 && match(p, /^\/[A-Za-z](\/|$)/)) {
+        rest = substr(p, 3); if (rest == "") rest = "/"
+        p = toupper(substr(p, 2, 1)) ":" rest
+      } else if (match(p, /^[A-Za-z]:(\/|$)/)) {
+        rest = substr(p, 3); if (rest == "") rest = "/"
+        p = toupper(substr(p, 1, 1)) ":" rest
+      }
+      gsub(/[^A-Za-z0-9]/, "-", p)
+      printf "%s", p
+    }'
 }
 
 # _memory_hash <file> -> a content digest on stdout, non-zero if no hasher

@@ -59,14 +59,14 @@ bodies on demand — that keeps startup cost flat as the corpus grows.
 
 ## Project key format
 
-`~/.claude/projects/<key>/` where the key is the absolute path with separators, spaces **and
-underscores** all replaced by `-`.
+`~/.claude/projects/<key>/` where the key is the absolute path with backslashes turned into `/`, a `/x/rest` path (single-letter first segment) rewritten to `X:/rest` under Git Bash/MSYS/Cygwin only, and then every character outside `[A-Za-z0-9]` (separators, spaces, underscores, dots) replaced by `-`.
 
 | Platform | Path | Key |
 |---|---|---|
 | Cloud VM | `/home/user/repo` | `-home-user-repo` |
 | Windows/MSYS | `/g/rustDev/aba` | `G--rustDev-aba` |
 | Underscores | `/g/flutterDev/my_app` | `G--flutterDev-my-app` |
+| Dotted worktree (Git Bash) | `/g/x/.claude/worktrees/y` | `G--x--claude-worktrees-y` |
 
 A single-repo cloud session starts in `/home/user/repo`. Deriving the key wrongly fails
 **silently** — the write lands in a directory nothing reads, with no error. Underscore

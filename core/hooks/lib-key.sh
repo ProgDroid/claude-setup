@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # lib-key.sh - sourced library. The rule that turns a project root into the directory
-# name Claude Code uses under ~/.claude/projects exists ONCE, in core_memory_keys.
+# name Claude Code uses under ~/.claude/projects exists here (core_memory_keys) and as a twin in personal/hooks/lib-memory.sh (memory_key), kept equal by core/tests/test-key-parity.sh.
 #
 # Rule: backslashes become '/', a Git Bash drive form '/x/rest' (SINGLE-letter first
 # segment only) or 'x:/rest' becomes 'X:/rest', then every character that is not

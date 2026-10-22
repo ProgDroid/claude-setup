@@ -58,6 +58,7 @@ if [ -z "$staged" ]; then
 fi
 if ! git diff --quiet; then
   echo "promote: tracked files have unstaged changes; stage or stash them first (the budget check and the tests read the worktree)." >&2
+  git -c core.quotepath=off diff --name-only | sed 's/^/  /' >&2
   exit 1
 fi
 

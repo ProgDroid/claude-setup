@@ -21,34 +21,46 @@ bad() { echo "  FAIL: $1"; fail=$((fail + 1)); }
 echo "== lib-memory.sh: memory_key =="
 . "$DIR/lib-memory.sh"
 
-got="$(memory_key /home/user/repo)"
-[ "$got" = "-home-user-repo" ] \
-  && ok "linux: /home/user/repo -> -home-user-repo" \
-  || bad "linux gave '$got'"
+# The '/x/rest' drive rewrite depends on the shell (core's rule: only under MINGW/MSYS/CYGWIN), so
+# every case names the uname it runs under. A stub `uname` first on PATH stands in for the platform.
+STUBS="$(mktemp -d)"
+for _u in "msys:MINGW64_NT-10.0" "linux:Linux"; do
+  mkdir -p "$STUBS/${_u%%:*}"
+  printf '#!/bin/sh\necho %s\n' "${_u#*:}" > "$STUBS/${_u%%:*}/uname"
+  chmod +x "$STUBS/${_u%%:*}/uname"
+done
+# mk <msys|linux> <path>: memory_key under that platform's uname.
+mk() { PATH="$STUBS/$1:$PATH" memory_key "$2"; }
+# expect <msys|linux> <path> <want> <label>
+expect() {
+  local got; got="$(mk "$1" "$2")"
+  [ "$got" = "$3" ] && ok "$4" || bad "$4 (gave '$got', want '$3')"
+}
 
-got="$(memory_key /g/rustDev/my-tool)"
-[ "$got" = "G--rustDev-my-tool" ] \
-  && ok "msys: /g/rustDev/... -> G--rustDev-..." \
-  || bad "msys gave '$got'"
+expect linux "/home/user/repo" "-home-user-repo" "linux: /home/user/repo -> -home-user-repo"
+expect msys "/g/rustDev/my-tool" "G--rustDev-my-tool" "msys: /g/rustDev/... -> G--rustDev-..."
+expect msys "/g/My Docs/proj" "G--My-Docs-proj" "msys with a space in the path"
 
-got="$(memory_key "/g/My Docs/proj")"
-[ "$got" = "G--My-Docs-proj" ] \
-  && ok "msys with a space in the path" \
-  || bad "msys-with-space gave '$got'"
+# On Linux '/g/a' is a real path, not a drive mount: it keys as '-g-a'. Under MSYS the same string
+# is the drive form. The uname gate is what tells them apart.
+expect linux "/g/rustDev/my-tool" "-g-rustDev-my-tool" "linux: /g/... is a real path, not a drive"
+expect linux "/a/repo" "-a-repo" "linux: /a/repo -> -a-repo"
+expect linux "/g/My Docs/proj" "-g-My-Docs-proj" "linux: a space keys as '-' with no drive rewrite"
 
 # Underscores are normalised to '-'. Verified against a real repo:
 # /g/flutterDev/my_app keeps its memories under
 # G--flutterDev-my-app. Getting this wrong writes to a directory
 # nothing reads, silently -- hence a dedicated test on both platforms.
-got="$(memory_key /g/flutterDev/my_app)"
-[ "$got" = "G--flutterDev-my-app" ] \
-  && ok "msys: underscores normalise to hyphens" \
-  || bad "msys underscore gave '$got'"
+expect msys "/g/flutterDev/my_app" "G--flutterDev-my-app" "msys: underscores normalise to hyphens"
+expect linux "/home/user/my_repo" "-home-user-my-repo" "linux: underscores normalise to hyphens"
 
-got="$(memory_key /home/user/my_repo)"
-[ "$got" = "-home-user-my-repo" ] \
-  && ok "linux: underscores normalise to hyphens" \
-  || bad "linux underscore gave '$got'"
+# Every character outside [A-Za-z0-9] becomes '-', a dot included. Real keys show it: a temp dir
+# tmp.CYKwCSUeAA keys as ...-tmp-CYKwCSUeAA, and a worktree under <repo>/.claude/worktrees/<n>
+# keys as <repo>--claude-worktrees-<n> (seven such dirs on the machine this was measured on).
+expect msys "/g/web/my.app" "G--web-my-app" "msys: a dot keys as '-'"
+expect msys "/g/x/.claude/worktrees/y" "G--x--claude-worktrees-y" "msys: a worktree path keys with a double hyphen"
+expect linux "/home/u/a+b@c" "-home-u-a-b-c" "linux: punctuation keys as '-'"
+expect linux "/tmp/tmp.CYKwCSUeAA" "-tmp-tmp-CYKwCSUeAA" "linux: a mktemp directory keys without its dot"
 
 # The form the PRODUCTION callers actually supply. sync-memory.sh and
 # auto-commit.sh both derive the root from `git rev-parse --show-toplevel`,
@@ -59,31 +71,27 @@ got="$(memory_key /home/user/my_repo)"
 # Found 2026-09-05: the key came back as 'G:-pythonDev-my-service', no
 # directory matched, and both hooks silently no-opped for days with no error
 # anywhere -- one project's corpus had drifted two entries behind.
-got="$(memory_key "G:/pythonDev/my-service")"
-[ "$got" = "G--pythonDev-my-service" ] \
-  && ok "windows: G:/a/b -> G--a-b (the git rev-parse form)" \
-  || bad "windows drive form gave '$got'"
-
-got="$(memory_key 'G:\pythonDev\my-service')"
-[ "$got" = "G--pythonDev-my-service" ] \
-  && ok "windows: backslash form normalises identically" \
-  || bad "windows backslash form gave '$got'"
-
-got="$(memory_key "g:/pythonDev/my-service")"
-[ "$got" = "G--pythonDev-my-service" ] \
-  && ok "windows: lowercase drive letter uppercases" \
-  || bad "windows lowercase drive gave '$got'"
+for _pl in msys linux; do
+  expect "$_pl" "G:/pythonDev/my-service" "G--pythonDev-my-service" "$_pl: G:/a/b -> G--a-b (the git rev-parse form)"
+  expect "$_pl" 'G:\pythonDev\my-service' "G--pythonDev-my-service" "$_pl: backslash form normalises identically"
+  expect "$_pl" "g:/pythonDev/my-service" "G--pythonDev-my-service" "$_pl: lowercase drive letter uppercases"
+done
 
 # A key names a directory, so anything that cannot BE a directory name is a bug
 # regardless of which input produced it. This is the property the colon
 # violated, and it holds for every supported input shape.
-for _in in "G:/a/b" 'G:\a\b' "/g/a/b" "/home/user/repo"; do
-  _k="$(memory_key "$_in")"
+for _in in "G:/a/b" 'G:\a\b' "/g/a/b" "/home/user/repo" "/g/web/my.app" "/home/u/a+b@c"; do
+  _k="$(mk msys "$_in")"
   case "$_k" in
     ''|*[!A-Za-z0-9-]*) bad "key for '$_in' is not directory-safe: '$_k'" ;;
     *)                  ok  "key for '$_in' is directory-safe" ;;
   esac
 done
+
+# The contract on empty input: return 1, print nothing.
+_k="$(memory_key "")"; _rc=$?
+[ "$_rc" = 1 ] && [ -z "$_k" ] && ok "empty input returns 1 and prints nothing" || bad "empty input: rc=$_rc out='$_k'"
+
 
 echo "== sync-memory.sh =="
 
@@ -98,14 +106,12 @@ setup() {
   # directory can have, so a malformed key fails here instead of passing
   # everywhere. (2026-09-05)
   key="$(memory_key "$(git rev-parse --show-toplevel)")"
-  # Only the characters that genuinely cannot appear in a directory name. The
-  # repo root here comes from mktemp (tmp.abc123), and there is no evidence on
-  # this machine for how Claude Code keys a path containing a dot -- all 26 real
-  # project keys derive from dot-free paths. Asserting a guess would send writes
-  # to a directory nothing reads, which is the bug this test exists to catch.
-  # The hand-written cases above keep the strict [A-Za-z0-9-] check.
+  # The repo root here comes from mktemp (tmp.abc123). Claude Code keys a dot
+  # as '-' (a real temp dir tmp.CYKwCSUeAA keys as ...-tmp-CYKwCSUeAA, and seven
+  # real *--claude-worktrees-* keys show the same), so the strict
+  # [A-Za-z0-9-] check applies here as it does to the hand-written cases above.
   case "$key" in
-    ''|*[:/\\]*)
+    ''|*[!A-Za-z0-9-]*)
       bad "setup derived an unusable project key: '$key'"
       return 1 ;;
   esac

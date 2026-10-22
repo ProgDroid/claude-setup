@@ -180,6 +180,7 @@ lh=$(head_of "$CLONE"); rh=$(remote_head)
 run_promote "${GOODENV[@]}"; rc=$?
 check_refused "unstaged change to a tracked file" 1 "$rc" "$lh" "$rh"
 if grep -q 'stage or stash' "$OUT"; then ok "unstaged refusal says stage or stash"; else bad "unstaged message: $(cat "$OUT")"; fi
+if grep -qx '  README.md' "$OUT"; then ok "unstaged refusal lists the unstaged file, indented"; else bad "unstaged file not listed: $(cat "$OUT")"; fi
 
 # deletion-only staging counts as nothing staged
 setup; good_env
@@ -204,6 +205,22 @@ run_promote "${GOODENV[@]}" PATH="$T/gitshim$n:$T/bin:$PATH"; rc=$?
 check_refused "git diff fails" 1 "$rc" "$lh" "$rh"
 if grep -q 'could not list the staged files' "$OUT"; then ok "git diff failure is named"; else bad "git diff failure message: $(cat "$OUT")"; fi
 [ ! -s "$CLONE/.privacy-calls" ] && ok "privacy scan not reached after the git failure" || bad "privacy scan ran despite the git failure"
+
+# an export that silently produces nothing must be refused, not scanned (git shim: checkout-index exits 0 doing nothing)
+setup; stage core/a.md "fine"; good_env
+REALGIT="$(command -v git)"
+mkdir -p "$T/gitshim$n"
+cat > "$T/gitshim$n/git" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do [ "\$a" = "checkout-index" ] && { cat >/dev/null; exit 0; }; done
+exec "$REALGIT" "\$@"
+SHIM
+chmod +x "$T/gitshim$n/git"
+lh=$(head_of "$CLONE"); rh=$(remote_head)
+run_promote "${GOODENV[@]}" PATH="$T/gitshim$n:$T/bin:$PATH"; rc=$?
+check_refused "empty staged export" 1 "$rc" "$lh" "$rh"
+if grep -q 'the staged export is empty' "$OUT"; then ok "empty export is named"; else bad "empty export message: $(cat "$OUT")"; fi
+[ ! -s "$CLONE/.privacy-calls" ] && ok "privacy scan not reached after an empty export" || bad "privacy scan ran on an empty export"
 
 # push rejected by the remote after a local commit
 setup; stage core/a.md "fine"; good_env
