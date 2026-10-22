@@ -51,6 +51,13 @@ detect that its own premise is false.
   installed plugin was correct in code. But the repo's `config/sb.toml` named the clone path
   explicitly, and would have overridden the fix on the one machine that mattered. When a default
   moves, grep every config file for the key, and put deleting the stale line in the brief.
+- **A rule change has copies the plan will not name.** On 2026-10-21 a change to how memory keys
+  are derived left the old rule in three places: tests' hand-built expected values, a fallback
+  branch, and two shipped docs. A red team found the tests and the final review found the docs.
+  The same seam runs the other way. Two entries added to a data file broke a test that parses the
+  real file, and nobody noticed for a day, because the suite that reads it never ran. Before
+  planning a change to a rule or a shared file, grep for its SHAPE (the transform, the file name)
+  across tests, fallbacks and docs, and list every hit in the brief.
 - **A ruling that makes a step run on EVERY invocation must be costed with the real tool first.**
   Before ruling, ask what the step's check already does. A ruling that ran each fix whenever its
   check said `present` closed a real gap: leftovers from an interrupted run. But the secret-scan
