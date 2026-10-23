@@ -150,3 +150,8 @@ does not exist, and a real thing reported as absent is silently dropped and neve
 **Tell:** HTTP 200 with plausible data from a filter or parameter name you guessed.
 **Case:** a guessed nested identifier-and-timestamp body on an events-calendar API returned a global 41-entity calendar: the target entity was absent and the date window ignored. The correct flat body returned exactly the one entity. Separately, `curl` without `--compressed` handed back gzip bytes, four content greps scored 0, and the archived page read as "never archived". With the flag, all four matched in 72 KB.
 **Countermeasure:** verify the content, not the status: is the entity present, was the window respected, is the row count what one entity should return? A round-number result count is a tell, so compare `total` with the array length. Check the first bytes or the byte count before concluding a body does not contain something.
+
+### the-rejection-was-not-a-rollback
+**Tell:** a tool call comes back "rejected" or "interrupted", and it was a chain of steps.
+**Case:** a single Bash call ran ledger-append, `git push -u origin <branch>`, then `gh pr create`. The user stopped it; the result said "rejected… STOP". The push and the append had both happened; only the PR had not. Treating "rejected" as "nothing ran" would have left a stray remote branch unmentioned.
+**Countermeasure:** after a rejected or interrupted chain, check the side effect of every step (`git ls-remote`, `gh pr list`, the file) before reporting or retrying. Split outward-facing steps (push, publish, PR) into their own calls so a rejection lands on one action.

@@ -44,6 +44,25 @@ moved to 0.11.8.
   version the session actually loaded. They disagree exactly when you are mid-edit, which is
   exactly when you are looking.
 
+**Exception: a marketplace added from a local directory** (`known_marketplaces.json` source
+`"directory"`). Verified 2026-10-23 (cli-timer): the skill's base directory was the checkout
+(`G:\rustDev\cli-timer\plugin\skills\timer`), not the cache, so the working copy IS what runs,
+re-read at each session start. A resumed session kept the old path (it served a skill folder that
+had since been moved); only a full restart picked up the new one.
+
+## Installing from a local checkout copies the whole plugin folder
+
+Install still copies the plugin's `source` folder into the cache, with no way to exclude
+anything: `.gitignore` is ignored (a `"source": "./"` repo copied its 1.7 GB `target/`), though
+`.git/` was left out. Give the plugin its own folder (`"source": "./plugin"`).
+
+- A same-version reinstall reuses the cached folder: uninstall, delete
+  `~/.claude/plugins/cache/<marketplace>/`, `claude plugin marketplace update <m>`, install.
+- Test a branch's GitHub install without touching the real setup:
+  `CLAUDE_CONFIG_DIR=<empty dir> claude plugin marketplace add 'https://github.com/<o>/<r>.git#<branch>'`,
+  then `claude plugin install <p>@<m>` and inspect `<dir>/plugins/cache/`. Checksum the real
+  `~/.claude/plugins/*.json` before and after to prove the test stayed isolated.
+
 ## A SessionStart hook cannot deliver files to its own session
 
 The memory subsystem reads its index when the session starts. A `SessionStart` hook runs after
