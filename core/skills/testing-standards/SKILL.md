@@ -439,6 +439,7 @@ go test -parallel 4 ./...
 | Resource cleanup | Use proper teardown |
 | Environment-dependent (TMPDIR or cwd length, locale, toolchain) | Before calling a test flaky, diff the failing run's environment against the passing re-run; a count that is deterministic in principle never flakes from load |
 | Clock started after the deadline is armed | Take t0 before the call that arms the timer, and give the floor a little slack for timer rounding |
+| Clock started before the child is spawned | Under a parallel suite, `spawn` queues behind the other tests' process creation (Windows, Rust: 0.5-1.8 s with 45 tests per binary, against a 25 ms child). A bound on a child's own run time takes t0 when `spawn` returns, and the GOOD time for the wall-clock bound is measured from there |
 
 ### Wall-clock bounds: set them from two measurements
 
