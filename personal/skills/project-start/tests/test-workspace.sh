@@ -81,7 +81,10 @@ out="$(plan "$r" "$TMPROOT/pf.json" "$TMPROOT/wrote.json")"
 [ "$(jq -c '.commit' <<<"$out")" = '[".gitattributes"]' ] && [ "$(jq -c '.ask' <<<"$out")" = '[".gitignore"]' ] \
   && ok "commit_plan_splits_pre_dirty" || bad "commit-plan: $out"
 echo '[]' > "$TMPROOT/w0.json"
-out="$(plan "$r" "$TMPROOT/pf.json" "$TMPROOT/w0.json")"
+# a repo of its own (0.16): in $r the plan above showed .gitignore and no run has answered it, so
+# the rerun rule reads it back into this plan (test-ledger.sh: interrupted_run_offers_again)
+r0="$(mkrepo)"; pf "$r0" > "$TMPROOT/pf0.json"
+out="$(plan "$r0" "$TMPROOT/pf0.json" "$TMPROOT/w0.json")"
 [ "$(jq -c '[.commit,.ask]' <<<"$out")" = '[[],[]]' ] && ok "commit_plan_empty_wrote" || bad "empty: $out"
 r2="$(mkrepo)"; pf "$r2" > "$TMPROOT/pf2.json"
 out="$(plan "$r2" "$TMPROOT/pf2.json" "$TMPROOT/wrote.json")"
@@ -240,6 +243,44 @@ echo "$rpid" > "$TMPROOT/c8.pid"; wait "$rpid"; rc=$?
   && [ "$(jq -r .status "$TMPROOT/c8.out" 2>/dev/null | tr -d '\r')" = failed ] && [[ "$(jq -r .detail "$TMPROOT/c8.out" | tr -d '\r')" == *"interrupted by SIGTERM"* ]] \
   && ok "commit_term_before_git_commit_commits_nothing_and_cleans_up" \
   || bad "commit_term_before_git_commit: rc=$rc head-moved=$([ "$(headof "$r")" = "$h0" ] && echo no || echo yes) left=$(leftover "$r") out=$(cat "$TMPROOT/c8.out") err=$(cat "$TMPROOT/c8.err")"
+# TERM to the ritual's own pid (not its group, so git and its hook never see it) while a pre-commit
+# hook holds git: git goes on to make the commit, and the detail must not say the signal came after
+# the commit was made. The hook waits for a file this test creates after the signal (60 s bound);
+# a watchdog kills the ritual after 120 s, so no step can hang the suite.
+r="$(mkrepo)"; pf "$r" > "$TMPROOT/c9.json"; echo c > "$r/CLAUDE.md"; h0="$(headof "$r")"
+HIN="$TMPROOT/c9 hook entered"; HGO="$TMPROOT/c9 hook release"; rm -f "$HIN" "$HGO"
+mkdir -p "$r/.git/hooks"
+printf '#!/bin/sh\n: > "%s"\ni=0\nwhile [ ! -e "%s" ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i + 1)); done\nexit 0\n' "$HIN" "$HGO" > "$r/.git/hooks/pre-commit"
+chmod +x "$r/.git/hooks/pre-commit"
+bash "$RITUAL" commit "$r" --preflight "$TMPROOT/c9.json" --message-file "$TMPROOT/msg.txt" \
+  -- CLAUDE.md > "$TMPROOT/c9.out" 2>"$TMPROOT/c9.err" & rpid=$!
+( for _ in $(seq 1 1200); do kill -0 "$rpid" 2>/dev/null || exit 0; sleep 0.1; done; kill -KILL "$rpid" 2>/dev/null ) & wd=$!
+for _ in $(seq 1 300); do [ -e "$HIN" ] && break; sleep 0.1; done
+pre=0; [ -e "$HIN" ] && [ "$(headof "$r")" = "$h0" ] && pre=1
+kill -TERM "$rpid" 2>/dev/null; sleep 1
+[ "$pre" = 1 ] && [ "$(headof "$r")" = "$h0" ] || pre=0   # still uncommitted a second after the signal
+: > "$HGO"; wait "$rpid"; rc=$?; wait "$wd" 2>/dev/null
+d9="$(jq -r .detail "$TMPROOT/c9.out" 2>/dev/null | tr -d '\r')"
+[ "$pre" = 1 ] && [ "$(git -C "$r" rev-parse -q --verify HEAD~1 | tr -d '\r')" = "$h0" ] \
+  && ok "commit_pid_term_premise_the_signal_landed_while_the_hook_held_git" \
+  || bad "commit_pid_term_premise: pre=$pre rc=$rc out=$(cat "$TMPROOT/c9.out") err=$(cat "$TMPROOT/c9.err")"
+[ "$rc" = 143 ] && [ "$(jq -r .status "$TMPROOT/c9.out" 2>/dev/null | tr -d '\r')" = fixed ] \
+  && [[ "$d9" == *"SIGTERM arrived while git commit was running"* ]] && [[ "$d9" != *"after git made the commit"* ]] \
+  && ok "pid_term_during_precommit_wording" || bad "pid_term_during_precommit_wording: rc=$rc detail=[$d9]"
+# git killed mid-commit, printing nothing: the detail names that instead of ending in a bare ": "
+KILLSTUB="$TMPROOT/kill stub"; mkdir -p "$KILLSTUB"
+{ printf '#!/usr/bin/env bash\nREAL_GIT=%q\n' "$(command -v git)"; cat <<'WRAP'
+for a in "$@"; do [ "$a" = commit ] && kill -KILL $$; done
+exec "$REAL_GIT" "$@"
+WRAP
+} > "$KILLSTUB/git"; chmod +x "$KILLSTUB/git"
+r="$(mkrepo)"; pf "$r" > "$TMPROOT/c10.json"; echo c > "$r/CLAUDE.md"; h0="$(headof "$r")"; i0="$(lsfs "$r")"
+out="$(PATH="$KILLSTUB:$PATH"; rc_ "$r" "$TMPROOT/c10.json" -- CLAUDE.md)"
+d10="$(jr "$out" .detail)"
+[ "$(jr "$out" .status)" = failed ] && [ "$(headof "$r")" = "$h0" ] && [ "$(lsfs "$r")" = "$i0" ] && [ "$(leftover "$r")" = 0 ] \
+  && [[ "$d10" == "git commit failed, HEAD and the index are unchanged"* ]] && [[ "$d10" != *": " ]] \
+  && [[ "$d10" == *"git printed nothing (exit 137)" ]] \
+  && ok "killed_git_detail_has_no_empty_tail" || bad "killed_git_detail_has_no_empty_tail: detail=[$d10] out=$out"
 
 # --- check untracked-docs
 r="$(mkrepo)"; mkdir -p "$r/docs" "$r/src"; echo a > "$r/docs/a.md"; echo b > "$r/src/b.rs"
@@ -277,11 +318,13 @@ stg="$(git -C "$r" ls-files -s -- README.md | awk '{print $2}')"; hd="$(git -C "
 [ "$(jq -r '.dirty[0].xy' <<<"$out")" = MM ] && [ "$(jq -r '.index["README.md"]' <<<"$out")" = "$stg" ] \
   && [ "$stg" != "$hd" ] && ok "preflight_mm_index_is_staged_blob" || bad "MM: $out"
 
-# --- commit-plan exact matching (no prefix / basename matching)
+# --- commit-plan matching: no basename matching (.gitignore is not x/.gitignore). Since R12 a
+# directory holding a dirty path is dirty itself, so `docs` (holding docs/a.md) goes to ask; before
+# R12 it went to commit and the user's docs/a.md edit rode along unasked
 jq -n '{branch:"main",dirty:[{path:"docs/a.md",xy:" M"},{path:"x/.gitignore",xy:"??"}],bytes:{},index:{}}' > "$TMPROOT/pfx.json"
 jq -n '["docs",".gitignore","docs/a.md","x/.gitignore"]' > "$TMPROOT/wx.json"
 out="$(bash "$RITUAL" commit-plan "$r" "$TMPROOT/pfx.json" "$TMPROOT/wx.json")"
-[ "$(jq -c '.commit' <<<"$out")" = '["docs",".gitignore"]' ] && [ "$(jq -c '.ask' <<<"$out")" = '["docs/a.md","x/.gitignore"]' ] \
+[ "$(jq -c '.commit' <<<"$out")" = '[".gitignore"]' ] && [ "$(jq -c '.ask' <<<"$out")" = '["docs","docs/a.md","x/.gitignore"]' ] \
   && ok "commit_plan_exact_matching" || bad "exact: $out"
 
 # --- git failure is UNKNOWN, never a clean tree
@@ -298,6 +341,47 @@ out="$( PATH="$stubd:$PATH"; bash "$RITUAL" preflight "$r" 2>"$TMPROOT/err")"; r
 # positive control: the stub passes non-status git calls through
 out="$( PATH="$stubd:$PATH"; bash "$RITUAL" commit-plan "$r" "$TMPROOT/pfx.json" "$TMPROOT/wx.json")"
 [ -n "$out" ] && ok "stub_control_passes_through" || bad "stub control"
+
+# --- commit-plan's output always carries notes, and its readback fails soft
+r="$(mkrepo)"; pf "$r" > "$TMPROOT/pfn.json"; echo '[]' > "$TMPROOT/wn0.json"; echo '["n.txt"]' > "$TMPROOT/wn1.json"
+o0="$(plan "$r" "$TMPROOT/pfn.json" "$TMPROOT/wn0.json" | tr -d '\r')"
+o1="$(plan "$r" "$TMPROOT/pfn.json" "$TMPROOT/wn1.json" | jq -c . | tr -d '\r')"
+[ "$o0" = '{"commit":[],"ask":[],"notes":{}}' ] && [ "$o1" = '{"commit":["n.txt"],"ask":[],"notes":{}}' ] \
+  && ok "commit_plan_output_always_has_notes" || bad "commit_plan_output_always_has_notes: [$o0] [$o1]"
+# git status failing in the readback: the plan is this run's paths alone, with one stderr line
+r="$(mkrepo)"; echo x > "$r/x.txt"; pf "$r" > "$TMPROOT/pfs.json"
+echo '["x.txt"]' > "$TMPROOT/ws1.json"; plan "$r" "$TMPROOT/pfs.json" "$TMPROOT/ws1.json" >/dev/null   # x.txt shown
+echo '["y.txt"]' > "$TMPROOT/ws2.json"
+out="$( PATH="$stubd:$PATH"; plan "$r" "$TMPROOT/pfs.json" "$TMPROOT/ws2.json" 2>"$TMPROOT/errs")"; rc=$?
+ctl="$(plan "$r" "$TMPROOT/pfs.json" "$TMPROOT/ws2.json" 2>/dev/null)"   # control: without the stub, x.txt is read back
+[ "$rc" = 0 ] && [ "$(jq -c . <<<"$out" | tr -d '\r')" = '{"commit":["y.txt"],"ask":[],"notes":{}}' ] \
+  && [ "$(grep -c '' "$TMPROOT/errs")" = 1 ] && grep -q '^ritual: ledger: ' "$TMPROOT/errs" \
+  && [ "$(jq -c . <<<"$ctl" | tr -d '\r')" = '{"commit":["y.txt"],"ask":["x.txt"],"notes":{}}' ] \
+  && ok "readback_status_failure_keeps_plan" || bad "readback_status_failure_keeps_plan: rc=$rc $out; err [$(cat "$TMPROOT/errs")]; control $ctl"
+
+# --- R12: a directory holding a path dirty at preflight is dirty itself, for commit-plan and commit
+# alike (one predicate, _DIRTY_JQ); a sibling sharing a name prefix is not under it
+r="$(mkrepo)"; mkdir -p "$r/.beads" "$r/.beads-old"
+echo "the user's" > "$r/.beads/mine.txt"; echo old > "$r/.beads-old/x"
+pf "$r" > "$TMPROOT/pfd.json"
+echo "the fix's" > "$r/.beads/house.txt"; echo '[".beads"]' > "$TMPROOT/wd.json"
+out="$(plan "$r" "$TMPROOT/pfd.json" "$TMPROOT/wd.json" | jq -c . | tr -d '\r')"
+[ "$out" = '{"commit":[],"ask":[".beads"],"notes":{}}' ] \
+  && ok "commit_plan_dir_holding_a_dirty_file_asks" || bad "commit_plan_dir_holding_a_dirty_file_asks: $out"
+s="$(mkrepo)"; mkdir -p "$s/.beads-old"; echo old > "$s/.beads-old/x"
+pf "$s" > "$TMPROOT/pfs2.json"
+mkdir -p "$s/.beads"; echo "the fix's" > "$s/.beads/house.txt"
+out="$(plan "$s" "$TMPROOT/pfs2.json" "$TMPROOT/wd.json" | jq -c . | tr -d '\r')"
+[ "$out" = '{"commit":[".beads"],"ask":[],"notes":{}}' ] \
+  && ok "commit_plan_shared_prefix_sibling_not_matched" || bad "commit_plan_shared_prefix_sibling_not_matched: $out"
+c1="$(rc_ "$r" "$TMPROOT/pfd.json" -- .beads)"
+t1="$(git -C "$r" ls-files -- .beads | tr -d '\r')"
+c2="$(rc_ "$r" "$TMPROOT/pfd.json" --include-dirty -- .beads)"
+t2="$(git -C "$r" ls-files -- .beads | tr -d '\r' | paste -sd'|' -)"
+[ "$(jq -r .status <<<"$c1" | tr -d '\r')" = failed ] && [[ "$(jq -r .detail <<<"$c1")" == "dirty at preflight: .beads;"* ]] && [ -z "$t1" ] \
+  && [ "$(jq -r .status <<<"$c2" | tr -d '\r')" = fixed ] && [ "$t2" = ".beads/house.txt|.beads/mine.txt" ] \
+  && ok "ritual_commit_refuses_a_dir_holding_a_dirty_file_without_include_dirty" \
+  || bad "ritual_commit_refuses_a_dir_holding_a_dirty_file_without_include_dirty: $c1 [$t1] / $c2 [$t2]"
 
 # --- non-regular paths (nested repo dir) are NONFILE, not DELETED
 r="$(mkrepo)"; mkdir "$r/nested"; git -C "$r/nested" init -q; echo c > "$r/nested/f"

@@ -223,8 +223,12 @@ o3="$(S auto "$u")"; rc=$?
 echo "== rerun changes nothing =="
 p1="$(git -C "$r" status --porcelain)"; s1="$(tree_sums "$r")"
 out2="$(S auto "$r")"; rc=$?
-# the first run was never committed: the rerun writes nothing, yet lists the same paths again (I1)
-[ "$rc" = 0 ] && [ "$(j "$out2" '.wrote | sort')" = "$(j "$out" '.wrote | sort')" ] && [ "$(j "$out2" '.wrote | length')" = 5 ] \
+# the first run was never committed: the rerun writes nothing, yet lists its untracked paths again
+# (I1): 4 of the 5. The tracked Cargo.toml (its clippy table) goes silent since 0.16: no commit-plan
+# ran, so it has no ledger entry, and a tracked file with no entry reads as the user's own edit.
+# Accepted loss (spec B, globals): it shows in git status, and stack-checks' check sees the table.
+[ "$rc" = 0 ] && [ "$(j "$out2" '.wrote | sort')" = "$(j "$out" '[.wrote[] | select(. != "Cargo.toml")] | sort')" ] \
+  && [ "$(j "$out" '.wrote | index("Cargo.toml") != null')" = true ] && [ "$(j "$out2" '.wrote | length')" = 4 ] \
   && [ "$(j "$out2" '[.results[] | select(.status == "already" and (.wrote | length) > 0) | .detail | test("not yet committed")] | all')" = true ] \
   && ok "uncommitted_rerun_lists_the_first_runs_paths_again" || bad "rerun wrote: $(j "$out2" .wrote)"
 [ "$(git -C "$r" status --porcelain)" = "$p1" ] && [ "$(tree_sums "$r")" = "$s1" ] \
@@ -372,10 +376,11 @@ ofp="$( cd "$bb" && S fix parking-lot "sub dir" )"
   && [ "$(S oracle "$bb" | jq -r .status | tr -d '\r')" = present ] && ok "oracle_given_a_subdirectory_scans_the_root" || bad "subdir oracle: $(S oracle "$bb/sub dir")"
 
 echo "== a step that exits 0 without a result =="
-# a jq wrapper that turns beads-metrics' own `present` result into non-JSON; every other call is real
+# a jq wrapper that turns beads-metrics' own `present` result into $JQW_REPLY (unset: non-JSON);
+# every other call is real
 JQW="$TMPROOT/jq wrap"; mkdir -p "$JQW"
 { printf '#!/usr/bin/env bash\nREAL_JQ=%q\n' "$(command -v jq)"; cat <<'WRAP'
-if [ "${1:-}" = -nRc ] && [ "${4:-}" = beads-metrics ] && [ "${7:-}" = present ]; then echo 'not json'; exit 0; fi
+if [ "${1:-}" = -nRc ] && [ "${4:-}" = beads-metrics ] && [ "${7:-}" = present ]; then printf '%s\n' "${JQW_REPLY-not json}"; exit 0; fi
 exec "$REAL_JQ" "$@"
 WRAP
 } > "$JQW/jq"; chmod +x "$JQW/jq"
@@ -383,6 +388,28 @@ WRAP
 ojq="$( ( stub_path "$JQW"; S auto "$b" ) 2>/dev/null)"; rc=$?
 [ "$rc" = 0 ] && [ "$(j "$ojq" '[.results[].id]')" = "$AUTO_IDS" ] && [ "$(res "$ojq" beads-metrics status)" = unknown ] \
   && [[ "$(res "$ojq" beads-metrics detail)" == *"(exit 0)"* ]] && ok "step_with_exit_0_and_no_result_is_unknown" || bad "no-result step: rc=$rc $ojq"
+# the guard's own output, exactly, for each way an exit-0 step's output can fail to be its result.
+# Each _auto_result predicate clause has the reply only it rejects: .id (another id), .status (not a
+# string), .wrote (not an array). `type == "object"` has none: without it every non-object reply
+# still fails, on `.id` (jq errors) or as null != $id, so dropping it is an equivalent mutant.
+GUARD_WANT='{"id":"beads-metrics","status":"unknown","detail":"step ended without a result (exit 0)","wrote":[]}'
+guard_case() {   # guard_case <name> <reply>
+  local o rc
+  [ "$( ( stub_path "$JQW"; export JQW_REPLY="$2"; S check beads-metrics "$b" ) )" = "$2" ] \
+    || { bad "guard_$1 premise: check beads-metrics did not print the reply"; return 0; }
+  o="$( ( stub_path "$JQW"; export JQW_REPLY="$2"; S auto "$b" ) 2>/dev/null)"; rc=$?
+  [ "$rc" = 0 ] && [ "$(j "$o" '[.results[].id]')" = "$AUTO_IDS" ] \
+    && [ "$(j "$o" '[.results[] | select(.id == "beads-metrics")]')" = "[$GUARD_WANT]" ] \
+    && ok "guard_$1" || bad "guard_$1: rc=$rc $o"
+}
+guard_case rejects_a_result_for_another_id '{"id":"other","status":"present","detail":"","wrote":[]}'
+guard_case rejects_non_json 'not json'
+guard_case rejects_wrote_not_an_array '{"id":"beads-metrics","status":"present","detail":"","wrote":"x"}'
+guard_case rejects_status_not_a_string '{"id":"beads-metrics","status":1,"detail":"","wrote":[]}'
+# two JSON values, the last one a valid result: `jq -e` alone judges only the last value, so the
+# guard slurps and requires exactly one
+guard_case rejects_a_stray_value_before_a_result '{"stray":1}
+{"id":"beads-metrics","status":"present","detail":"","wrote":[]}'
 
 echo "== an interrupted auto leaves no temp file =="
 IT="$TMPROOT/auto tmpdir"; mkdir -p "$IT"

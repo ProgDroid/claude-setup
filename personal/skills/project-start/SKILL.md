@@ -10,6 +10,8 @@ One run sets a repo up the house way and leaves a record of what it did. The det
 done by `ritual.sh`, which sits beside this file: it checks, fixes and reports one JSON result per
 step. You orchestrate, ask and draft.
 
+Needs bash 4.4 or newer, git and jq.
+
 **No step that the script can answer is answered by the model.** If `ritual.sh` has a `check` or a
 `fix` for it, run that and report what it says: never judge a step's state by reading files
 yourself, and never write the record by hand.
@@ -146,12 +148,20 @@ bash "$R" candidates "$REPO" > "$RT/candidates.json"; cat "$RT/candidates.json" 
 ```
 
 **A `present` check still gets its fix**, with no flags (for `secret-scan`, only `--proved`).
-There the fix writes nothing and normally returns `already`, and its `wrote` lists any of the
-step's files that an earlier run set up and never committed ("not yet committed" in its detail), so
-step 6 can offer them. Record its status by the mapping table: `already` as `already`, `failed` as
+There the fix writes nothing and normally returns `already`, and its `wrote` lists the step's
+uncommitted files that are still the ritual's to offer ("not yet committed" in its detail), so step
+6 can offer them: not one the user declined that has not changed since, nor the user's own edit to
+a tracked file. Record its status by the mapping table: `already` as `already`, `failed` as
 `failed` with its detail shown (a `failed` `fix beads` names a stash an earlier run still holds:
 show it as in step 2), `unknown` as `unknown`. `--proved` tells `fix secret-scan` that this run's
 `check secret-scan` already proved the block, so the live proof is not run a second time.
+A stale block (the check's detail ends `block v1, upgrade due`) is the exception: that same fix
+upgrades it in place, flag or not, then runs the proof itself: `fixed`, or `unknown`/`failed` with
+the upgrade kept. On INT, HUP or TERM during a hook write or a proof, `check` and `fix secret-scan`
+finish or undo that step, print one result (`failed` naming the signal, or `fixed` when a created
+or inserted block had already landed), then exit 130, 129 or 143: read the JSON, not the exit
+status. `wrote` lists the hook only inside the work tree (`[]` under `.git/hooks`). An edited
+block ("fix will not upgrade it") is never rewritten; it stays as the check found it.
 
 ```bash
 pr() { [ "$(jq -r .status "$RT/chk/$1.json" 2>/dev/null | tr -d '\r')" = present ]; }
@@ -251,13 +261,15 @@ jq -r '.wrote[]?' "$RT"/out/*.json | tr -d '\r' | jq -Rn '[inputs | select(lengt
 bash "$R" commit-plan "$REPO" "$RT/preflight.json" "$RT/wrote.json" > "$RT/plan.json"; cat "$RT/plan.json"
 ```
 
-It answers `{"commit": [...], "ask": [...]}`. `ask` holds the paths that were already dirty at
-preflight, such as a `.gitignore` the user was editing, or files set up by an earlier run that was
-not committed (a step that reports `already` lists them in `wrote`, with "not yet committed" in its
-detail): name each one, and include it only if the user says so, so their own edits never ride
-along unannounced. (Untracked docs the user accepted in
-step 5 are in `ask` too; that yes covers them.) Show the changes as one diff and ask whether to
-commit them as one commit on the current branch.
+It answers `{"commit": [...], "ask": [...], "notes": {...}}`. `ask` holds the paths that were
+already dirty at preflight, such as a `.gitignore` the user was editing, or files set up by an
+earlier run that was not committed (a step that reports `already` lists them in `wrote`, with "not
+yet committed" in its detail): name each one, and include it only if the user says so, so their own
+edits never ride along unannounced. A path from an earlier run that was shown and never answered,
+or whose commit failed, comes back in `ask`; one the user declined stays quiet until it changes.
+`notes` names paths that also hold the user's own edits: say so when you name them. (Untracked
+docs the user accepted in step 5 are in `ask` too; that yes covers them.) Show the changes as one
+diff and ask whether to commit them as one commit on the current branch.
 
 On yes, `ritual.sh commit` makes the commit. It builds it in a scratch index from `HEAD` plus
 exactly these paths, so nothing the user staged goes in and the user's staged work stays staged.
@@ -269,7 +281,7 @@ never with `git add -f`.
 ```bash
 printf 'chore: project-start ritual\n' > "$RT/msg"
 jq -r '.commit[]' "$RT/plan.json" | tr -d '\r' > "$RT/paths.txt"   # then append each `ask` path the user confirmed
-mapfile -t P < "$RT/paths.txt"
+mapfile -t P < "$RT/paths.txt"   # bash 4.4+: ritual.sh's version guard has already run
 INC=()   # INC=(--include-dirty) only when you appended `ask` paths the user confirmed
 bash "$R" commit "$REPO" --preflight "$RT/preflight.json" --message-file "$RT/msg" "${INC[@]}" -- "${P[@]}" > "$RT/commit.json"
 cat "$RT/commit.json"

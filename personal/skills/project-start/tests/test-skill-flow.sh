@@ -164,10 +164,10 @@ RT7="$(newrt)"
 S preflight "$i" > "$RT7/preflight.json"; S auto "$i" > "$RT7/out/auto.json"; S fix handoff "$i" > "$RT7/out/handoff.json"
 run_snippet '"$R" commit-plan' "$i" "$RT7" > "$RT7/plan.out" 2>&1
 [ "$(jq -c '.wrote' "$RT7/out/auto.json" | tr -d '\r')" = '[]' ] && [ "$(jq -c '[.status, .wrote]' "$RT7/out/handoff.json" | tr -d '\r')" = '["already",[]]' ] \
-  && [ "$(jq -c . "$RT7/plan.json" | tr -d '\r')" = '{"commit":[],"ask":[]}' ] \
+  && [ "$(jq -c . "$RT7/plan.json" | tr -d '\r')" = '{"commit":[],"ask":[],"notes":{}}' ] \
   && ok "control_a_committed_repo_lists_nothing" || bad "control_a_committed_repo_lists_nothing: auto=$(jq -c .wrote "$RT7/out/auto.json") handoff=$(cat "$RT7/out/handoff.json") plan=$(cat "$RT7/plan.json")"
 
-echo "== R58: a declined commit, then a present check whose no-flag fix lists the leftovers =="
+echo "== R58: a declined commit, then a present check whose no-flag fix runs and leaves the declined marker quiet =="
 k="$(mkrepo "flow declined commit")"; RK1="$(newrt)"
 S preflight "$k" > "$RK1/preflight.json"; S auto "$k" > "$RK1/out/auto.json"; S fix handoff "$k" > "$RK1/out/handoff.json"
 # run 1 stops before step 6. Run 2 lists the leftovers, the user DECLINES the commit, and the handoff
@@ -189,11 +189,16 @@ due="$(S due "$k")"; S check handoff "$k" > "$RK3/chk/handoff.json"
   && ok "r58_run_3_offers_the_commit_and_check_handoff_is_present" || bad "r58 run 3: due=$due check=$(cat "$RK3/chk/handoff.json")"
 run_snippet 'pr handoff &&' "$k" "$RK3" > "$RK3/r58.out" 2>&1
 ho="$(cat "$RK3/out/handoff.json" 2>/dev/null)"
-[ "$(jr "$ho" .status)" = already ] && jr "$ho" '.wrote | index(".claude/handoff.json") != null' | grep -qx true \
-  && ok "r58_present_check_gets_its_no_flag_fix_which_lists_the_marker" || bad "r58 no-flag fix: [$ho] $(cat "$RK3/r58.out")"
+# Since 0.16 the user's decline holds: run 2 showed the marker and the commit was declined, so
+# record-write settled it `declined` in the ledger, and an unchanged declined file stays quiet until
+# it changes (spec B, the decline rule; test-ledger.sh declined_ci_draft_silent_then_offered shows it
+# coming back after an edit). The no-flag fix still runs (status already) and lists nothing.
+[ "$(jr "$ho" .status)" = already ] && [ "$(jr "$ho" '.wrote | tostring')" = '[]' ] \
+  && [ -n "$(git -C "$k" status --porcelain -- .claude/handoff.json)" ] \
+  && ok "r58_present_check_gets_its_no_flag_fix_and_the_declined_marker_stays_quiet" || bad "r58 no-flag fix: [$ho] $(cat "$RK3/r58.out")"
 run_snippet '"$R" commit-plan' "$k" "$RK3" > "$RK3/plan.out" 2>&1
-jq -e '.ask | index(".claude/handoff.json")' "$RK3/plan.json" >/dev/null \
-  && ok "r58_the_re_offered_commit_offers_the_marker" || bad "r58 run 3 plan: $(cat "$RK3/plan.json" 2>/dev/null)"
+[ "$(jq -c . "$RK3/plan.json" | tr -d '\r')" = '{"commit":[],"ask":[],"notes":{}}' ] \
+  && ok "r58_the_re_offered_commit_leaves_the_declined_marker_out" || bad "r58 run 3 plan: $(cat "$RK3/plan.json" 2>/dev/null)"
 
 echo "== N1: the R58 block's beads and secret-scan lines =="
 # beads set up by an earlier run and never committed; this run's check says present
@@ -201,8 +206,12 @@ b="$(mkrepo "flow beads leftovers")"; S fix beads "$b" > /dev/null
 RB="$(newrt)"; S check beads "$b" > "$RB/chk/beads.json"
 run_snippet 'pr handoff &&' "$b" "$RB" > "$RB/r58.out" 2>&1
 ob="$(cat "$RB/out/beads.json" 2>/dev/null)"
+# the untracked PRIME.md is listed; CLAUDE.md is not since 0.16: bd init committed it, no commit-plan
+# ran, so a tracked file with no ledger entry reads as the user's own edit. Accepted loss (spec B):
+# beads' CLAUDE.md block left by a run that died before step 6 shows only in git status.
 [ "$(jq -r .status "$RB/chk/beads.json" | tr -d '\r')" = present ] && [ "$(jr "$ob" .status)" = already ] \
-  && [ "$(jr "$ob" '.wrote | index(".beads/PRIME.md") != null')" = true ] && [ "$(jr "$ob" '.wrote | index("CLAUDE.md") != null')" = true ] \
+  && [ "$(jr "$ob" '.wrote | index(".beads/PRIME.md") != null')" = true ] && [ "$(jr "$ob" '.wrote | index("CLAUDE.md") == null')" = true ] \
+  && [ -n "$(git -C "$b" status --porcelain -- CLAUDE.md)" ] \
   && ok "n1_pr_beads_runs_fix_beads_on_present_and_lists_its_leftovers" || bad "n1 beads: [$ob] $(cat "$RB/r58.out")"
 # a secret-scan block in a custom hooks path inside the work tree, never committed; check present
 s="$(mkrepo "flow secret leftovers")"; git -C "$s" config core.hooksPath "tools/git hooks"; S fix secret-scan "$s" > /dev/null

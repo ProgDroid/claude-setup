@@ -18,7 +18,7 @@
       "name": "personal",
       "source": "./personal",
       "description": "Personal agents and hard-won Claude Code behaviour",
-      "version": "0.15.6",
+      "version": "0.16.0",
       "author": {
         "name": "ProgDroid"
       }

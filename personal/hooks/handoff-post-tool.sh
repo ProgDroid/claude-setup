@@ -53,6 +53,19 @@ commit_check() {
   # (first-parent: a merge's default combined diff lists only conflicted files, so a clean
   # handoff: merge bringing in other files would look like NEXT.md alone)
   [ "${#extras[@]}" -gt 0 ] || return
+  # Warn once per HEAD: the agent re-runs git commands on the same commit all session, and the
+  # same warning every time is noise. State: <git-dir>/handoff-warned-head, per worktree (a
+  # linked worktree has its own git dir). Any state error (unreadable, unwritable, garbage)
+  # falls through to warning: a repeated warning beats a swallowed one.
+  local sf prev="" cur="${head%% *}" gd
+  gd="$(git -C "$HO_ROOT" rev-parse --absolute-git-dir 2>/dev/null)" || gd=""
+  if [ -n "$gd" ]; then
+    sf="$gd/handoff-warned-head"
+    { IFS= read -r prev < "$sf"; } 2>/dev/null || true
+    prev="${prev%$'\r'}"
+    [ "$prev" = "$cur" ] && return
+    { printf '%s\n' "$cur" > "$sf"; } 2>/dev/null || true
+  fi
   local list=""
   for f in "${extras[@]}"; do list+="${list:+, }$f"; done
   msgs+=("HANDOFF COMMIT HOLDS MORE THAN NEXT.md: ${head:0:12} \"$subj\" also touched: $list. A handoff: commit holds NEXT.md alone, so the anchor marks the handoff and nothing else. Unless this is the squash merge to the default branch (the one exception), and if it is not pushed yet: undo it with \`git reset --soft HEAD~1\`, commit the other files on their own, then commit NEXT.md alone as handoff:.")

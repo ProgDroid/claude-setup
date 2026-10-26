@@ -63,17 +63,43 @@ preflight() {
        index: ([$recs[] | {(.[0]): .[3]}] | add // {})}'
 }
 
-# commit_plan <repo> <preflight.json> <wrote.json> -> {"commit":[...],"ask":[...]}
-# Paths the ritual wrote that were already dirty at preflight go to `ask`; the rest to `commit`.
+# _DIRTY_JQ: the one definition of "dirty at preflight", used by commit_plan's split and by
+# ritual_commit's refusal, so the two cannot drift. `dirty_in($d)`, applied to a path, is true when
+# a preflight dirty path ($d) equals it or lies under it (<path>/...): a directory holding the
+# user's dirty file is dirty. A sibling sharing a prefix (`.beads-old/x` for `.beads`) is not.
+_DIRTY_JQ='def dirty_in($d): rtrimstr("/") as $x | any($d[]; rtrimstr("/") == $x or startswith($x + "/"));'
+
+# commit_plan <repo> <preflight.json> <wrote.json> -> {"commit":[...],"ask":[...],"notes":{...}}
+# The plan's paths: <wrote.json>'s, then this work tree's earlier ledger entries that the rerun
+# rule still offers (ledger_readback: shown by a run that never answered, or whose commit failed,
+# or declined and changed since). Those dirty at preflight (_DIRTY_JQ) go to `ask`; the rest to
+# `commit`. `notes` maps each read-back offer-note path to LEDGER_NOTE (always present, {} when
+# none). Every plan path is then recorded in the ledger as `shown` at its current fingerprint.
+# A ledger failure prints one stderr line and leaves the plan and the exit status as they are: a
+# readback git could not answer, or an unreadable ledger, adds no path (ledger_mark_shown's own
+# line says the ledger is unreadable when the plan has paths; this function says it otherwise).
 commit_plan() {
-  local pf="$2" wr="$3"
+  local repo="$1" pf="$2" wr="$3" plan rc rb rrc
+  local -a ps=()
   [ -f "$pf" ] || die "preflight file not found: $pf"
   [ -f "$wr" ] || die "wrote file not found: $wr"
-  jq -nc --slurpfile pf "$pf" --slurpfile wr "$wr" '
-    ($pf[0].dirty | map(.path)) as $d
-    | (reduce $wr[0][] as $x ([]; if index($x) then . else . + [$x] end)) as $w
-    | {commit: [$w[] | select(. as $x | $d | index($x) | not)],
-       ask:    [$w[] | select(. as $x | $d | index($x))]}'
+  rb="$(ledger_readback "$repo")"; rrc=$?
+  [ "$rrc" = 1 ] && echo "ritual: ledger: git could not answer in $repo, so no earlier run's paths were added to the plan" >&2
+  [ "$rrc" = 0 ] || rb=""
+  # the read-back lines reach jq on stdin; a path the ledger holds has no CR or newline
+  plan="$(printf '%s' "${rb//$'\r'/}" | jq -Rsc --arg note "$LEDGER_NOTE" --slurpfile pf "$pf" --slurpfile wr "$wr" "$_DIRTY_JQ"'
+    (split("\n") | map(select(length > 0) | capture("^(?<p>.*)\t(?<v>[^\t]*)$"))) as $rb
+    | ($pf[0].dirty | map(.path)) as $d
+    | (reduce ($wr[0][], ($rb[] | .p)) as $x ([]; if index($x) then . else . + [$x] end)) as $w
+    | {commit: [$w[] | select(dirty_in($d) | not)],
+       ask:    [$w[] | select(dirty_in($d))],
+       notes:  ([$rb[] | select(.v == "offer-note") | {(.p): $note}] | add // {})}')"; rc=$?
+  [ -z "$plan" ] || printf '%s\n' "$plan"
+  [ "$rc" -eq 0 ] || return "$rc"
+  mapfile -d '' -t ps < <(printf '%s' "$plan" | jq -j '(.commit + .ask)[] | . + "\u0000"' 2>/dev/null)
+  [ "$rrc" = 2 ] && [ "${#ps[@]}" -eq 0 ] \
+    && echo "ritual: ledger: could not read $(ledger_file "$repo"), so no earlier run's paths were added to the plan" >&2
+  ledger_mark_shown "$repo" "${ps[@]}" || :
 }
 
 # ritual_commit <repo> --preflight <f> --message-file <f> [--include-dirty] -- <path>...
@@ -86,8 +112,8 @@ commit_plan() {
 # `git commit` (not commit-tree) runs on that index: the hooks run as usual and the secret scan's
 # `--staged` reads the scratch index through GIT_INDEX_FILE, and git updates the branch with its own
 # old-value check. Afterwards the real index is set to the new HEAD for every path the commit
-# changed (a hook may add one, as bd's export does). A path dirty at preflight is refused unless
-# --include-dirty (the user confirmed it). On failure the ref and the real index are unchanged.
+# changed (a hook may add one, as bd's export does). A path dirty at preflight (_DIRTY_JQ: also a
+# directory holding a dirty path) is refused unless --include-dirty (the user confirmed it). On failure the ref and the real index are unchanged.
 # -> fixed "committed <sha>: ..." | already "nothing to commit" | failed <cause>.
 ritual_commit() {
   local repo="$1"; shift
@@ -108,7 +134,7 @@ ritual_commit() {
 
   local dirty
   dirty="$(printf '%s\n' "$@" | jq -Rr --slurpfile pf "$pf" \
-    '($pf[0].dirty | map(.path)) as $d | select(. as $x | $d | index($x))' | tr -d '\r' | paste -sd',' -)" \
+    "$_DIRTY_JQ"' ($pf[0].dirty | map(.path)) as $d | select(dirty_in($d))' | tr -d '\r' | paste -sd',' -)" \
     || die "commit: could not read $pf"
   if [ -n "$dirty" ] && [ "$incl" = 0 ]; then
     emit commit failed "dirty at preflight: ${dirty//,/, }; ask the user, then pass --include-dirty (nothing was committed)"
@@ -126,8 +152,10 @@ ritual_commit() {
   done
   # From the scratch index's creation to the real index's sync, INT/TERM/HUP are recorded, not
   # obeyed (the secret-scan proof's pattern). One that arrives before `git commit` runs stops the
-  # ritual before it commits; one that arrives after git moved the branch (a slow post-commit hook)
-  # lets the index sync finish, so the real index never shows the committed paths as deleted. The
+  # ritual before it commits; one that arrives once git is running cannot stop it, so when git still
+  # makes the commit (the signal reached only the ritual, or came after git moved the branch during a
+  # slow post-commit hook) the index sync finishes and the real index never shows the committed
+  # paths as deleted. The
   # scratch index is removed either way, then the signal is re-raised as the exit status.
   _RC_SIG=""
   trap '_RC_SIG=INT' INT; trap '_RC_SIG=TERM' TERM; trap '_RC_SIG=HUP' HUP
@@ -170,7 +198,11 @@ _ritual_commit_in() {
 
   tree="$(GIT_INDEX_FILE="$ti" git -C "$top" write-tree)" || { _rc_fail "could not write the scratch tree"; return 0; }
   if [ -n "$old" ]; then otree="$(git -C "$top" rev-parse "$old^{tree}")"; else otree="$(git -C "$top" hash-object -t tree /dev/null)"; fi
-  if [ "${tree%$'\r'}" = "${otree%$'\r'}" ]; then rm -f "$ti"; emit commit already "nothing to commit: the paths already match HEAD"; return 0; fi
+  if [ "${tree%$'\r'}" = "${otree%$'\r'}" ]; then
+    rm -f "$ti"; emit commit already "nothing to commit: the paths already match HEAD"
+    ledger_drop "$top" "$@" || :
+    return 0
+  fi
   [ -z "$_RC_SIG" ] || { _rc_fail "stopped before git commit ran; nothing was committed"; return 0; }
 
   # the hooks are the user's code: they get git's normal (glob) pathspecs, not the ritual's literal mode
@@ -180,7 +212,9 @@ _ritual_commit_in() {
   # after it moved the branch (its post-commit hook still running)
   new="$(git -C "$top" rev-parse -q --verify HEAD 2>/dev/null)"; new="${new%$'\r'}"
   if [ "$new" = "$old" ]; then
-    _rc_fail "git commit failed, HEAD and the index are unchanged: $(printf '%s' "$out" | tr -d '\r' | grep -v '^[[:space:]]*$' | tail -n 3 | paste -sd'|' - | cut -c1-300)"
+    # a git that was killed prints nothing: say so rather than end the detail in a bare ": "
+    out="$(printf '%s' "$out" | tr -d '\r' | grep -v '^[[:space:]]*$' | tail -n 3 | paste -sd'|' - | cut -c1-300)"
+    _rc_fail "git commit failed, HEAD and the index are unchanged: ${out:-git printed nothing (exit $crc)}"
     return 0
   fi
   if [ "$(git -C "$top" rev-parse -q --verify "$new^" 2>/dev/null | tr -d '\r')" != "$old" ]; then
@@ -197,8 +231,11 @@ _ritual_commit_in() {
   fi
   local note=""
   [ "$crc" = 0 ] || note="; git commit exited $crc after making the commit"
-  [ -z "$_RC_SIG" ] || note="$note; SIG$_RC_SIG arrived after git made the commit, so the index was synced before stopping"
+  # bash runs the trap only once git has returned, so when the signal arrived (during a slow
+  # pre-commit hook, or after git moved the branch) is not known here, only that it came too late
+  [ -z "$_RC_SIG" ] || note="$note; SIG$_RC_SIG arrived while git commit was running or after it returned, too late to stop the commit, so the index was synced before stopping"
   emit commit fixed "committed ${new:0:7}: ${#changed[@]} path(s)$note"
+  ledger_drop "$top" "$@" || :   # a ledger failure prints one stderr line; the commit stands
 }
 
 # check_untracked_docs <repo> -> step-result. present = untracked, non-ignored files under docs/.

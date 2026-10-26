@@ -23,6 +23,9 @@ So anything that should work both locally and in a cloud session lives here rath
 | `.github/workflows/ci.yml` | CI: all tests on Linux, rules budget, gitleaks |
 | `personal/skills/project-start/` | Project-start ritual: a script that sets a repo up the house way, and a record of what it did |
 | `personal/skills/handoff/` | The NEXT.md handoff routine, with the hooks that enforce it |
+| `personal/skills/cloud-sessions/` | What Claude Code cloud sessions, plugin marketplaces and hooks actually do where the documentation says otherwise |
+| `personal/skills/cross-project-note/` | Files a note about another project at once, instead of asking whether to |
+| `personal/skills/publishing-a-private-repo/` | Checklist for making a private repository public: secrets and personal-data sweep, history, ordering, verifying published bytes |
 | `snippets/project-settings.json` | Block declaring marketplaces + plugins in any repo |
 | `snippets/README.md` | What is included, what is excluded, and why |
 | `snippets/work-machine-setup.md` | The prompt a work-machine session follows to bring its `~/.claude` in line (plugins, memory, the rules link) |

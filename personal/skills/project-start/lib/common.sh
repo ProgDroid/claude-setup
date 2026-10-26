@@ -83,25 +83,41 @@ pending_paths() {
   while IFS= read -r -d $'\036' rec; do printf '%s\0' "${rec:3}"; done <<<"$out"
 }
 
+# The paths that are the ritual's to offer only while untracked: once committed, their changes are
+# the user's own (bd's issues export). Each is passed to emit_already as a --skip-tracked flag.
+_RITUAL_SKIP_TRACKED=(.beads/issues.jsonl)
+
 # emit_already [--skip-tracked <file>]... <id> <repo> <detail> <path>...: the result of a fix that
-# had nothing to add. Those of its own <path>... that still differ from HEAD (an earlier run set
-# them up and was never committed) go in `wrote`, so the commit step asks about them; a git that
-# cannot answer that makes the result `unknown`. A --skip-tracked file counts only while untracked:
-# once committed, its changes are the user's own (bd's issues export).
+# had nothing to add. Those of its own <path>... that still differ from HEAD go through the
+# ledger's rerun rule (ledger_verdicts, lib/ledger.sh): an `offer` or `offer-note` path (an earlier
+# run set it up and it was never committed) goes in `wrote`, so the commit step asks about it, and
+# the detail names it after "not yet committed:", an offer-note path with "($LEDGER_NOTE)"; a
+# `silent` or `clean` one is left out. A path with no verdict line counts as `offer`. A git
+# that cannot answer makes the result `unknown`. A --skip-tracked file joins _RITUAL_SKIP_TRACKED
+# for the call: it counts only while untracked, since once committed its changes are the user's own
+# (bd's issues export).
 emit_already() {
   local -a skip=()
   while [ "${1:-}" = --skip-tracked ]; do skip+=("$2"); shift 2; done
-  local id="$1" repo="$2" detail="$3" out s i; shift 3
-  local -a p=()
+  local id="$1" repo="$2" detail="$3" out line v x; shift 3
+  local -a p=() keep=() named=() sk=("${_RITUAL_SKIP_TRACKED[@]}" ${skip[@]+"${skip[@]}"})
+  local -A vof=()
   out="$(pending_paths "$repo" "$@" | tr '\0' '\036'; exit "${PIPESTATUS[0]}")" \
     || { emit "$id" unknown "$detail; could not tell whether its files are committed (git status failed)"; return 0; }
   [ -z "$out" ] || mapfile -d $'\036' -t p < <(printf '%s' "$out")
-  for s in "${skip[@]}"; do
-    git -C "$repo" --literal-pathspecs ls-files --error-unmatch -- "$s" >/dev/null 2>&1 || continue
-    for i in "${!p[@]}"; do [ "${p[$i]}" = "$s" ] && unset 'p[i]'; done
-  done
-  p=("${p[@]}")
-  if [ "${#p[@]}" -gt 0 ]; then emit "$id" already "$detail; not yet committed: $(join_by ', ' "${p[@]}")" "${p[@]}"
+  if [ "${#p[@]}" -gt 0 ]; then
+    local -a _RITUAL_SKIP_TRACKED=("${sk[@]}")
+    out="$(ledger_verdicts "$repo" "${p[@]}")" \
+      || { emit "$id" unknown "$detail; could not tell whether its files are committed (git status failed)"; return 0; }
+    while IFS= read -r line; do [ -z "$line" ] || vof["${line%$'\t'*}"]="${line##*$'\t'}"; done <<<"${out//$'\r'/}"
+    for x in "${p[@]}"; do
+      v="${vof[$x]:-offer}"
+      case "$v" in silent|clean) continue ;; esac
+      keep+=("$x")
+      if [ "$v" = offer-note ]; then named+=("$x ($LEDGER_NOTE)"); else named+=("$x"); fi
+    done
+  fi
+  if [ "${#keep[@]}" -gt 0 ]; then emit "$id" already "$detail; not yet committed: $(join_by ', ' "${named[@]}")" "${keep[@]}"
   else emit "$id" already "$detail"; fi
 }
 

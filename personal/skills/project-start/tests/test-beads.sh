@@ -128,8 +128,13 @@ w1="$(jq -c '.wrote|sort' <<<"$out")"
 logclear; out="$(R fix beads "$r")"
 [ "$(st "$out")" = already ] && [ "$(logn)" = 0 ] \
   && ok "fix_rerun_already" || bad "rerun: $out; log=$(cat "$LOG")"
-# I1: the fix was never committed, so the rerun lists exactly what the fix wrote, for the commit step
-[ "$(jq -c '.wrote|sort' <<<"$out")" = "$w1" ] && [ "$(jq length <<<"$w1")" = 11 ] && dt "$out" | grep -qF 'not yet committed' \
+# I1: the fix was never committed, so the rerun lists what the fix wrote, for the commit step. Since
+# 0.16 only its untracked files: no commit-plan ran, so there is no ledger entry, and a TRACKED file
+# with no entry is read as the user's own edit (bd init committed config.yaml, .beads/.gitignore,
+# interactions.jsonl, CLAUDE.md, AGENTS.md, .codex and .agents). Accepted loss (spec B): a run that
+# dies before step 6 leaves its appends to tracked files silent; they show in git status.
+[ "$(jq -c '.wrote|sort' <<<"$out")" = '[".beads/PRIME.md",".beads/check-block.sh",".beads/issues.jsonl",".gitattributes"]' ] \
+  && [ "$(jq length <<<"$w1")" = 11 ] && dt "$out" | grep -qF 'not yet committed' \
   && ok "fix_rerun_lists_the_uncommitted_house_files" || bad "rerun wrote: $(jq -c '.wrote|sort' <<<"$out") vs fix $w1"
 # the ritual's own commit, with bd's hook running, leaves nothing behind
 printf 'ritual\n' > "$TMPROOT/beads-msg"; mapfile -t P < <(jq -r '.[]' <<<"$w1" | tr -d '\r')

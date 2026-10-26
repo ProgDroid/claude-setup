@@ -13,20 +13,48 @@ _det_trace() { [ -z "${RITUAL_TRACE:-}" ] || printf '%s\n' "$1" >> "$RITUAL_TRAC
 
 _det_path() { if [ "$1" = . ]; then printf '%s\n' "$2"; else printf '%s/%s\n' "$1" "$2"; fi; }
 
-# Cargo workspace members declared in the root Cargo.toml, expanded, one per line.
-_det_members() {
+# _det_ws_array <key>: the strings of `<key> = [...]` (possibly multi-line) in the root Cargo.toml's
+# [workspace] table, one per line, quotes removed.
+_det_ws_array() {
   [ -f Cargo.toml ] || return 0
-  local m p
-  awk '/^\[workspace\]/{w=1;next} /^\[/{w=0} w&&/^[[:space:]]*members[[:space:]]*=/{a=1} a{print} a&&/\]/{exit}' Cargo.toml \
-    | tr -d '\r' | grep -o '"[^"]*"' | tr -d '"' | while IFS= read -r m; do
-      for p in $m; do
-        p="${p#./}"; p="${p%/}"
-        [ -f "$p/Cargo.toml" ] && printf '%s\n' "$p"
-      done
-    done
+  tr -d '\r' < Cargo.toml \
+    | awk -v k="$1" '/^\[workspace\]/{w=1;next} /^\[/{w=0} w&&$0~("^[[:space:]]*" k "[[:space:]]*="){a=1} a{print} a&&/\]/{exit}' \
+    | grep -o '"[^"]*"' | tr -d '"'
 }
 
-# Candidate dirs for stack detection: ".", immediate subdirs, workspace members. Sorted, unique.
+# _det_ws_members <in|out>: workspace `members` globs, expanded to dirs holding a Cargo.toml, then
+# split by `exclude`: a member is excluded when its path IS an exclude path or lies under one (a
+# path prefix, never a string prefix: "crates/skip" does not exclude "crates/skipper"). Close to
+# Cargo, not the same: Cargo keeps an explicitly listed (glob-free) member that `exclude` also
+# covers; here it is excluded. `in` prints the members kept, `out` the members excluded.
+_det_ws_members() {
+  [ -f Cargo.toml ] || return 0
+  local want="$1" m p x side excl
+  excl="$(_det_ws_array exclude)"
+  while IFS= read -r m; do
+    for p in $m; do
+      p="${p#./}"; p="${p%/}"
+      [ -f "$p/Cargo.toml" ] || continue
+      side=in
+      while IFS= read -r x; do
+        x="${x#./}"; x="${x%/}"
+        [ -n "$x" ] || continue
+        case "$p" in "$x"|"$x"/*) side=out ;; esac
+      done <<<"$excl"
+      if [ "$side" = "$want" ]; then printf '%s\n' "$p"; fi
+    done
+  done < <(_det_ws_array members)
+  return 0
+}
+
+# Cargo workspace members declared in the root Cargo.toml, expanded, minus `exclude`, one per line.
+_det_members() { _det_ws_members in; }
+
+# Members the `exclude` list removes: crates of their own, scanned as candidate dirs (_det_dirs).
+_det_excluded() { _det_ws_members out; }
+
+# Candidate dirs for stack detection: ".", immediate subdirs, workspace members, and members that
+# `exclude` turned back into standalone crates (they can sit two levels down). Sorted, unique.
 _det_dirs() {
   local d
   { printf '.\n'
@@ -36,6 +64,7 @@ _det_dirs() {
       printf '%s\n' "$d"
     done
     _det_members
+    _det_excluded
   } | LC_ALL=C sort -u
 }
 
@@ -74,33 +103,107 @@ _det_classify() {
   else echo none; fi
 }
 
-# _det_classify_stream <source>: reads command LINES on stdin. Each line is split into segments
-# on && || ; | ; every segment is trimmed, stripped of leading VAR=value assignments and classified
-# on its own (so `npm ci && npm test` yields npm test). A `cd <dir>` segment directly before a
-# match is kept as a prefix, so the reported command is runnable as written.
+# _det_split: reads ONE command line on stdin and prints its segments, one per line, breaking on
+# && || ; | only OUTSIDE quotes (POSIX awk: gawk and mawk alike). Shell quoting rules: inside '...'
+# nothing is special; a backslash escapes the next character outside quotes and inside "...", so
+# \" does not close a string and \; does not split. An unterminated quote runs to the end of the
+# line: nothing after it is split off, so text inside a broken string never becomes a command.
+_det_split() {
+  awk -v sq="'" '{
+    n = length($0); seg = ""; q = ""
+    for (i = 1; i <= n; i++) {
+      c = substr($0, i, 1)
+      if (q == sq) { seg = seg c; if (c == sq) q = ""; continue }
+      if (c == "\\" && i < n) { seg = seg c substr($0, i + 1, 1); i++; continue }
+      if (q == "\"") { seg = seg c; if (c == "\"") q = ""; continue }
+      if (c == sq || c == "\"") { q = c; seg = seg c; continue }
+      if ((c == "&" || c == "|") && substr($0, i + 1, 1) == c) { print seg; seg = ""; i++; continue }
+      if (c == ";" || c == "|") { print seg; seg = ""; continue }
+      seg = seg c
+    }
+    print seg }'
+}
+
+# _det_shell_c <cmd>: when <cmd> is `bash|sh [-opts] -c <script>` and the script is ONE word (one
+# "..." or '...' string, or a bare word), print the script (\" \\ \$ \` unescaped for "...") and
+# return 0. Anything else returns 1 and prints nothing.
+_det_shell_c() {
+  local re='^(bash|sh)([[:space:]]+-[A-Za-z]+)*[[:space:]]+-[A-Za-z]*c[[:space:]]+(.+)$' rest t s
+  [[ "$1" =~ $re ]] || return 1
+  rest="${BASH_REMATCH[3]}"
+  if [ "${#rest}" -ge 2 ] && [ "${rest:0:1}" = '"' ] && [ "${rest: -1}" = '"' ]; then
+    t="${rest:1:${#rest}-2}"
+    s="${t//\\\\/}"; s="${s//\\\"/}"
+    case "$s" in *'"'*) return 1 ;; esac            # an unescaped " inside: not one word
+    printf '%s' "$t" | sed -E 's/\\(["\\$`])/\1/g'; return 0
+  elif [ "${#rest}" -ge 2 ] && [ "${rest:0:1}" = "'" ] && [ "${rest: -1}" = "'" ]; then
+    t="${rest:1:${#rest}-2}"
+    case "$t" in *"'"*) return 1 ;; esac
+    printf '%s' "$t"; return 0
+  fi
+  case "$rest" in *[[:space:]\"\']*) return 1 ;; esac
+  printf '%s' "$rest"
+}
+
+# _det_classify_line <line> <source>: classify one command line. Uses and extends the caller's
+# _det_cd (the `cd` segments seen so far in this shell session) and _det_loop (the loops open in
+# it); see _det_classify_stream.
+_det_classify_line() {
+  local seg stripped inner saved sl
+  local loop_re='^((if|then|else|elif|do|!)[[:space:]]+)*(for|while|until|done)([[:space:]]|$)'
+  while IFS= read -r seg; do
+    seg="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+    [ -n "$seg" ] || continue
+    # Nothing in a for/while/until loop is reported, from its first segment to its `done`: the
+    # body runs once per value, with variables the repo root does not have (`pytest "$f"` run
+    # from the root is `pytest ""`). A depth, so a nested loop or a `then` in the body stays in.
+    # A loop whose keyword does not lead the segment (`( for`, `{ for`, `select`) is not seen;
+    # `do` is never stripped below, so its direct body still classifies as nothing (a `then`
+    # nested in such a loop is the known gap). A `cd` inside a loop is not carried either.
+    if [[ "$seg" =~ $loop_re ]]; then
+      if [ "${BASH_REMATCH[3]}" = done ]; then
+        [ "${_det_loop:-0}" -eq 0 ] || _det_loop=$((_det_loop - 1))
+      else
+        _det_loop=$((${_det_loop:-0} + 1))
+      fi
+      continue
+    fi
+    [ "${_det_loop:-0}" -eq 0 ] || continue
+    # shell keywords that lead a command (`then pytest`, `if ! cargo test`), then VAR=value prefixes
+    stripped="$(printf '%s' "$seg" | sed -E 's/^((if|then|else|elif|while|until|!)[[:space:]]+)+//; s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)+//')"
+    case "$stripped" in
+      cd\ *) _det_cd="${_det_cd:+$_det_cd && }$stripped"; continue ;;
+    esac
+    if inner="$(_det_shell_c "$stripped")"; then
+      # the script runs in a child shell: it sees our cd, its own cd does not come back out
+      saved="$_det_cd"; sl="${_det_loop:-0}"; _det_classify_line "$inner" "$2"; _det_cd="$saved"; _det_loop="$sl"; continue
+    fi
+    case "$(_det_classify "$stripped")" in
+      test) _det_add test . "${_det_cd:+$_det_cd && }$stripped" "$2" ;;
+      lint) _det_add lint . "${_det_cd:+$_det_cd && }$stripped" "$2" ;;
+    esac
+  done < <(printf '%s\n' "$1" | _det_split)
+}
+
+# _det_classify_stream <source>: reads command LINES on stdin; an EMPTY line ends a shell session.
+# Each line is split into segments on && || ; | outside quotes (_det_split); every segment is
+# trimmed, stripped of leading shell keywords and VAR=value assignments, unwrapped when it is
+# `bash -c "<script>"`, and classified on its own (so `npm ci && npm test` yields npm test). Every
+# `cd <dir>` segment earlier in the session is kept as a prefix, so the reported command is
+# runnable as written from the repo root. Inside a for/while/until loop nothing is classified.
 _det_classify_stream() {
-  local line seg lastcd stripped
+  local line _det_cd="" _det_loop=0
   while IFS= read -r line; do
-    lastcd=""
-    while IFS= read -r seg; do
-      seg="$(printf '%s' "$seg" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
-      [ -n "$seg" ] || continue
-      stripped="$(printf '%s' "$seg" | sed -E 's/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)+//')"
-      case "$stripped" in
-        cd\ *) lastcd="$stripped"; continue ;;
-      esac
-      case "$(_det_classify "$stripped")" in
-        test) _det_add test . "${lastcd:+$lastcd && }$stripped" "$1" ;;
-        lint) _det_add lint . "${lastcd:+$lastcd && }$stripped" "$1" ;;
-      esac
-    done < <(printf '%s\n' "$line" | sed -E 's/&&|\|\||;|\|/\n/g')
+    if [ -z "$line" ]; then _det_cd=""; _det_loop=0; continue; fi
+    _det_classify_line "$line" "$1"
   done
 }
 
-# README.md: ONLY lines inside fenced code blocks that invoke a known runner. Never prose.
+# README.md: ONLY lines inside fenced code blocks that invoke a known runner. Never prose. Each
+# line is its own session (an empty line after every one), so a `cd` never carries to the next.
 _det_readme() {
   [ -f README.md ] || return 0
-  tr -d '\r' < README.md | awk '/^[[:space:]]*(```|~~~)/{f=!f;next} f{print}' \
+  tr -d '\r' < README.md | awk '/^[[:space:]]*(```|~~~)/{f=!f;next} f{print; print ""}' \
     | sed -e 's/^[[:space:]]*\$[[:space:]]*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
     | _det_classify_stream README.md
 }
@@ -136,20 +239,38 @@ _det_just_make() {
 # Test/lint entries from CI workflows. Single-line `run: <cmd>` is taken as is; for a block
 # scalar (`run: |` / `run: >`) EVERY non-blank line indented deeper than the `run` key is read.
 # Each line is classified by known-runner invocation (_det_classify_stream), not by substring.
+# Every `run:` starts a new shell session (an empty line), as each CI step is a fresh shell; the
+# lines of one block share it, so a `cd` carries down the block. A line ending in an odd number of
+# backslashes continues onto the next line of the same step and is joined to it; a blank line in
+# the block ends the continuation (the first awk marks it with a \001 sentinel, which the join awk
+# drops without ending the session, so a `cd` still carries past it). YAML outer quotes are taken
+# off a single-line `run:` value only: a block line is shell text, and its quotes are the shell's.
 _det_ci() {
-  local f
+  local f sent
+  sent="$(printf '\001')"
   for f in .github/workflows/*.yml .github/workflows/*.yaml; do
     [ -f "$f" ] || continue
-    tr -d '\r' < "$f" | awk '
+    tr -d '\r' < "$f" | awk -v sq="'" -v sent="$sent" '
       function ind(s) { match(s, /^ */); return RLENGTH }
       blk && NF && ind($0) > kc { l=$0; sub(/^ +/, "", l); print l; next }
+      blk && !NF { print sent; next }
       blk && NF { blk=0 }
       /^[[:space:]]*(-[[:space:]]+)?run:[[:space:]]*/ {
+        print ""
         v=$0; sub(/^[[:space:]]*(-[[:space:]]+)?run:[[:space:]]*/, "", v)
         kc=index($0, "run:") - 1
         if (v ~ /^[|>][-+]?[[:space:]]*$/) { blk=1; next }
-        blk=0; print v; next }' \
-    | sed -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" \
+        blk=0; sub(/[[:space:]]+$/, "", v)
+        if (length(v) >= 2 && (v ~ /^".*"$/ || (substr(v, 1, 1) == sq && substr(v, length(v), 1) == sq))) v = substr(v, 2, length(v) - 2)
+        print v; next }' \
+    | sed -e 's/[[:space:]]*$//' \
+    | awk -v sent="$sent" '
+      $0 == sent { if (p != "") print p; p = ""; next }
+      $0 == "" { if (p != "") print p; p = ""; print ""; next }
+      { s = (p == "" ? $0 : p " " $0) }
+      match(s, /\\+$/) && RLENGTH % 2 == 1 { s = substr(s, 1, length(s) - 1); sub(/[[:space:]]+$/, "", s); p = s; next }
+      { p = ""; print s }
+      END { if (p != "") print p }' \
     | _det_classify_stream "$f"
   done
 }

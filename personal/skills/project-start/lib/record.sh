@@ -36,7 +36,10 @@ record_write() {
          + (if $new[0].baseline then {baseline: $new[0].baseline} else {} end))
   ' > "$tmp" || { rm -f "$tmp"; die "record merge failed"; }
   mv "$tmp" "$f"
-  jq -c . "$f"
+  jq -c . "$f"; local prc=$?
+  # the ledger's step-7 write: a run that ends here has said yes or no to what it was shown
+  ledger_settle "$repo" "$(jq -r '.steps.commit.result // ""' "$res" 2>/dev/null | tr -d '\r')" || :
+  return "$prc"
 }
 
 # due <repo> -> {"offer":[ids],"skip":[{id,reason}]}

@@ -28,6 +28,11 @@
 
 set -uo pipefail
 
+# Below bash 4.4 the ritual's own guard speaks (a SessionStart line on stderr reaches nobody), so
+# this hook leaves silently. RITUAL_TEST_BASH_VERSION is read only here and in ritual.sh; tests only.
+v="${RITUAL_TEST_BASH_VERSION:-${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}}"
+if [ "${v%%.*}" -lt 4 ] || { [ "${v%%.*}" -eq 4 ] && [ "${v#*.}" -lt 4 ]; }; then exit 0; fi
+
 # One read via cat: `read -d ''` takes a pipe a byte at a time (~5 s per MB), and `$(</dev/stdin)`
 # fails on the native Windows pipe Claude Code hands a hook ("No such file or directory").
 json="$(cat)"

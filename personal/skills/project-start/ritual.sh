@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
 # project-start ritual dispatcher.  bash ritual.sh <subcommand> <repo> [args...]
+# Needs bash 4.4 (mapfile -d). Bash-3.2-safe syntax, so it can refuse before anything else parses.
+# RITUAL_TEST_BASH_VERSION ("MAJOR.MINOR") is read only here and in handoff-session-start.sh; tests only.
+v="${RITUAL_TEST_BASH_VERSION:-${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}}"
+if [ "${v%%.*}" -lt 4 ] || { [ "${v%%.*}" -eq 4 ] && [ "${v#*.}" -lt 4 ]; }; then
+  echo "ritual: needs bash 4.4 or newer (found $v); nothing was run" >&2
+  exit 2
+fi
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib/common.sh"
@@ -12,6 +19,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib/beads.sh"
 . "$HERE/lib/secretscan.sh"
 . "$HERE/lib/handoff.sh"
+. "$HERE/lib/ledger.sh"
 command -v jq >/dev/null 2>&1 || die "jq is required"
 
 # The scripted auto steps, in steps.json order. stack-checks runs its fix, which writes only the
@@ -49,12 +57,13 @@ _auto_run() {
   return 0
 }
 
-# _auto_result <id> -> _AUTO_OUT when the call exited 0 and printed a result for <id>; otherwise an
-# `unknown` result naming the exit code and the end of the call's stderr.
+# _auto_result <id> -> _AUTO_OUT when the call exited 0 and printed exactly one JSON value, a result
+# for <id> (slurped: `jq -e` alone judges only the last value); otherwise an `unknown` result
+# naming the exit code and the end of the call's stderr.
 _auto_result() {
   local tail
-  if [ "$_AUTO_RC" -eq 0 ] && printf '%s' "$_AUTO_OUT" | jq -e --arg id "$1" \
-      'type == "object" and .id == $id and (.status | type) == "string" and (.wrote | type) == "array"' >/dev/null 2>&1; then
+  if [ "$_AUTO_RC" -eq 0 ] && printf '%s' "$_AUTO_OUT" | jq -se --arg id "$1" \
+      'length == 1 and (.[0] | type == "object" and .id == $id and (.status | type) == "string" and (.wrote | type) == "array")' >/dev/null 2>&1; then
     printf '%s\n' "$_AUTO_OUT"; return 0
   fi
   tail="$(tr -d '\r' < "$_AUTO_ERR" | grep -v '^[[:space:]]*$' | tail -n 3 | paste -sd'|' -)"

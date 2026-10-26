@@ -123,12 +123,16 @@ grep -qF '"$_ritual_gl" git --pre-commit --staged --redact --no-banner --no-colo
   && ok "fix_block_runs_pinned_command" || bad "pinned command missing from block"
 
 # fix_idempotent: a second fix changes nothing and keeps one marker pair. The hook edit was never
-# committed, so the rerun lists it again for the commit step (I1).
+# committed, but bd_repo committed the hook, and no commit-plan ran, so there is no ledger entry:
+# since 0.16 a tracked file with no entry reads as the user's own edit and is not listed. Accepted
+# loss (spec B): it shows in git status, and check secret-scan sees the block. (The untracked hook
+# in a custom hooks path is still listed: proved_lists_the_uncommitted_hook below.)
 s1="$(sha256sum "$h" | cut -d' ' -f1)"
 out="$(D fix secret-scan "$r")"
-[ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = '[".beads/hooks/pre-commit"]' ] && [ "$(sha256sum "$h" | cut -d' ' -f1)" = "$s1" ] \
+[ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = '[]' ] && [ "$(sha256sum "$h" | cut -d' ' -f1)" = "$s1" ] \
   && [ "$(nmark "$h" '# >>> ritual secret-scan')" = 1 ] && [ "$(nmark "$h" '# <<< ritual secret-scan')" = 1 ] \
-  && dt "$out" | grep -qF 'not yet committed' && ok "fix_idempotent" || bad "fix_idempotent: $out"
+  && [ -n "$(git -C "$r" status --porcelain -- .beads/hooks/pre-commit)" ] \
+  && ! dt "$out" | grep -qF 'not yet committed' && ok "fix_idempotent" || bad "fix_idempotent: $out"
 git -C "$r" add .beads/hooks/pre-commit && git -C "$r" commit -q --no-verify -m 'secret scan'
 out="$(D fix secret-scan "$r")"
 [ "$(st "$out")" = already ] && [ "$(jq -c .wrote <<<"$out")" = '[]' ] && ok "fix_rerun_after_the_commit_lists_nothing" || bad "rerun after commit: $out"
@@ -257,14 +261,18 @@ out="$(D check secret-scan "$r")"
 # proof_requires_nonzero_exit: a hook whose scan REPORTS the leak but lets the commit through
 # (here an edited block that swallows gitleaks' exit) is not a working scan. The block is in the
 # hook git runs, so this is `failed` with the cause (R41), for check AND fix (never absent/already).
+# It has no version line, but it is not a text the ritual shipped, so fix never rewrites it (R13):
+# the hook is byte-identical afterwards.
 r="$(mkrepo swallow)"
 printf '%s\n' '#!/usr/bin/env sh' '# >>> ritual secret-scan' 'gitleaks git --pre-commit --staged --redact --no-banner || true' \
   'echo >&2 "gitleaks: leak reported, ignored"' '# <<< ritual secret-scan' > "$r/.git/hooks/pre-commit"
+s0="$(sha256sum "$r/.git/hooks/pre-commit" | cut -d' ' -f1)"
 out="$(D check secret-scan "$r")"
 [ "$(st "$out")" = failed ] && [[ "$(dt "$out")" == *"did not fire"* ]] && [[ "$(dt "$out")" == *"leak reported, ignored"* ]] \
   && [ -z "$(git -C "$r" status --porcelain)" ] && ok "proof_requires_nonzero_exit" || bad "proof_requires_nonzero_exit: $out"
 out="$(D fix secret-scan "$r")"
-[ "$(st "$out")" = failed ] && [[ "$(dt "$out")" == *"did not fire"* ]] && ok "fix_fails_on_edited_block" \
+[ "$(st "$out")" = failed ] && [[ "$(dt "$out")" == *"did not fire"* ]] \
+  && [ "$(sha256sum "$r/.git/hooks/pre-commit" | cut -d' ' -f1)" = "$s0" ] && ok "fix_fails_on_edited_block" \
   || bad "fix_fails_on_edited_block: $out"
 
 # r41_no_trailing_colon: a hook that printed nothing gives a detail without a dangling ": ".
@@ -501,6 +509,307 @@ echo ok > "$r/benign.txt"; git -C "$r" add benign.txt
 err="$( PATH="$NOGL"; LOCALAPPDATA="$(cygpath -w "$EMPTY_LA")"; export PATH LOCALAPPDATA; git -C "$r" commit -q -m benign 2>&1 >/dev/null )"; rc=$?
 [ "$rc" = 0 ] && [[ "$err" == *WARNING* ]] && [[ "$err" == *gitleaks* ]] && [ -z "$(git -C "$r" status --porcelain -- benign.txt)" ] && [ "$(git -C "$r" log -1 --format=%s)" = benign ] \
   && ok "hook_fails_open_without_gitleaks" || bad "hook_fails_open_without_gitleaks: rc=$rc err=$err"
+
+echo "== block v2: in-place upgrade of a v1 block =="
+# The two v1 block texts the ritual shipped (no version line, no timeout), as fixtures extracted
+# mechanically from the release commits (`printf '%s\n' "${_SS_BLOCK[@]}"` after sourcing that
+# commit's lib/secretscan.sh), never retyped: 0.14.0 (921eaf1) and 0.14.1 .. 0.15.3 (db9fef9 ..
+# 02b1cf7; adds --no-color). shipped_fixtures_match_history re-derives them when history is there.
+V1_0140="$TESTS_DIR/fixtures/secretscan-v1-0.14.0.txt"
+V1_BLOCK="$TESTS_DIR/fixtures/secretscan-v1-0.14.1.txt"
+# v1_hook <file> [lf|crlf] [block file] [eof]: a hook ASSEMBLED from parts written to their own
+# files first: PARTS/before (a shebang and a user line), PARTS/block (a v1 block, default 0.14.1's)
+# and PARTS/after (two user lines, the last one unterminated), all in the given line ending. With
+# `eof`, the block ends the file and its end marker has no line ending (PARTS/after is empty). The
+# parts are the expected outside bytes by construction, never extracted from a hook afterwards.
+PARTS="$TMPROOT/hook parts"; mkdir -p "$PARTS"
+v1_hook() {
+  local f="$1" e=$'\n' i b="${3:-$V1_BLOCK}" lines; [ "${2:-}" = crlf ] && e=$'\r\n'
+  printf '%s%s' '#!/usr/bin/env sh' "$e" 'echo user-before >&2' "$e" > "$PARTS/before"
+  mapfile -t lines < "$b"
+  for i in "${!lines[@]}"; do
+    printf '%s' "${lines[$i]}"
+    { [ "${4:-}" = eof ] && [ "$i" -eq $((${#lines[@]} - 1)) ]; } || printf '%s' "$e"
+  done > "$PARTS/block"
+  if [ "${4:-}" = eof ]; then : > "$PARTS/after"
+  else printf '%s%s%s' 'echo user-after >&2' "$e" 'true # last line, no newline' > "$PARTS/after"; fi
+  cat "$PARTS/before" "$PARTS/block" "$PARTS/after" > "$f"
+  chmod +x "$f"
+}
+# print_block <eol>: the current block, each line ended by <eol> (called through ss_lib).
+print_block() { local l; for l in "${_SS_BLOCK[@]}"; do printf '%s%s' "$l" "$1"; done; }
+# upgraded_as_built <hook> <lf|crlf>: the upgraded hook is exactly PARTS/before + the current block
+# in that line ending + PARTS/after; its first and last bytes are compared to the part files by
+# byte count (head -c / tail -c), and the whole file to the assembled expectation.
+upgraded_as_built() {
+  local h="$1" e=$'\n' nb na; [ "$2" = crlf ] && e=$'\r\n'
+  nb="$(wc -c < "$PARTS/before" | tr -d ' ')"; na="$(wc -c < "$PARTS/after" | tr -d ' ')"
+  { cat "$PARTS/before"; ss_lib print_block "$e"; cat "$PARTS/after"; } > "$PARTS/expected"
+  head -c "$nb" "$h" > "$PARTS/got.before"; tail -c "$na" "$h" > "$PARTS/got.after"
+  [ "$nb" -gt 0 ] && cmp -s "$PARTS/before" "$PARTS/got.before" && cmp -s "$PARTS/after" "$PARTS/got.after" \
+    && cmp -s "$PARTS/expected" "$h"
+}
+V2_LINE='# ritual secret-scan block v2'
+sha() { sha256sum "$1" | cut -d' ' -f1; }
+# ss_lib <fn> <args...>: call a secretscan.sh function directly
+ss_lib() { ( . "$SKILL_DIR/lib/common.sh"; . "$SKILL_DIR/lib/workspace.sh"; . "$SKILL_DIR/lib/secretscan.sh"; "$@" ); }
+
+# shipped_fixtures_match_history: each fixture is byte-for-byte the block its release built.
+# Skipped when the clone lacks those commits (a shallow CI checkout), never counted as a pass.
+REPO_TOP="$(git -C "$SKILL_DIR" rev-parse --show-toplevel 2>/dev/null)"
+SS_REL="$(git -C "$SKILL_DIR" rev-parse --show-prefix 2>/dev/null)lib/secretscan.sh"
+if git -C "$REPO_TOP" cat-file -e 921eaf1^{commit} 2>/dev/null && git -C "$REPO_TOP" cat-file -e 02b1cf7^{commit} 2>/dev/null; then
+  hist_ok=1
+  for pair in "921eaf1|$V1_0140" "db9fef9|$V1_BLOCK" "02b1cf7|$V1_BLOCK"; do
+    c="${pair%%|*}"; fx="${pair#*|}"
+    MSYS_NO_PATHCONV=1 git -C "$REPO_TOP" show "$c:$SS_REL" > "$TMPROOT/ss-$c.sh" 2>/dev/null || hist_ok=0
+    bash -c '. "$1"; printf "%s\n" "${_SS_BLOCK[@]}"' _ "$TMPROOT/ss-$c.sh" > "$TMPROOT/blk-$c.txt" 2>/dev/null || hist_ok=0
+    [ -s "$TMPROOT/blk-$c.txt" ] && cmp -s "$TMPROOT/blk-$c.txt" "$fx" || hist_ok=0
+  done
+  [ "$hist_ok" = 1 ] && ! cmp -s "$V1_0140" "$V1_BLOCK" && ok "shipped_fixtures_match_history" || bad "shipped_fixtures_match_history"
+else
+  echo "  SKIP: shipped_fixtures_match_history (release commits not in this clone)"
+fi
+
+# stale_block_checks_present_upgrade_due: a working v1 block proves present; the detail says the
+# block is due an upgrade, and check writes nothing.
+r="$(mkrepo stale)"; h="$r/.git/hooks/pre-commit"; v1_hook "$h"; s0="$(sha "$h")"
+out="$(D check secret-scan "$r")"
+[ "$(st "$out")" = present ] && [[ "$(dt "$out")" == "proved: "*"; block v1, upgrade due" ]] && [ "$(sha "$h")" = "$s0" ] \
+  && ok "stale_block_checks_present_upgrade_due" || bad "stale_block_checks_present_upgrade_due: $out"
+# ...and a current block carries no such note
+r="$(mkrepo current)"; D fix secret-scan "$r" >/dev/null
+out="$(D check secret-scan "$r")"
+[ "$(st "$out")" = present ] && [[ "$(dt "$out")" != *"upgrade due"* ]] \
+  && ok "current_block_checks_no_upgrade_note" || bad "current_block_checks_no_upgrade_note: $out"
+
+# block_version_reads_between_markers: the version line counts only inside the markers; none = 1.
+r="$(mkrepo ver)"; D fix secret-scan "$r" >/dev/null; hv2="$r/.git/hooks/pre-commit"
+hv1="$TMPROOT/v1 hook"; v1_hook "$hv1"
+hv1o="$TMPROOT/v1 hook outside"; v1_hook "$hv1o"; printf '\n%s\n' '# ritual secret-scan block v9' >> "$hv1o"
+hv2c="$TMPROOT/v2 hook crlf"; sed 's/$/\r/' "$hv2" > "$hv2c"
+vv="$(ss_lib _ss_block_version "$hv2")/$(ss_lib _ss_block_version "$hv1")/$(ss_lib _ss_block_version "$hv1o")/$(ss_lib _ss_block_version "$hv2c")"
+[ "$vv" = "2/1/1/2" ] && ok "block_version_reads_between_markers" || bad "block_version_reads_between_markers: v2/v1/v1+outside/v2crlf = $vv"
+
+# upgrade_keeps_outside_bytes_lf / _crlf / _eof_crlf: fix replaces the marker lines and everything
+# between, keeps every byte outside them (last line unterminated), and writes the new block in
+# the file's line ending. _eof_crlf: the block ends the file with an unterminated end marker; the
+# new block's last line gets the file's line ending (nothing outside to keep). Compared against
+# the parts the hook was assembled from (upgraded_as_built), not bytes re-extracted from it.
+for eolk in lf crlf eof_crlf; do
+  e="${eolk#eof_}"; eof=""; [ "$eolk" = eof_crlf ] && eof=eof
+  r="$(mkrepo "up-$eolk")"; h="$r/.git/hooks/pre-commit"; v1_hook "$h" "$e" "$V1_BLOCK" $eof
+  out="$(D fix secret-scan "$r")"
+  [ "$(st "$out")" = fixed ] && [[ "$(dt "$out")" == "upgraded ritual block v1 → v2; proved: "* ]] \
+    && upgraded_as_built "$h" "$e" && grep -qF 'timeout 60 "$_ritual_gl"' "$h" \
+    && ok "upgrade_keeps_outside_bytes_$eolk" \
+    || bad "upgrade_keeps_outside_bytes_$eolk: $out cr=$(crs "$h") lf=$(lfs "$h") v2=$(nmark "$h" "$V2_LINE")"
+done
+
+# upgrade_keeps_mode_and_exec: the upgrade writes a temp file and renames it over the hook; the
+# hook keeps its mode and stays executable. (On NTFS under Git Bash the mode is derived from the
+# content, a shebang reads as 755, so only a POSIX filesystem can show a lost mode.)
+r="$(mkrepo up-mode)"; h="$r/.git/hooks/pre-commit"; v1_hook "$h"; chmod 750 "$h"; m0="$(stat -c %a "$h")"
+out="$(D fix secret-scan "$r")"
+[ "$(st "$out")" = fixed ] && [ "$(stat -c %a "$h")" = "$m0" ] && [ -x "$h" ] && [ ! -L "$h" ] \
+  && [ -z "$(find "$r/.git/hooks" -maxdepth 1 -name '.ritual-pre-commit.*')" ] \
+  && ok "upgrade_keeps_mode_and_exec" || bad "upgrade_keeps_mode_and_exec: mode $m0 -> $(stat -c %a "$h") $out"
+
+# upgrade_in_sha256_repo: the shipped-text match must not depend on the repository's object
+# format. The ritual runs with cwd in a SHA-256 repo (as it does for real: ritual.sh never changes
+# directory); check says "upgrade due" and fix upgrades.
+S256="$TMPROOT/ritual fixtures/sha256 repo"
+if git init -q -b main --object-format=sha256 "$S256" >/dev/null 2>&1 && [ "$(git -C "$S256" rev-parse --show-object-format 2>/dev/null)" = sha256 ]; then
+  git -C "$S256" config user.email t@example.com; git -C "$S256" config user.name Test
+  git -C "$S256" config commit.gpgsign false; git -C "$S256" config core.autocrlf false
+  echo seed > "$S256/README.md"; git -C "$S256" add README.md; git -C "$S256" commit -q -m seed
+  h="$S256/.git/hooks/pre-commit"; v1_hook "$h"
+  out1="$( cd "$S256" && D check secret-scan "$S256" )"; out="$( cd "$S256" && D fix secret-scan "$S256" )"
+  [ "$(st "$out1")" = present ] && [[ "$(dt "$out1")" == *"; block v1, upgrade due" ]] \
+    && [ "$(st "$out")" = fixed ] && [[ "$(dt "$out")" == "upgraded ritual block v1 → v2; proved: "* ]] && [ "$(nmark "$h" "$V2_LINE")" = 1 ] \
+    && ok "upgrade_in_sha256_repo" || bad "upgrade_in_sha256_repo: $out1 / $out"
+else
+  echo "  SKIP: upgrade_in_sha256_repo (NOTE: this git cannot create a sha256 repository)"
+fi
+
+# upgrade_then_proof_passes: with --proved (the ritual's normal call after a present check) the
+# stale block is still rewritten and then proved by the fix itself: gitleaks is called. The hook is
+# in wrote. A later check is present without the upgrade note; a later --proved fix is R59's
+# already with no gitleaks call.
+r="$(bd_repo)"; h="$r/.beads/hooks/pre-commit"
+{ head -n 1 "$h"; cat "$V1_BLOCK"; tail -n +2 "$h"; } > "$TMPROOT/v1bd"; cat "$TMPROOT/v1bd" > "$h"
+git -C "$r" add .beads/hooks/pre-commit; git -C "$r" commit -q --no-verify -m 'v1 block'
+: > "$GL_CALLS"; out="$(LG fix secret-scan "$r" --proved)"; n1="$(ncalls)"
+[ "$(st "$out")" = fixed ] && [[ "$(dt "$out")" == "upgraded ritual block v1 → v2; proved: "* ]] && [ "$n1" -ge 1 ] \
+  && [ "$(jq -c .wrote <<<"$out")" = '[".beads/hooks/pre-commit"]' ] && [ "$(nmark "$h" "$V2_LINE")" = 1 ] \
+  && [ "$(proof_leftovers "$r")" = 0 ] \
+  && ok "upgrade_then_proof_passes (--proved)" || bad "upgrade_then_proof_passes (--proved): calls=$n1 $out"
+out="$(LG check secret-scan "$r")"; : > "$GL_CALLS"; out2="$(LG fix secret-scan "$r" --proved)"
+[ "$(st "$out")" = present ] && [[ "$(dt "$out")" != *"upgrade due"* ]] && [ "$(st "$out2")" = already ] && [ "$(ncalls)" = 0 ] \
+  && ok "upgraded_block_is_current" || bad "upgraded_block_is_current: $out / $out2"
+# without the flag: the same upgrade and proof; a second fix is already and changes nothing
+r="$(mkrepo up-noflag)"; h="$r/.git/hooks/pre-commit"; v1_hook "$h"
+: > "$GL_CALLS"; out="$(LG fix secret-scan "$r")"; n1="$(ncalls)"; s1="$(sha "$h")"
+out2="$(LG fix secret-scan "$r")"
+[ "$(st "$out")" = fixed ] && [[ "$(dt "$out")" == "upgraded ritual block v1 → v2; proved: "* ]] && [ "$n1" -ge 1 ] \
+  && [ "$(jq -c .wrote <<<"$out")" = '[]' ] && [ "$(st "$out2")" = already ] && [ "$(sha "$h")" = "$s1" ] \
+  && ok "upgrade_then_proof_passes (no flag)" || bad "upgrade_then_proof_passes (no flag): calls=$n1 $out / $out2"
+
+# current_block_already (R59 unchanged): a current block with --proved is already, no gitleaks
+# call, the hook untouched; without the flag, already after a proof, still untouched.
+r="$(mkrepo cur)"; h="$r/.git/hooks/pre-commit"; LG fix secret-scan "$r" >/dev/null; s0="$(sha "$h")"
+: > "$GL_CALLS"; out="$(LG fix secret-scan "$r" --proved)"; n1="$(ncalls)"; out2="$(LG fix secret-scan "$r")"
+[ "$(st "$out")" = already ] && [ "$n1" = 0 ] && [ "$(st "$out2")" = already ] && [ "$(ncalls)" -ge 1 ] && [ "$(sha "$h")" = "$s0" ] \
+  && ok "current_block_already" || bad "current_block_already: calls=$n1 $out / $out2"
+
+# R7: the upgrade is kept when the proof that follows it does not pass (v2 is a superset of v1).
+# unknown (no gitleaks): "not proved: <cause>", naming the upgrade; failed: the proof's cause.
+# R14: the hook the fix rewrote is in wrote either way (a hooks path inside the work tree, so the
+# hook has a repo-relative path to list).
+WT_HOOKS="tools/git hooks"
+r="$(mkrepo up-unknown)"; git -C "$r" config core.hooksPath "$WT_HOOKS"; mkdir -p "$r/$WT_HOOKS"; h="$r/$WT_HOOKS/pre-commit"; v1_hook "$h"
+out="$(N fix secret-scan "$r")"
+[ "$(st "$out")" = unknown ] && [[ "$(dt "$out")" == "not proved: "*gitleaks* ]] && [[ "$(dt "$out")" == *"upgraded ritual block v1 → v2"* ]] \
+  && [ "$(nmark "$h" "$V2_LINE")" = 1 ] && [ "$(jq -c .wrote <<<"$out")" = '["tools/git hooks/pre-commit"]' ] \
+  && ok "upgrade_kept_when_proof_unknown" || bad "upgrade_kept_when_proof_unknown: $out"
+r="$(mkrepo up-failed)"; git -C "$r" config core.hooksPath "$WT_HOOKS"; mkdir -p "$r/$WT_HOOKS"; h="$r/$WT_HOOKS/pre-commit"; v1_hook "$h"
+out="$( stub_path "$CRASH"; bash "$RITUAL" fix secret-scan "$r" )"
+[ "$(st "$out")" = failed ] && [[ "$(dt "$out")" == *"upgraded ritual block v1 → v2"* ]] && [[ "$(dt "$out")" == *"failed to run"* ]] \
+  && [ "$(nmark "$h" "$V2_LINE")" = 1 ] && [ "$(proof_leftovers "$r")" = 0 ] && [ "$(jq -c .wrote <<<"$out")" = '["tools/git hooks/pre-commit"]' ] \
+  && ok "upgrade_kept_when_proof_fails" || bad "upgrade_kept_when_proof_fails: $out"
+
+# upgrade_from_0140_text / upgrade_from_0141_text: each shipped v1 text upgrades (0.14.1's in
+# both line endings), keeps the outside bytes, and proves.
+for spec in "0140|lf|$V1_0140" "0141|lf|$V1_BLOCK" "0141|crlf|$V1_BLOCK"; do
+  rel="${spec%%|*}"; rest="${spec#*|}"; eolk="${rest%%|*}"; fx="${rest#*|}"
+  r="$(mkrepo "from-$rel-$eolk")"; h="$r/.git/hooks/pre-commit"; v1_hook "$h" "$eolk" "$fx"
+  out="$(D fix secret-scan "$r")"
+  [ "$(st "$out")" = fixed ] && [[ "$(dt "$out")" == "upgraded ritual block v1 → v2; proved: "* ]] \
+    && upgraded_as_built "$h" "$eolk" \
+    && ok "upgrade_from_${rel}_text ($eolk)" || bad "upgrade_from_${rel}_text ($eolk): $out"
+done
+
+# edited_v1_block_*: a block with no version line whose text the ritual never shipped (here 0.14.1's
+# with one user line added inside the markers) still scans, so check is present, but it never
+# promises an upgrade, and fix (no flag and --proved) is already and leaves every byte (R13).
+EDITED="$TMPROOT/edited v1 block"; sed 's/^unset _ritual_gl/echo user-edit-inside >\&2\nunset _ritual_gl/' "$V1_BLOCK" > "$EDITED"
+r="$(mkrepo edited)"; h="$r/.git/hooks/pre-commit"; v1_hook "$h" lf "$EDITED"; s0="$(sha "$h")"
+out="$(D check secret-scan "$r")"
+[ "$(grep -c 'user-edit-inside' "$h")" = 1 ] && [ "$(st "$out")" = present ] && [[ "$(dt "$out")" != *"upgrade due"* ]] \
+  && [[ "$(dt "$out")" == *"edited ritual block, no version line; fix will not upgrade it" ]] && [ "$(sha "$h")" = "$s0" ] \
+  && ok "edited_v1_block_checks_no_upgrade_promise" || bad "edited_v1_block_checks_no_upgrade_promise: $out"
+: > "$GL_CALLS"; out="$(LG fix secret-scan "$r")"; n1="$(ncalls)"; : > "$GL_CALLS"; out2="$(LG fix secret-scan "$r" --proved)"
+[ "$(st "$out")" = already ] && [ "$n1" -ge 1 ] && [[ "$(dt "$out")" == *"fix will not upgrade it"* ]] \
+  && [ "$(st "$out2")" = already ] && [ "$(ncalls)" = 0 ] && [[ "$(dt "$out2")" == *"fix will not upgrade it"* ]] \
+  && [ "$(sha "$h")" = "$s0" ] && [ "$(nmark "$h" "$V2_LINE")" = 0 ] \
+  && ok "edited_v1_block_left_alone" || bad "edited_v1_block_left_alone: calls=$n1 $out / $out2"
+
+# unbalanced_markers_still_failed: a stale block plus a stray begin marker is never upgraded.
+r="$(mkrepo up-unbal)"; h="$r/.git/hooks/pre-commit"; v1_hook "$h"; printf '\n%s\n' '# >>> ritual secret-scan' >> "$h"; s0="$(sha "$h")"
+out="$(D fix secret-scan "$r")"
+[ "$(st "$out")" = failed ] && [[ "$(dt "$out")" == *"2 begin and 1 end"* ]] && [ "$(sha "$h")" = "$s0" ] \
+  && ok "unbalanced_markers_still_failed" || bad "unbalanced_markers_still_failed: $out"
+# markers_out_of_order_failed: one of each, end before begin: nothing between them to replace.
+r="$(mkrepo up-order)"; h="$r/.git/hooks/pre-commit"
+printf '%s\n' '#!/bin/sh' '# <<< ritual secret-scan' 'true' '# >>> ritual secret-scan' > "$h"; s0="$(sha "$h")"
+out="$(D fix secret-scan "$r")"
+[ "$(st "$out")" = failed ] && [[ "$(dt "$out")" == *"out of order"* ]] && [ "$(sha "$h")" = "$s0" ] \
+  && ok "markers_out_of_order_failed" || bad "markers_out_of_order_failed: $out"
+
+# fix_term_during_upgrade_proof: TERM while the fix proves the block it has just upgraded: the
+# proof cleans up first, the result is failed and names the upgrade, and the hook stays v2.
+r="$(mkrepo up-term)"; git -C "$r" config core.hooksPath "$WT_HOOKS"; mkdir -p "$r/$WT_HOOKS"; h="$r/$WT_HOOKS/pre-commit"; v1_hook "$h"; rm -f "$mark"
+set -m
+( stub_path "$SLOW"; export SLOW_MARK="$mark"; exec bash "$RITUAL" fix secret-scan "$r" > "$TMPROOT/uterm.out" 2>/dev/null ) &
+pid=$!
+set +m
+for i in $(seq 1 150); do [ -e "$mark" ] && break; sleep 0.2; done
+kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid"
+wait "$pid"; trc=$?
+fo="$(cat "$TMPROOT/uterm.out")"
+[ -e "$mark" ] && [ "$trc" != 0 ] && [ "$(st "$fo")" = failed ] && [[ "$(dt "$fo")" == "upgraded ritual block v1 → v2 in "*"; interrupted by SIGTERM while proving the upgraded block;"* ]] \
+  && [[ "$(dt "$fo")" == *"the proof file was removed"* ]] && [ "$(nmark "$h" "$V2_LINE")" = 1 ] && [ "$(proof_leftovers "$r")" = 0 ] \
+  && [ "$(jq -c .wrote <<<"$fo")" = '["tools/git hooks/pre-commit"]' ] \
+  && ok "fix_term_during_upgrade_proof" || bad "fix_term_during_upgrade_proof: rc=$trc out=$fo"
+
+echo "== block v2: gitleaks under a timeout =="
+HANG="$TMPROOT/stub hang"; LEAKHANG="$TMPROOT/stub leak then hang"; mkdir -p "$HANG" "$LEAKHANG"
+cat > "$HANG/gitleaks" <<'STUB'
+#!/usr/bin/env bash
+sleep 30; echo "INF no leaks found" >&2; exit 0
+STUB
+cat > "$LEAKHANG/gitleaks" <<'STUB'
+#!/usr/bin/env bash
+echo "WRN leaks found: 1" >&2; sleep 30; exit 1
+STUB
+chmod +x "$HANG/gitleaks" "$LEAKHANG/gitleaks"
+TO_MSG='ritual secret-scan: gitleaks timed out after 2 s; nothing was scanned; commit blocked'
+
+# timeout_blocks_with_message: installed with a 2 s bound (the knob is read at install time only),
+# a hanging gitleaks is stopped, the hook exits 124 with the message, under `sh -e`.
+r="$(mkrepo hang)"; h="$r/.git/hooks/pre-commit"; ( export RITUAL_TEST_GITLEAKS_TIMEOUT=2; D fix secret-scan "$r" >/dev/null )
+t0="$(date +%s)"; err="$( cd "$r" && stub_path "$HANG" && sh -e .git/hooks/pre-commit 2>&1 )"; rc=$?; t1="$(date +%s)"
+[ "$rc" = 124 ] && [ "$((t1 - t0))" -lt 10 ] && [[ "$err" == *"$TO_MSG"* ]] && [[ "$err" != *"found secrets"* ]] && [[ "$err" != *"failed to run"* ]] \
+  && ok "timeout_blocks_with_message" || bad "timeout_blocks_with_message: rc=$rc wall=$((t1 - t0))s $err"
+# ...and a real commit is blocked by it
+echo ok > "$r/benign.txt"; git -C "$r" add benign.txt; h0="$(git -C "$r" rev-parse HEAD)"
+t0="$(date +%s)"; err="$( stub_path "$HANG"; git -C "$r" commit -q -m benign 2>&1 )"; rc=$?; t1="$(date +%s)"
+[ "$rc" != 0 ] && [ "$(git -C "$r" rev-parse HEAD)" = "$h0" ] && [ "$((t1 - t0))" -lt 10 ] && [[ "$err" == *"$TO_MSG"* ]] \
+  && ok "timeout_blocks_the_commit" || bad "timeout_blocks_the_commit: rc=$rc wall=$((t1 - t0))s $err"
+# timeout_checked_before_output: a gitleaks cut short may already have printed "leaks found:";
+# exit 124 is read first, so the message is the timeout one, never "found secrets".
+t0="$(date +%s)"; err="$( cd "$r" && stub_path "$LEAKHANG" && sh -e .git/hooks/pre-commit 2>&1 )"; rc=$?; t1="$(date +%s)"
+[ "$rc" = 124 ] && [ "$((t1 - t0))" -lt 10 ] && [[ "$err" == *"$TO_MSG"* ]] && [[ "$err" != *"found secrets"* ]] \
+  && ok "timeout_checked_before_output" || bad "timeout_checked_before_output: rc=$rc wall=$((t1 - t0))s $err"
+git -C "$r" rm -q --cached benign.txt; rm -f "$r/benign.txt"
+
+# no_timeout_runs_plain: a sealed PATH with no `timeout` at all: gitleaks runs plain (a staged key
+# is found and blocks, a clean tree passes).
+ABS_SH="$(command -v sh)"
+SB="$(sealed_bin "$TMPROOT/sealed no timeout" bash git grep)"; cp "$DET/gitleaks" "$SB/gitleaks"; chmod +x "$SB/gitleaks"
+r="$(mkrepo plain-to)"; D fix secret-scan "$r" >/dev/null
+ctl="$(PATH="$SB"; command -v timeout || echo none)/$(PATH="$SB"; command -v gitleaks >/dev/null && echo gl)"
+printf 'aws_access_key_id = %s\n' "$KEY" > "$r/k.txt"; git -C "$r" add k.txt
+err1="$( cd "$r" && PATH="$SB" "$ABS_SH" -e .git/hooks/pre-commit 2>&1 )"; rc1=$?
+git -C "$r" rm -q --cached k.txt; rm -f "$r/k.txt"
+err2="$( cd "$r" && PATH="$SB" "$ABS_SH" -e .git/hooks/pre-commit 2>&1 )"; rc2=$?
+[ "$ctl" = none/gl ] && [ "$rc1" = 1 ] && [[ "$err1" == *"found secrets"* ]] && [ "$rc2" = 0 ] && [[ "$err2" != *"timed out"* ]] \
+  && ok "no_timeout_runs_plain" || bad "no_timeout_runs_plain: ctl=$ctl rc1=$rc1 [$err1] rc2=$rc2 [$err2]"
+
+# non_gnu_timeout_runs_plain: Windows' timeout.exe first on PATH (its --version is not GNU's, and
+# it fails whatever it is asked) must not be used: gitleaks runs plain, a clean commit passes.
+FAKETO="$TMPROOT/fake timeout"; mkdir -p "$FAKETO"; FAKE_TO_LOG="$TMPROOT/fake timeout.log"; : > "$FAKE_TO_LOG"
+cat > "$FAKETO/timeout" <<'STUB'
+#!/usr/bin/env bash
+echo "timeout $*" >> "${FAKE_TO_LOG:?}"
+echo "ERROR: Invalid syntax. Default option is not allowed more than '1' time(s)."
+echo "Type \"TIMEOUT /?\" for usage."
+exit 1
+STUB
+chmod +x "$FAKETO/timeout"; export FAKE_TO_LOG
+r="$(mkrepo fake-to)"; D fix secret-scan "$r" >/dev/null
+ctl="$( stub_path "$DET"; stub_path "$FAKETO"; command -v timeout )"
+echo ok > "$r/benign.txt"; git -C "$r" add benign.txt; h0="$(git -C "$r" rev-parse HEAD)"
+err1="$( stub_path "$DET"; stub_path "$FAKETO"; git -C "$r" commit -q -m benign 2>&1 )"; rc1=$?
+printf 'aws_access_key_id = %s\n' "$KEY" > "$r/k.txt"; git -C "$r" add k.txt
+err2="$( stub_path "$DET"; stub_path "$FAKETO"; git -C "$r" commit -q -m k 2>&1 )"; rc2=$?
+git -C "$r" rm -q --cached k.txt; rm -f "$r/k.txt"
+[ "$ctl" = "$FAKETO/timeout" ] && [ "$rc1" = 0 ] && [ "$(git -C "$r" rev-parse HEAD)" != "$h0" ] \
+  && [ "$rc2" != 0 ] && [[ "$err2" == *"found secrets"* ]] && [[ "$err2" != *"failed to run"* ]] \
+  && [ "$(grep -vc '^timeout --version' "$FAKE_TO_LOG")" = 0 ] \
+  && ok "non_gnu_timeout_runs_plain" || bad "non_gnu_timeout_runs_plain: ctl=$ctl rc1=$rc1 [$err1] rc2=$rc2 [$err2] log=[$(cat "$FAKE_TO_LOG")]"
+
+# installed_block_has_no_test_knob: a default install holds the literal 60 and no knob name; an
+# install with the knob holds its value and still no knob name; a non-numeric knob installs 60.
+r="$(mkrepo knob)"; h="$r/.git/hooks/pre-commit"; ( unset RITUAL_TEST_GITLEAKS_TIMEOUT; D fix secret-scan "$r" >/dev/null )
+grep -qF 'timeout 60 "$_ritual_gl"' "$h" && grep -qF 'timed out after 60 s' "$h" && ! grep -q RITUAL_TEST "$h" \
+  && ok "installed_block_has_no_test_knob" || bad "installed_block_has_no_test_knob: $(grep -n 'timeout\|RITUAL' "$h")"
+r="$(mkrepo knob2)"; h="$r/.git/hooks/pre-commit"; ( export RITUAL_TEST_GITLEAKS_TIMEOUT=2; D fix secret-scan "$r" >/dev/null )
+grep -qF 'timeout 2 "$_ritual_gl"' "$h" && grep -qF 'timed out after 2 s' "$h" && ! grep -q RITUAL_TEST "$h" \
+  && ok "installed_block_takes_the_knob_at_install" || bad "installed_block_takes_the_knob_at_install: $(grep -n 'timeout\|RITUAL' "$h")"
+r="$(mkrepo knob3)"; h="$r/.git/hooks/pre-commit"; ( export RITUAL_TEST_GITLEAKS_TIMEOUT='2; touch pwned'; D fix secret-scan "$r" >/dev/null )
+grep -qF 'timeout 60 "$_ritual_gl"' "$h" && ! grep -q pwned "$h" \
+  && ok "timeout_knob_must_be_digits" || bad "timeout_knob_must_be_digits: $(grep -n 'timeout' "$h")"
 
 echo "== real gitleaks =="
 # The real binary, found by the step's own resolver (never a re-derived copy of it).

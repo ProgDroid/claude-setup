@@ -274,7 +274,9 @@ fix_beads() {
   if [ "$(check_beads "$top" | jq -r .status)" = present ]; then
     # what the house setup writes or removes; .beads/ also carries the issues export, which once
     # committed changes with the user's own bd use and is no longer the ritual's to list
-    emit_already --skip-tracked .beads/issues.jsonl beads "$top" "house beads setup already holds" \
+    local s; local -a skf=()
+    for s in "${_RITUAL_SKIP_TRACKED[@]}"; do skf+=(--skip-tracked "$s"); done
+    emit_already "${skf[@]}" beads "$top" "house beads setup already holds" \
       .beads .gitattributes CLAUDE.md AGENTS.md .codex .agents/skills/beads
     return 0
   fi

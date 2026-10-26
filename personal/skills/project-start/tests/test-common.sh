@@ -2,6 +2,7 @@
 # Tests for lib/common.sh and the tests/lib.sh helpers later tasks depend on.
 . "$(dirname "$0")/lib.sh"
 . "$SKILL_DIR/lib/common.sh"
+. "$SKILL_DIR/lib/ledger.sh"   # emit_already applies the ledger's rerun rule
 
 echo "== steps.json =="
 sj="$(steps_json)"
@@ -74,6 +75,23 @@ u="$TMPROOT/ritual fixtures/pend unborn"; mkdir -p "$u"; git -C "$u" init -q; ec
 mkdir -p "$TMPROOT/pend not a repo"
 pending_paths "$TMPROOT/pend not a repo" x > "$TMPROOT/pp-ng.out" 2>/dev/null; rc=$?
 [ "$rc" != 0 ] && [ ! -s "$TMPROOT/pp-ng.out" ] && ok "pending_paths_fails_when_git_cannot_answer" || bad "pending_paths_fails_when_git_cannot_answer: rc=$rc"
+
+echo "== emit_already: paths with no ledger entry =="
+# an untracked path with no entry is offered, also when the ledger exists and holds other entries
+r="$(mkrepo already-none)"
+echo o > "$r/other.txt"; ledger_mark_shown "$r" other.txt
+echo x > "$r/.gitignore"
+e="$(emit_already traps "$r" "nothing to add" .gitattributes .gitignore | tr -d '\r')"
+lf="$(git -C "$r" rev-parse --path-format=absolute --git-common-dir | tr -d '\r')/ritual-ledger.json"
+[ -f "$lf" ] && [ "$(jq -c '[.status, .wrote, .detail]' <<<"$e")" = '["already",[".gitignore"],"nothing to add; not yet committed: .gitignore"]' ] \
+  && ok "verdict_none_untracked_offer" || bad "verdict_none_untracked_offer: ledger [$(cat "$lf" 2>&1)] $e"
+# a repo from before 0.16 (no ledger file): the untracked issues export an older run left is offered
+r="$(mkrepo already-pre016)"
+mkdir -p "$r/.beads"; echo '{"id":"p-1"}' > "$r/.beads/issues.jsonl"
+e="$(emit_already --skip-tracked .beads/issues.jsonl beads "$r" "house beads setup already holds" .beads AGENTS.md | tr -d '\r')"
+lf="$(git -C "$r" rev-parse --path-format=absolute --git-common-dir | tr -d '\r')/ritual-ledger.json"
+[ ! -e "$lf" ] && [ "$(jq -c '[.status, .wrote, .detail]' <<<"$e")" = '["already",[".beads/issues.jsonl"],"house beads setup already holds; not yet committed: .beads/issues.jsonl"]' ] \
+  && ok "pre016_untracked_issues_jsonl_offered" || bad "pre016_untracked_issues_jsonl_offered: $e"
 
 echo "== tests/lib.sh helpers =="
 [ -d "$TMPROOT" ] && ok "TMPROOT exists" || bad "no TMPROOT"

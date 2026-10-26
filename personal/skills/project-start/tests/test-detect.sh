@@ -217,11 +217,16 @@ eq "ci_multiline_block_reads_every_line" "$(ci_cmds 'steps:
       npm ci
       npm test
   - run: echo after')" '["npm test"]'
+# the lines after the dedent must START with a runner, or a block that never ends reports nothing
+# anyway and the test cannot tell (measured: `X: pytest` alone passed with the dedent rule removed)
 eq "ci_block_ends_at_dedent" "$(ci_cmds 'steps:
   - run: |
       echo hi
     env:
       X: pytest
+    with:
+      script: |
+        pytest
   - run: ctest')" '["ctest"]'
 
 # --- justfile / Makefile name forms
@@ -249,6 +254,129 @@ done
 r="$(mkrepo)"; mk "$r/Cargo.toml" '[workspace]
 members = ["crates/x"]'; mk "$r/crates/x/Cargo.toml" '[package]'; mk "$r/crates/x/package.json" '{ nope'
 eq "stack_unparsed_in_member_dir" "$(stk "$r" | jq -c '.unparsed')" '["crates/x/package.json"]'
+
+# --- Cargo workspace exclude: an excluded crate is its own crate, with its own test entry
+lib() { ( . "$SKILL_DIR/lib/common.sh"; . "$SKILL_DIR/lib/detect.sh"; cd "$1" || exit 9; shift; "$@" ); }
+r="$(mkrepo)"; mk "$r/Cargo.toml" '[workspace]
+members = ["crates/*"]
+exclude = ["crates/skip"]'
+mk "$r/crates/a/Cargo.toml" '[package]'; mk "$r/crates/a/src/lib.rs" '#[test] fn t() {}'
+mk "$r/crates/skip/Cargo.toml" '[package]'; mk "$r/crates/skip/src/lib.rs" '#[test] fn t() {}'
+eq "members_honour_exclude" "$(jq -c '[.test[]|[.dir,.cmd]]' <<<"$(orc "$r")")" '[[".","cargo test"],["crates/skip","cargo test"]]'
+eq "excluded_member_is_stack" "$(jq -c '[.stacks[]|.dir]' <<<"$(stk "$r")")" '[".","crates/a","crates/skip"]'
+r="$(mkrepo)"; mk "$r/Cargo.toml" '[workspace]
+exclude = [
+  "crates/skip",
+  "./tools/",
+]
+members = ["crates/*", "tools/*"]'
+for c in crates/a crates/skip crates/skipper tools/t; do mk "$r/$c/Cargo.toml" '[package]'; done
+eq "ws_members_minus_exclude" "$(lib "$r" _det_members | tr '\n' ' ')" 'crates/a crates/skipper '
+eq "ws_excluded_members" "$(lib "$r" _det_excluded | tr '\n' ' ')" 'crates/skip tools/t '
+# F4 probe: a member two levels down whose only test is an integration file under its tests/
+r="$(mkrepo)"; mk "$r/Cargo.toml" '[workspace]
+members = ["crates/a"]'; mk "$r/crates/a/Cargo.toml" '[package]'; mk "$r/crates/a/src/lib.rs" 'pub fn f() {}'
+mk "$r/crates/a/tests/it.rs" 'fn main() {}'
+eq "two_deep_member_gets_test" "$(jq -c '[.status,[.test[]|[.dir,.cmd,.source]]]' <<<"$(orc "$r")")" '["present",[[".","cargo test","Cargo.toml"]]]'
+
+# --- quote-aware splitting: && || ; | break a line only outside quotes
+eq "split_respects_quotes" "$(ci_cmds 'steps:
+  - run: pytest -k "a|b"
+  - run: pytest -k '"'x;y'"'')" '["pytest -k \"a|b\"","pytest -k '"'x;y'"'"]'
+eq "split_unterminated_quote_invents_nothing" "$(ci_cmds '- run: echo "x; cargo test')" '[]'
+eq "split_unterminated_quote_keeps_rest" "$(ci_cmds '- run: pytest -k "a|b')" '["pytest -k \"a|b"]'
+eq "split_escaped_dquote_stays_quoted" "$(ci_cmds '- run: echo "a\" ; cargo test -q"')" '[]'
+eq "split_backslash_in_squote_is_literal" "$(ci_cmds "- run: echo 'a\\' ; cargo test -q")" '["cargo test -q"]'
+eq "split_double_bar_vs_pipe" "$(ci_cmds 'steps:
+  - run: go test ./... || exit 1
+  - run: pytest -q|tee log')" '["go test ./...","pytest -q"]'
+want="$(printf '%s\n' 'a ' ' b ' ' c' ' d ' " e \"f|g\" 'h;i' j\\;k"; printf x)"
+eq "split_fn_segments" "$(printf '%s\n' "a && b || c; d | e \"f|g\" 'h;i' j\\;k" | lib . _det_split; printf x)" "$want"
+
+# --- cd: carried across the lines of one run block, never across steps
+eq "cd_carries_across_block_lines" "$(ci_cmds 'steps:
+  - run: |
+      cd sub
+      cargo test')" '["cd sub && cargo test"]'
+eq "cd_not_carried_across_steps" "$(ci_cmds 'steps:
+  - run: cd sub
+  - run: cargo test')" '["cargo test"]'
+eq "cd_chain_accumulates" "$(ci_cmds 'steps:
+  - run: |
+      cd a
+      cd b && cargo test')" '["cd a && cd b && cargo test"]'
+r="$(mkrepo)"; mk "$r/README.md" '```sh
+cd server
+cargo test
+```'
+eq "readme_cd_not_carried_across_lines" "$(jq -c '[.test[]|[.cmd,.source]]' <<<"$(orc "$r")")" '[["cargo test","README.md"]]'
+
+# --- shell forms in CI: if/then/else, bash -c / sh -c, backslash continuations
+eq "ci_if_bash_c_continuation" "$(ci_cmds 'steps:
+  - run: if [ -f x ]; then pytest; fi
+  - run: bash -c "cargo test"
+  - run: |
+      cargo test \
+        --all')" '["cargo test","cargo test --all","pytest"]'
+eq "ci_else_branch_and_negation" "$(ci_cmds 'steps:
+  - run: if [ -f Cargo.toml ]; then cargo test; else go test ./...; fi
+  - run: if ! pytest -q; then exit 1; fi')" '["cargo test","go test ./...","pytest -q"]'
+# --- loops: a body runs once per value, with variables the repo root does not have, so nothing in
+# a for/while/until loop is a test command (`pytest "$f"` run from the root is `pytest ""`).
+# The `( for` line is a loop the loop counter does not see: only the unstripped `do` keeps it out.
+eq "ci_loop_body_not_reported" "$(ci_cmds 'steps:
+  - run: for f in tests/*.py; do pytest "$f"; done
+  - run: ( for p in a b; do cargo test -p $p; done )')" '[]'
+eq "ci_loop_nested_then_not_reported" "$(ci_cmds '- run: for f in a b; do if [ -f "$f" ]; then pytest "$f"; fi; done')" '[]'
+# the counter is a depth, not a flag: the outer body goes on after the inner `done`
+eq "ci_loop_multiline_nested_and_after" "$(ci_cmds 'steps:
+  - run: |
+      for a in x y; do
+        for b in z; do
+          pytest "$a$b"
+        done
+        cargo test -p "$a"
+      done
+      go test ./...
+  - run: while read -r p; do cargo test -p "$p"; done < crates.txt; pytest -q')" '["go test ./...","pytest -q"]'
+eq "bash_c_inner_cd_scoped" "$(ci_cmds '- run: bash -c "cd x && cargo test"; pytest')" '["cd x && cargo test","pytest"]'
+eq "sh_ec_single_quotes" "$(ci_cmds "- run: sh -ec 'pytest -q'")" '["pytest -q"]'
+eq "bash_c_dq_unescape" "$(ci_cmds '- run: bash -c "pytest -k \"a b\""')" '["pytest -k \"a b\""]'
+eq "ci_continuation_three_lines_then_next" "$(ci_cmds 'steps:
+  - run: |
+      cargo test \
+        --all \
+        --locked
+      pytest')" '["cargo test --all --locked","pytest"]'
+eq "ci_even_backslashes_do_not_continue" "$(ci_cmds 'steps:
+  - run: |
+      echo done \\
+      pytest')" '["pytest"]'
+eq "ci_trailing_backslash_ends_at_step" "$(ci_cmds 'steps:
+  - run: |
+      cargo test \
+  - run: pytest \')" '["cargo test","pytest"]'
+eq "bash_c_script_must_be_one_word" "$(ci_cmds 'steps:
+  - run: bash -c "pytest -q" "x"
+  - run: sh -c '"'pytest -q' 'x'"'')" '[]'
+
+# --- YAML outer quotes come off a single-line run: value only; a blank block line ends a continuation
+eq "ci_block_line_quotes_kept" "$(ci_cmds 'steps:
+  - run: |
+      "$GIT" commit -m "fix; cargo test passes"')" '[]'
+eq "ci_single_line_run_outer_quotes" "$(ci_cmds 'steps:
+  - run: "cargo test"
+  - run: '"'pytest -q'"'')" '["cargo test","pytest -q"]'
+eq "ci_continuation_stops_at_blank_line" "$(ci_cmds 'steps:
+  - run: |
+      cargo test \
+
+      pytest')" '["cargo test","pytest"]'
+eq "cd_carries_across_blank_block_line" "$(ci_cmds 'steps:
+  - run: |
+      cd sub
+
+      cargo test')" '["cd sub && cargo test"]'
 
 # --- failure modes
 bash "$RITUAL" stack "$TMPROOT/not-a-repo-$$" >/dev/null 2>&1; eq "stack_refuses_non_repo" "$?" 2

@@ -405,9 +405,12 @@ cm "$k" "handoff: session notes" "$AGENT" "NEXT.md=# NEXT v2" "src/extra.rs=x"
 run "$PT" "$(p_cmd Bash 'git add -A && git commit -m "handoff: session notes"' "$k")"
 [ "$EVT" = PostToolUse ] && has "src/extra.rs" && ! has "touched: NEXT.md" && ok "commit_warning_names_the_extra_path" || bad "commit warn: $(show)"
 if [ "$HAVE_CYG" = 1 ]; then
+  # (a warning is once per HEAD, so each further case gets its own wide handoff: commit)
+  cm "$k" "handoff: session notes 2" "$AGENT" "NEXT.md=# NEXT v2b" "src/extra.rs=x2"
   run "$PT" "$(p_cmd PowerShell 'git commit -F msg.txt' "$(winpath "$k")")"
   has "src/extra.rs" && ok "commit_warning_via_powershell_payload" || bad "ps commit warn: $(show)"
 else skip_nocyg "commit_warning_via_powershell_payload"; fi
+cm "$k" "handoff: session notes 3" "$AGENT" "NEXT.md=# NEXT v2c" "src/extra.rs=x3"
 run "$PT" "$(p_cmd Bash "git -C \"$k\" commit -F m" "$FIX")"
 has "src/extra.rs" && ok "commit_warning_resolves_the_repo_from_dash_C" || bad "-C commit: $(show)"
 cm "$k" "handoff: notes only" "$AGENT" "NEXT.md=# NEXT v3"
@@ -423,6 +426,45 @@ cm "$k" "handoff: with a nested NEXT.md" "$AGENT" "docs/NEXT.md=x"
 run "$PT" "$(p_cmd Bash 'git commit -m x' "$k")"; has "docs/NEXT.md" && ok "commit_only_the_root_next_md_counts" || bad "nested NEXT: $(show)"
 km="$(mkrepo pt-commit-nomark)"; cm "$km" "handoff: x" "$AGENT" "NEXT.md=a" "other.txt=b"
 run "$PT" "$(p_cmd Bash 'git commit -m x' "$km")"; silent && ok "commit_silent_without_marker" || bad "commit no marker spoke"
+
+# warn once per wide handoff: HEAD. The state file is <git-dir>/handoff-warned-head (per worktree).
+gdir() { git -C "$1" rev-parse --absolute-git-dir; }
+wo="$(std_repo pt-once)"; cm "$wo" "handoff: wide once" "$AGENT" "NEXT.md=n" "w1.txt=w"
+run "$PT" "$(p_cmd Bash 'git commit -m x' "$wo")"; w1=0; has "w1.txt" && w1=1
+run "$PT" "$(p_cmd Bash 'git commit -m y' "$wo")"
+[ "$w1" = 1 ] && silent && ok "wide_handoff_warns_once" || bad "once: first warned=$w1, second: $(show)"
+[ "$(cat "$(gdir "$wo")/handoff-warned-head" 2>/dev/null)" = "$(sha "$wo")" ] \
+  && ok "warning_records_head_in_the_git_dir" || bad "state file missing or wrong"
+cm "$wo" "handoff: wide again" "$AGENT" "NEXT.md=n2" "w2.txt=w"
+run "$PT" "$(p_cmd Bash 'git commit -m z' "$wo")"; w2=0; has "w2.txt" && w2=1
+run "$PT" "$(p_cmd Bash 'git commit -m z' "$wo")"
+[ "$w2" = 1 ] && silent && ok "new_wide_head_warns_again" || bad "new head: warned=$w2, repeat: $(show)"
+# a narrow (NEXT.md alone) handoff warns nothing and records nothing
+wn="$(std_repo pt-once-narrow)"; cm "$wn" "handoff: narrow" "$AGENT" "NEXT.md=n"
+run "$PT" "$(p_cmd Bash 'git commit -m x' "$wn")"
+silent && [ ! -e "$(gdir "$wn")/handoff-warned-head" ] && ok "narrow_handoff_records_no_state" || bad "narrow wrote state or spoke"
+# linked worktrees keep their own state: the same HEAD warns in each, once
+wa="$(std_repo pt-wt-a)"; cm "$wa" "handoff: wide wt" "$AGENT" "NEXT.md=n" "wt.txt=w"
+wb="$FIX/pt wt b linked"; git -C "$wa" worktree add -q -b feat-b "$wb" 2>/dev/null
+run "$PT" "$(p_cmd Bash 'git commit -m x' "$wa")"; la=0; has "wt.txt" && la=1
+run "$PT" "$(p_cmd Bash 'git commit -m x' "$wb")"; lb=0; has "wt.txt" && lb=1
+run "$PT" "$(p_cmd Bash 'git commit -m x' "$wb")"; lb2=0; silent && lb2=1
+run "$PT" "$(p_cmd Bash 'git commit -m x' "$wa")"; la2=0; silent && la2=1
+[ "$(sha "$wa")" = "$(sha "$wb")" ] && [ "$(gdir "$wa")" != "$(gdir "$wb")" ] \
+  && [ "$la$lb$lb2$la2" = 1111 ] && ok "linked_worktree_state_separate" || bad "worktrees: A,B,B2,A2=$la$lb$lb2$la2"
+# any state-file error: still exit 0 (collect/NONZERO), still warns, every time. Here the state
+# path is a DIRECTORY (read and write both fail): chmod cannot make a path unwritable on NTFS.
+we="$(std_repo pt-state-err)"; cm "$we" "handoff: wide err" "$AGENT" "NEXT.md=n" "e.txt=w"
+mkdir -p "$(gdir "$we")/handoff-warned-head"
+run "$PT" "$(p_cmd Bash 'git commit -m x' "$we")"; e1=0; has "e.txt" && e1=1
+run "$PT" "$(p_cmd Bash 'git commit -m x' "$we")"; e2=0; has "e.txt" && e2=1
+[ "$e1$e2" = 11 ] && ok "state_error_still_warns" || bad "state-path-is-a-dir: $e1$e2"
+# garbage in the state file is just 'a different HEAD': warns, then heals
+wg="$(std_repo pt-state-garbage)"; cm "$wg" "handoff: wide garbage" "$AGENT" "NEXT.md=n" "g.txt=w"
+printf 'not a sha \001\002 %0200d' 0 > "$(gdir "$wg")/handoff-warned-head"
+run "$PT" "$(p_cmd Bash 'git commit -m x' "$wg")"; g1=0; has "g.txt" && g1=1
+run "$PT" "$(p_cmd Bash 'git commit -m x' "$wg")"
+[ "$g1" = 1 ] && silent && ok "garbage_state_warns_then_heals" || bad "garbage: first=$g1, second: $(show)"
 
 echo "== PostToolUse: shipping =="
 
