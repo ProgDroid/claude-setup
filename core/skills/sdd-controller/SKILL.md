@@ -99,6 +99,9 @@ already written down still caused a park when it lived in a memory instead of th
   gate and wait on a Monitor never wake.
 - **Commit from Bash with `git commit -F <file>`**; on Windows see git-standards (the BOM rule). On
   machines with a command guard, `$(...)` in `-m` is denied.
+- **Say that committing is the implementer's job; only a push needs the user.** One fix agent
+  finished and tested its work, then stopped short of the commit because it believed a commit
+  needed the user's approval (2026-10-26).
 - **Report rather than resolve** wherever the controller made a non-obvious call, and report any
   disagreement with a pre-registered number rather than reconciling it.
 - **Write the full report to a file and return verdict + path.** Long returns truncate. For long
@@ -151,6 +154,11 @@ repeatedly audited the controller too.
   without its terminal marker: a passing tally up to the kill point is not a pass. A merge can
   also break a test that pins a total, such as a count of registered hooks, when both sides add
   one; only the gate on the merged tree finds that (2026-10-19).
+- **A gate on one OS cannot see what that OS cannot represent.** Windows has no Unix file
+  permissions, so a test that a hook keeps mode 750 passed there while the code turned it into
+  751; only the Linux gate caught it (2026-10-26). When CI skips suites on Linux, run them there
+  directly and compare the failing test names against the pre-batch tree run the same way: only
+  new names belong to the branch.
 - **A count moving the wrong way is the tell** — "40 tests" right after adding two, when the true
   number was 60.
 - **Before a number scores a fix, name the layer the fix lives in** — prompt, parser, merge,
