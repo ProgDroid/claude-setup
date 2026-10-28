@@ -189,6 +189,18 @@ SEDDOC=$(printf 'cat > notes.md <<%sEOF%s\nExample: sed -i s/a/b/ C:%stmp%sx.txt
   && ok "a real sed on a Windows path is still denied" \
   || bad "rule 2 no longer fires on a genuine command"
 
+# 2026-10-28 (cli-timer): rule 2 denied a read-only sed because a grep alternation in the
+# same command, 'runs-on\|os:\|ubuntu', contains s:\ -- a letter, a colon and a backslash.
+# A drive letter starts a word; the s of os does not.
+[ "$(verdict_any "cat f.yml | sed -n '40,200p'; grep -n 'runs-on${BS}|os:${BS}|ubuntu' check.yml")" = ALLOW ] \
+  && ok "a grep alternation like os:\\| is not a drive path" \
+  || bad "rule 2 read os:\\| inside a grep pattern as a drive path"
+for c in "sed -i s/a/b/ \"C:${BS}tmp${BS}x.txt\"" "sed -i s/a/b/ 'D:${BS}x.txt'" \
+         "sed -i s/a/b/ --in=C:${BS}x.txt" "sed -n 1p <G:${BS}x.txt"; do
+  [ "$(verdict_any "$c")" = DENY ] \
+    && ok "rule 2 still denies: $c" || bad "rule 2 missed a quoted or prefixed drive path: $c"
+done
+
 # ---------------------------------------------------------------------------
 # WARN rules.
 #

@@ -91,6 +91,22 @@ fi
 msg="${msg} FIXED CHECK, separate from the three objections: find every sentence that sets two verified facts side by side -- a count next to an absence, a total next to a remainder -- and name the third claim a reader will infer from the pair. If neither fact establishes it, flag it as an unsupported implicature; a flagged one may displace the weakest of the three returned objections. Every residual (N total, M present, K missing) must be decomposed until its parts sum."
 msg="${msg} REPORTING CONTRACT: the subagent must WRITE its complete review to docs/superpowers/reviews/ -- same date and topic as the artifact under review, with a -redteam.md suffix -- and RETURN only its three objections as one line each plus that path, nothing more. A long report does not survive the trip back: it arrives truncated, and recovering the tail costs another round trip."
 
+# Rewrite of an artifact that already has a review. Added 2026-10-28 (cli-timer): a spec
+# rewritten to fold in its own red team's findings fired the full gate again, and the user
+# chose to skip a second pass on what was by then a one-line change. Since Write fires on
+# every full rewrite, a review already on disk under the contract's name means this is a
+# revision: the user decides whether it earns another review. The glob is the artifact's
+# own stem, so a spec's -design-redteam.md never counts as its plan's review.
+stem=${norm##*/}; stem=${stem%.md}
+reviews="${norm%/docs/superpowers/*}/docs/superpowers/reviews"
+shopt -s nullglob
+prior=("$reviews/${stem}-redteam"*.md)
+shopt -u nullglob
+if [[ ${#prior[@]} -gt 0 ]]; then
+    short="Red-team gate: ${kind} rewritten after its review -- ask before a second pass."
+    msg="RED-TEAM GATE (${kind}, rewrite). ${norm} already has a red-team review: docs/superpowers/reviews/${prior[0]##*/}. If this rewrite only folds in that review's findings or decisions the user already made, do not dispatch a second review: tell the user the gate fired on a revision, recommend skipping a second pass, and ask the user. If the rewrite changes what gets built (a new approach, new scope, a reversed decision), run the full gate below, but have the second review write to a -redteam-2.md file (or the next free number) so the first review is kept. The full gate: ${msg}"
+fi
+
 if command -v jq >/dev/null 2>&1; then
     jq -n --arg sm "$short" --arg ctx "$msg" \
         '{systemMessage:$sm, hookSpecificOutput:{hookEventName:"PostToolUse", additionalContext:$ctx}}'

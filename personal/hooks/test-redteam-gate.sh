@@ -157,6 +157,48 @@ out="$(raw "/repo/${review_dir}2026-09-06-thing-redteam.md" "$GS")"
   && ok "writing a review to the instructed path does not re-trigger the gate" \
   || bad "the instructed review path re-triggers the gate - infinite loop"
 
+echo "== rewrite of an already red-teamed artifact =="
+
+# Added 2026-10-28 (cli-timer): the gate fired again when a spec was rewritten to fold in its
+# own red team's findings, and the user chose to skip the second pass. With a review already
+# on disk the gate now hands that choice to the user instead of demanding another subagent.
+R="$(mktemp -d)"; mkdir -p "$R/docs/superpowers/specs" "$R/docs/superpowers/plans" "$R/docs/superpowers/reviews"
+RSPEC="$R/docs/superpowers/specs/2026-10-28-thing-design.md"
+RPLAN="$R/docs/superpowers/plans/2026-10-28-thing.md"
+
+first="$(ctx "$RSPEC" "$NO")"
+has "RED-TEAM GATE (spec)" "$first" && ! has "already has a red-team review" "$first" \
+  && ok "a spec with no review on disk gets the full gate" \
+  || bad "a spec with no review was treated as a rewrite"
+
+: > "$R/docs/superpowers/reviews/2026-10-28-thing-design-redteam.md"
+again="$(ctx "$RSPEC" "$NO")"
+has "already has a red-team review" "$again" && has "2026-10-28-thing-design-redteam.md" "$again" \
+  && ok "a spec rewritten after its review names that review" \
+  || bad "a spec rewrite did not notice its existing review"
+has "ask the user" "$again" && has "RED-TEAM GATE (spec)" "$again" \
+  && ok "the rewrite gate asks the user and keeps the full gate for a substantive rewrite" \
+  || bad "the rewrite gate lost the ask or the full-gate fallback"
+has "redteam-2.md" "$again" \
+  && ok "a second review is told not to overwrite the first" \
+  || bad "a second review would overwrite the first"
+
+# The SPEC's review must not count as the PLAN's: same date and topic, different file.
+p_first="$(ctx "$RPLAN" "$NO")"
+has "RED-TEAM GATE (plan)" "$p_first" && ! has "already has a red-team review" "$p_first" \
+  && ok "the spec's review does not count as a review of the plan" \
+  || bad "the plan was treated as reviewed because its spec was"
+
+: > "$R/docs/superpowers/reviews/2026-10-28-thing-redteam.md"
+has "already has a red-team review" "$(ctx "$RPLAN" "$NO")" \
+  && ok "a plan rewritten after its review names that review" \
+  || bad "a plan rewrite did not notice its existing review"
+
+raw "$RSPEC" "$NO" | jq -e . >/dev/null 2>&1 \
+  && ok "rewrite output is valid JSON" \
+  || bad "rewrite output is not valid JSON"
+rm -rf "$R"
+
 echo "== shape =="
 
 raw "$SPEC" "$NO" | jq -e . >/dev/null 2>&1 \

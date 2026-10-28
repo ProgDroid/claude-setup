@@ -176,8 +176,14 @@ fi
 # 2. sed touching a Windows drive path -> backslash escapes are live in the REPLACEMENT half.
 #    \r becomes a literal CR, \f a form-feed; exits 0, corrupts quietly, and then blocks Edit
 #    because the on-disk text contains bytes you never typed.
+#
+#    NARROWED 2026-10-28 (cli-timer): the drive path was matched as any letter-colon-backslash,
+#    so `grep 'runs-on\|os:\|ubuntu'` beside a read-only sed was denied for its `s:\`. A drive
+#    letter starts a word: it now needs the start, whitespace, a quote, `=`, `(`, `<` or `>`
+#    right before it.
+drive_re='(^|[[:space:]"'\''=(<>])[A-Za-z]:\\'
 if [[ -z "$deny" ]] && any_line '(^|[[:space:]/|])sed([[:space:]]|$)' sed \
-   && [[ "$scan" == *[A-Za-z]:\\* ]]; then
+   && [[ "$scan" =~ $drive_re ]]; then
     deny="Never sed a Windows path -- backslashes are live escapes in the replacement half (\\r -> CR, \\f -> form-feed), it exits 0, and only od -c reveals the corruption. Use the Edit/Write tool, or write the path with forward slashes (G:/...) which Python, Git Bash and Win32 all accept."
 fi
 
