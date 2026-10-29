@@ -33,7 +33,8 @@ if [ -z "$msgfile" ] || [ ! -f "$msgfile" ]; then
   echo "promote: usage: promote-to-core.sh <commit-message-file> (not a file: ${msgfile:-<none>})" >&2
   exit 2
 fi
-case "$msgfile" in /*) ;; *) msgfile="$PWD/$msgfile" ;; esac
+# a Windows drive path (C:/x or C:\x, as a Windows tool hands it over) is absolute too
+case "$msgfile" in /* | [A-Za-z]:[/\\]*) ;; *) msgfile="$PWD/$msgfile" ;; esac
 
 if ! cd "$CLAUDE_SETUP_CLONE"; then
   echo "promote: cannot cd to $CLAUDE_SETUP_CLONE" >&2

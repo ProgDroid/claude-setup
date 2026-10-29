@@ -280,5 +280,19 @@ run_promote "${GOODENV[@]}"; rc=$?
 [ "$(git --git-dir="$REMOTE" rev-parse refs/heads/main~1)" = "$other_sha" ] && ok "pushed commit sits on top of the other clone's commit" || bad "history: $(git --git-dir="$REMOTE" log --oneline refs/heads/main | tr '\n' '|')"
 [ "$(tail -n 1 "$OUT")" = "PROMOTED $(remote_head)" ] && ok "behind-remote: PROMOTED sha equals remote HEAD" || bad "behind-remote last line: $(tail -n 1 "$OUT")"
 
+# a message file named by a Windows drive path (C:/... or C:\...), as a Windows tool hands it over:
+# Git Bash opens it, so it must not be taken as relative and prefixed with $PWD (2026-10-29)
+if command -v cygpath >/dev/null 2>&1; then
+  for form in -m -w; do
+    setup; stage core/a.md "drive path $form"; good_env
+    msg_before=$(cat "$MSG"); MSG="$(cygpath "$form" "$MSG")"
+    run_promote "${GOODENV[@]}"; rc=$?
+    [ "$rc" -eq 0 ] && ok "drive-path message file ($form) exits 0" || bad "drive-path message file ($form) exit $rc: $(tail -n 3 "$OUT" | tr '\n' '|')"
+    [ "$(git --git-dir="$REMOTE" log -1 --format=%B refs/heads/main)" = "$msg_before" ] && ok "drive-path message file ($form) is committed verbatim" || bad "drive-path message ($form) differs"
+  done
+else
+  echo "  SKIP: drive-path message file (no cygpath: not Windows)"
+fi
+
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -190,6 +190,21 @@ fx_restore() { rm -rf "$2"; cp -a "$1" "$2"; }
 # fx_mode <path> -> the file's octal mode (stat). Under Git Bash the mode follows the content (a
 # `#!` file reads 755), so a dropped chmod shows only on Linux; the field is printed everywhere.
 fx_mode() { stat -c %a -- "$1" 2>/dev/null || echo nomode; }
+
+# fx_sha256_lines <path>... -> one sha256 per path, in order, empty where a file cannot be read. One
+# sha256sum for all paths; it skips an unreadable file with only a stderr message, so when it prints a
+# different number of lines than it was given paths, redo it one file at a time rather than let every
+# later hash land on the wrong path. A leading backslash (an escaped name) is dropped.
+fx_sha256_lines() {
+  [ "$#" -gt 0 ] || return 0
+  local -a sh=()
+  local f l
+  mapfile -t sh < <(sha256sum -b -- "$@" 2>/dev/null)
+  if [ "${#sh[@]}" -ne "$#" ]; then
+    sh=(); for f in "$@"; do sh+=("$(sha256sum -b -- "$f" 2>/dev/null)"); done
+  fi
+  for l in "${sh[@]}"; do case "$l" in [0-9a-f]*) ;; *) l="${l#?}" ;; esac; printf '%s\n' "${l:0:64}"; done
+}
 # fx_hash_file <path> -> "<mode>TAB<sha256 of the bytes>"; a file named ritual.json is hashed with
 # its `completed_at` value masked (today's date: the one field that differs between two runs).
 fx_hash_file() {

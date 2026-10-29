@@ -205,17 +205,17 @@ collect() {   # collect <repo> <outdir> -> files, ledger in <outdir>
       cd "$gd" || exit 0
       local -a fl=() sh=()
       local -A gm=()
-      local f l
+      local f
       mapfile -t fl < <(find . \( -path ./objects -o -path ./logs \) -prune -o -type f ! -path ./index ! -name '*.lock' ! -path ./ritual-ledger.json -print | LC_ALL=C sort)
       [ "${#fl[@]}" -gt 0 ] || exit 0
       _mode_map gm "${fl[@]}"
-      # sha256sum -b: the bytes as stored, as `sha256sum < file` read them. A leading backslash marks an escaped name.
-      mapfile -t sh < <(sha256sum -b -- "${fl[@]}" 2>/dev/null)
+      # sha256sum -b: the bytes as stored, as `sha256sum < file` read them (fx_sha256_lines, fixtures.sh)
+      mapfile -t sh < <(fx_sha256_lines "${fl[@]}")
       i=0
       for f in "${fl[@]}"; do
         if [ "${f##*/}" = ritual.json ]; then   # hashed with `completed_at` masked, as fx_hash_file does
           h="$(sed 's/"completed_at": *"[^"]*"/"completed_at":"DATE"/g' "$f" | sha256sum | cut -d' ' -f1)"
-        else l="${sh[$i]}"; case "$l" in [0-9a-f]*) ;; *) l="${l#?}" ;; esac; h="${l:0:64}"; fi
+        else h="${sh[$i]}"; fi
         i=$((i + 1))
         printf '%s\t%s\t%s\n' "$f" "${gm["$f"]:-nomode}" "$h"
       done

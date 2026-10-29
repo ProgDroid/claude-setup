@@ -108,6 +108,22 @@ o1="$(fx_hash_file "$TMPROOT/rj4/other.json")"; o2="$(fx_hash_file "$TMPROOT/rj2
 # a dropped chmod is proved on Linux only)
 printf '%s' "$h1" | grep -q '^[0-7][0-7][0-7]	[0-9a-f]\{64\}$' \
   && ok "differential_hash_line_carries_a_mode" || bad "differential_hash_line_carries_a_mode: [$h1]"
+# the batched git-dir hash: one sha256sum for all files, and when it prints fewer lines than it was given
+# files (it skips an unreadable one with only a stderr message), a per-file redo, so no hash lands on the
+# next file's line. The shim stands in for that skip: it drops the first line of any multi-file call.
+mkdir -p "$TMPROOT/shb" "$TMPROOT/shim"
+for n in a b c; do printf '%s\n' "content $n" > "$TMPROOT/shb/$n"; done
+want="$(for n in a b c; do sha256sum < "$TMPROOT/shb/$n" | cut -d' ' -f1; done)"
+real_sha="$(command -v sha256sum)"
+printf '%s\n' '#!/usr/bin/env bash' "n=0; for a in \"\$@\"; do case \"\$a\" in -*) ;; *) n=\$((n + 1)) ;; esac; done" \
+  "if [ \"\$n\" -gt 1 ]; then \"$real_sha\" \"\$@\" | tail -n +2; else exec \"$real_sha\" \"\$@\"; fi" > "$TMPROOT/shim/sha256sum"
+chmod +x "$TMPROOT/shim/sha256sum"
+got="$(cd "$TMPROOT/shb" && fx_sha256_lines a b c)"
+[ "$got" = "$want" ] && ok "sha256_batch_matches_per_file" || bad "sha256_batch_matches_per_file: [$got] want [$want]"
+shim_lines="$(cd "$TMPROOT/shb" && PATH="$TMPROOT/shim:$PATH" sha256sum -b -- a b c | wc -l | tr -d ' ')"
+got="$(cd "$TMPROOT/shb" && PATH="$TMPROOT/shim:$PATH" fx_sha256_lines a b c)"
+[ "$shim_lines" = 2 ] && [ "$got" = "$want" ] \
+  && ok "sha256_batch_redoes_per_file_when_a_line_is_missing" || bad "sha256_batch_redoes_per_file_when_a_line_is_missing: shim=$shim_lines [$got] want [$want]"
 
 echo "== bench: a command that fails on one side is not a timing =="
 # pre-registered: B's ritual.sh exits 3 first thing -> bench exits 1, names run 1, A 0 B 3
