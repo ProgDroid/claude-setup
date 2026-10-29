@@ -159,6 +159,19 @@ repeatedly audited the controller too.
   751; only the Linux gate caught it (2026-10-26). When CI skips suites on Linux, run them there
   directly and compare the failing test names against the pre-batch tree run the same way: only
   new names belong to the branch.
+- **An equivalence oracle covers only the conditions its cases vary.** A differential of old
+  against new code passed 1,040 of 1,040 cases on Windows and Linux, and the final review still
+  found two regressions: every case ran in one locale (the one where Git Bash `[[ =~ [A-Za-z] ]]`
+  and GNU grep agree) and no fixture held an invalid UTF-8 byte (which makes bash `read` join two
+  lines). Before trusting one, list what the old code depended on that the fixtures hold constant
+  (locale, byte classes, NUL, CR, tool build, OS) and vary each at least once (2026-10-29).
+- **When a gate is too slow, profile the checker before cutting the gate.** A full Windows
+  differential was estimated at ~8 h and dropped; the user asked to shorten it instead. 55-85 % of
+  each case was the checker fingerprinting files one process per file. Batching that, proved
+  byte-identical on 65 cases, halved each case and the full run went back in (2026-10-29).
+- **A gate on a `git archive` copy has no history**, so a test that reads git history skips there.
+  Pre-register counts from the same kind of tree, or expect the skip: an archive gate read 99
+  where the worktree read 100, and the difference was one SKIP line (2026-10-29).
 - **A count moving the wrong way is the tell** — "40 tests" right after adding two, when the true
   number was 60.
 - **Before a number scores a fix, name the layer the fix lives in** — prompt, parser, merge,

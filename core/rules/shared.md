@@ -48,3 +48,4 @@ Distinguish PRESENT / ABSENT / UNKNOWN, and never collapse the last two. Before 
 - **the-probe-lived-inside-the-corpus-it-probed**: keep a self-check outside the file it checks, stop at the first end marker, and report UNKNOWN when the target is missing.
 - **unexpectedly-full**: a guessed filter can return 200 with plausible data because it was ignored. Check the entity, the window and the count; decode the body (`curl --compressed`) before grepping it.
 - **the-rejection-was-not-a-rollback**: a rejected or interrupted chained call may have run its first steps. Check each step's side effect before reporting; give a push or publish its own call.
+- **the-oracle-held-one-axis-fixed**: a green equivalence suite measured one point on every axis its cases hold constant (locale, byte class, OS). Vary each at least once.

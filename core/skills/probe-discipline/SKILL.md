@@ -155,3 +155,8 @@ does not exist, and a real thing reported as absent is silently dropped and neve
 **Tell:** a tool call comes back "rejected" or "interrupted", and it was a chain of steps.
 **Case:** a single Bash call ran ledger-append, `git push -u origin <branch>`, then `gh pr create`. The user stopped it; the result said "rejected… STOP". The push and the append had both happened; only the PR had not. Treating "rejected" as "nothing ran" would have left a stray remote branch unmentioned.
 **Countermeasure:** after a rejected or interrupted chain, check the side effect of every step (`git ls-remote`, `gh pr list`, the file) before reporting or retrying. Split outward-facing steps (push, publish, PR) into their own calls so a rejection lands on one action.
+
+### the-oracle-held-one-axis-fixed
+**Tell:** a large equivalence or regression suite is all green, and every case ran in the same environment.
+**Case:** a differential of a rewrite against the old code ran 1,040 cases (20 commands, 13 fixture repos, 4 states) on two OSes: 0 differ. The final review found two regressions it could not see. Every case ran with the locale unset, the one setting where Git Bash's `=~` and GNU grep classify `é` alike, and no fixture held an invalid UTF-8 byte, the one input where bash `read` joins two lines.
+**Countermeasure:** a case count measures one point on every axis the cases do not vary. List what the old behaviour depended on that the fixtures hold constant (locale, byte classes, NUL, CR, tool build, OS) and vary each at least once, with a guard that fails when the varied setting is unavailable.

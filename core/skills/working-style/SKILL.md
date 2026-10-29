@@ -76,6 +76,11 @@ Two corollaries worth applying directly:
   above did not fail on article quality; it failed because nothing delivered them to the moment of use.
 - **A hook or an injected index beats a skill the user must invoke**, when the goal is "this should
   just happen". Reserve manual invocation for things genuinely wanted only sometimes.
+- **A slow check that runs without them gets shortened, not skipped.** Checks that need no attention
+  from the user are the cheap kind of guardrail, so "too long" is a cost to cut, not a reason to
+  drop the check. Asked about an ~8 h verification run, they said *"can we shorten these checks
+  rather than just not running them?"*; profiling the checker and batching its slowest step brought
+  the full run back (2026-10-29).
 
 ## Prefer lean solutions, and offer deletion
 
