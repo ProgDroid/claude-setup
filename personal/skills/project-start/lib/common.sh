@@ -3,6 +3,9 @@
 
 RITUAL_SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# ritual_trace <name>: when RITUAL_TRACE names a file, append <name> as one line (tests count events with it)
+ritual_trace() { [ -z "${RITUAL_TRACE:-}" ] || printf '%s\n' "$1" >> "$RITUAL_TRACE"; }
+
 # steps_json -> path to steps.json. RITUAL_STEPS_JSON overrides it (tests use this to fake a
 # version bump); otherwise it is located relative to this file, so any cwd works.
 steps_json() {
@@ -15,13 +18,51 @@ git_common_dir() {
   git -C "$1" rev-parse --path-format=absolute --git-common-dir
 }
 
+# _ritual_jq_eol: set _RITUAL_JQ_EOL to the line ending `jq -c` ends its output with (CRLF from jq.exe
+# on Windows, LF elsewhere), read from one `jq -nc 1` call. Left unset when jq prints nothing.
+_ritual_jq_eol() {
+  local out
+  ritual_trace jq_eol_probe
+  out="$(jq -nc 1 2>/dev/null; printf x)"; out="${out%x}"
+  [ "${out:0:1}" = 1 ] && [ -n "${out:1}" ] || return 1
+  _RITUAL_JQ_EOL="${out:1}"
+}
+
+# _ritual_plain <string...>: succeeds when every string holds only bytes 0x20-0x7E, TAB and LF. The
+# range is tested in the C locale so it means bytes, whatever the caller's locale makes of a
+# multibyte character or an invalid sequence; the setting is local to this function.
+_ritual_plain() {
+  local LC_ALL=C s bad=$'[^\t\n -~]'
+  for s in "$@"; do [[ $s == *$bad* ]] && return 1; done
+  return 0
+}
+
+# _ritual_jesc <plain string> -> _RITUAL_JESC: the string as jq -c writes it inside quotes (only
+# \ " TAB and LF are escaped within the plain set).
+_ritual_jesc() {
+  local bs='\' q='"' s="$1"
+  s="${s//"$bs"/"$bs$bs"}"; s="${s//"$q"/"$bs$q"}"; s="${s//$'\t'/"${bs}t"}"; s="${s//$'\n'/"${bs}n"}"
+  _RITUAL_JESC="$s"
+}
+
 # emit <id> <status> <detail> [wrote...] -> one step-result object. status is one of
 # present|absent|unknown by convention (not enforced here). detail and the wrote paths reach jq on
 # stdin, never as arguments: jq.exe is a native Windows program, and past its ~32 KB command line
 # it prints nothing. They travel base64-encoded because jq.exe's stdin drops CR bytes. The stdin
 # carries the detail's base64, a "." line, then the base64 of the paths, each ended by \x1e.
+# When id, status, detail and every path are plain (bytes 0x20-0x7E, TAB, LF) jq would only escape
+# \ " TAB and LF, so the object is built here, ending in the line ending jq itself prints.
 emit() {
   local id="$1" status="$2" detail="$3"; shift 3
+  if [ ! -t 1 ] && _ritual_plain "$id" "$status" "$detail" "$@" && { [ -n "${_RITUAL_JQ_EOL+x}" ] || _ritual_jq_eol; }; then
+    local out w sep=""
+    _ritual_jesc "$id"; out='{"id":"'"$_RITUAL_JESC"
+    _ritual_jesc "$status"; out+='","status":"'"$_RITUAL_JESC"
+    _ritual_jesc "$detail"; out+='","detail":"'"$_RITUAL_JESC"'","wrote":['
+    for w; do _ritual_jesc "$w"; out+="$sep\"$_RITUAL_JESC\""; sep=,; done
+    printf '%s]}%s' "$out" "$_RITUAL_JQ_EOL"
+    return 0
+  fi
   { printf '%s' "$detail" | base64; printf '.\n'; [ $# -eq 0 ] || printf '%s\x1e' "$@" | base64; } \
     | jq -nRc --arg id "$id" --arg s "$status" '[inputs] as $l | ($l | index(".")) as $i
       | ($l[:$i] | add // "" | @base64d) as $d
@@ -171,4 +212,28 @@ append_line() {
     [ -z "$last" ] || printf '%s' "$eol" >> "$f"
   fi
   printf '%s%s' "$line" "$eol" >> "$f"
+}
+
+# append_lines <file> <line>...: the same bytes as `for l; do append_line <file> "$l"; done`, in one
+# write. append_line reads the file's line ending (eol_of) afresh on every call, so the batch must
+# too wherever that answer can change: with a complete first line it is fixed for the whole batch;
+# otherwise (empty, missing, or a single unterminated line) the first line is appended as
+# append_line would and the ending is read again from the file as it then stands. No lines: no
+# change at all (an unterminated last line stays unterminated, a missing file stays missing).
+append_lines() {
+  local f="$1" eol=$'\n' first last buf="" l
+  shift
+  [ $# -gt 0 ] || return 0
+  if [ -s "$f" ] && IFS= read -r first < "$f"; then
+    [[ "$first" == *$'\r' ]] && eol=$'\r\n'
+    last="$(tail -c 1 "$f")"
+    [ -z "$last" ] || buf="$eol"
+  else
+    append_line "$f" "$1"
+    shift
+    [ $# -gt 0 ] || return 0
+    [ "$(eol_of "$f")" = crlf ] && eol=$'\r\n'
+  fi
+  for l in "$@"; do buf+="$l$eol"; done
+  printf '%s' "$buf" >> "$f"
 }

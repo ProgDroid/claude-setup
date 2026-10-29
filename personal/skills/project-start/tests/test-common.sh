@@ -35,6 +35,131 @@ printf '%s\n' "${paths[@]}" > "$TMPROOT/paths.exp"; printf '%s' "$e" | jq -r '.w
 [ "${#big}" -ge 60000 ] && [ "${#paths[@]}" = 2000 ] && cmp -s "$TMPROOT/big.exp" "$TMPROOT/big.got" && cmp -s "$TMPROOT/paths.exp" "$TMPROOT/paths.got" \
   && ok "emit_large_detail_and_wrote" || bad "emit large: detail ${#big} chars, emitted $(printf '%s' "$e" | wc -c) bytes"
 
+echo "== emit fast path =="
+# emit_old: 0.16.0's emit (22fc3d7 lib/common.sh), the oracle for byte-for-byte comparison.
+emit_old() {
+  local id="$1" status="$2" detail="$3"; shift 3
+  { printf '%s' "$detail" | base64; printf '.\n'; [ $# -eq 0 ] || printf '%s\x1e' "$@" | base64; } \
+    | jq -nRc --arg id "$id" --arg s "$status" '[inputs] as $l | ($l | index(".")) as $i
+      | ($l[:$i] | add // "" | @base64d) as $d
+      | ($l[$i + 1:] | add // "" | @base64d | split("\u001e") | .[:-1]) as $w
+      | {id:$id, status:$s, detail:$d, wrote:$w}' || die "emit: jq could not build the $id result"
+}
+# a jq that logs each call, then runs the real one: a fast-path emit must not call it, a slow one must
+REALJQ="$(command -v jq)"; JQSTUB="$TMPROOT/jqstub"; mkdir -p "$JQSTUB"; export JQ_CALLS="$TMPROOT/jqcalls"
+printf '#!/usr/bin/env bash\necho x >> "$JQ_CALLS"\nexec "%s" "$@"\n' "$REALJQ" > "$JQSTUB/jq"; chmod +x "$JQSTUB/jq"
+_ritual_jq_eol 2>/dev/null   # probe now (a no-op where the function does not exist): the cases below run in subshells
+# ecase <fast|slow> <name> <emit args...>: emit prints exactly what emit_old prints (bytes and exit
+# code), and went through jq only when it was not a plain result.
+ecase() {
+  local kind="$1" name="$2" rcn rco calls; shift 2
+  : > "$JQ_CALLS"; ( PATH="$JQSTUB:$PATH"; emit "$@" ) > "$TMPROOT/em.new" 2>/dev/null; rcn=$?
+  calls="$(wc -l < "$JQ_CALLS" | tr -d ' ')"
+  ( emit_old "$@" ) > "$TMPROOT/em.old" 2>/dev/null; rco=$?
+  if ! cmp -s "$TMPROOT/em.new" "$TMPROOT/em.old" || [ "$rcn" != "$rco" ]; then
+    bad "emit_${kind}_$name: differs from emit_old (rc $rcn/$rco): $(od -c "$TMPROOT/em.new" | head -3) vs $(od -c "$TMPROOT/em.old" | head -3)"
+  elif [ "$kind" = fast ] && [ "$calls" != 0 ]; then bad "emit_${kind}_$name: ran jq $calls times"
+  elif [ "$kind" = slow ] && [ "$calls" = 0 ]; then bad "emit_${kind}_$name: never ran jq"
+  else ok "emit_${kind}_$name"; fi
+}
+ecase fast plain traps present "added 2 lines" .gitignore .gitattributes
+ecase fast quotes_backslash x absent 'a "quoted" b\c\\d\"' 'p"q' 'r\s'
+printf -v tnd 'a\tb\nc\n\n\td'
+ecase fast tab_newline_detail x present "$tnd" $'p\tq' $'r\ns'
+ecase fast no_paths oracle unknown "no tool"
+many=(); for i in $(seq 1 60); do many+=("dir $i/file $i.txt"); done
+ecase fast many_paths untracked-docs present "found 60" "${many[@]}"
+ecase fast path_with_space x present d "some dir/with space.txt"
+ecase fast empty_detail_and_empty_path x absent "" "" "a b" ""
+ecase fast space_and_tilde_edges x absent ' ~ !}  ' ' ' '~'
+printf -v nad 'caf\xc3\xa9'
+ecase slow non_ascii_detail x absent "$nad"
+printf -v cb 'a\x01b'
+ecase slow control_byte x absent "$cb"
+printf -v iu 'a\xffb'
+ecase slow invalid_utf8 x absent "$iu"
+printf -v dl 'a\x7fb'
+ecase slow del_char x absent "$dl"
+printf -v crd 'a\rb'
+ecase slow cr_in_detail x absent "$crd"
+ecase slow non_ascii_path x present d ok.txt "$nad.txt"
+printf -v rsp 'a\x1eb'
+ecase slow record_separator_in_path x present d ok.txt "$rsp"
+printf -v hi 'a\xc3\xa9\xe2\x82\xac'
+ecase slow non_ascii_in_id "$nad" absent d
+# a locale-following byte test (a [[:print:]] class, a collating range) would let a multibyte
+# character through under a UTF-8 locale: run the byte test in the locale it is called in
+ul_ok=1; ul_n=0
+for loc in C.UTF-8 en_US.UTF-8; do
+  have_locale "$loc" || continue   # an absent locale falls back to C: it proves nothing, so it is not counted
+  ul_n=$((ul_n + 1))
+  for v in "$nad" "$hi" "$iu"; do
+    : > "$JQ_CALLS"; ( LC_ALL=$loc; PATH="$JQSTUB:$PATH"; emit x absent "$v" "p$v" ) > "$TMPROOT/em.new" 2>/dev/null
+    ( LC_ALL=$loc; emit_old x absent "$v" "p$v" ) > "$TMPROOT/em.old" 2>/dev/null
+    cmp -s "$TMPROOT/em.new" "$TMPROOT/em.old" && [ -s "$JQ_CALLS" ] || ul_ok=0
+  done
+done
+[ "$ul_ok" = 1 ] && [ "$ul_n" -ge 1 ] && ok "emit_slow_non_ascii_detail_utf8_locale" || bad "emit utf8 locale: fast path taken or output differs, or no UTF-8 locale is installed (ran under $ul_n)"
+
+# On a terminal 0.16.0's jq coloured the object, so a plain result is built here only when stdout
+# (fd 1, which is what jq wrote to) is not one. A pipe cannot be a terminal: a stand-in for `[`
+# answers `-t N` for one descriptor, and the call must go through jq exactly when that is fd 1.
+tty_case() { # tty_case <fd the stand-in calls a terminal> <fast|slow>
+  local fd="$1" kind="$2" calls
+  : > "$JQ_CALLS"
+  ( function [ { case "${1-}${2-}${3-}" in "!-t$fd") return 1 ;; esac; builtin [ "$@"; }
+    PATH="$JQSTUB:$PATH"; emit x absent d p ) > "$TMPROOT/em.new" 2>/dev/null
+  calls="$(wc -l < "$JQ_CALLS" | tr -d ' ')"
+  ( emit_old x absent d p ) > "$TMPROOT/em.old" 2>/dev/null
+  if ! cmp -s "$TMPROOT/em.new" "$TMPROOT/em.old"; then bad "emit_tty_fd$fd: differs from emit_old"
+  elif [ "$kind" = slow ] && [ "$calls" = 0 ]; then bad "emit_tty_fd$fd: built the object itself on a terminal"
+  elif [ "$kind" = fast ] && [ "$calls" != 0 ]; then bad "emit_tty_fd$fd: ran jq $calls times"
+  else ok "emit_tty_fd${fd}_${kind}"; fi
+}
+tty_case 1 slow
+tty_case 2 fast
+
+# _ritual_jq_eol reads jq's own line ending from one probe call
+for eol in real lf crlf; do
+  rm -rf "$TMPROOT/eolstub"; mkdir -p "$TMPROOT/eolstub"
+  case "$eol" in
+    lf)   printf '#!/usr/bin/env bash\nprintf "1\\n"\n' > "$TMPROOT/eolstub/jq"; want=$'\n' ;;
+    crlf) printf '#!/usr/bin/env bash\nprintf "1\\r\\n"\n' > "$TMPROOT/eolstub/jq"; want=$'\r\n' ;;
+    real) [ "$(jq -nc 1 | wc -c | tr -d ' ')" = 3 ] && want=$'\r\n' || want=$'\n' ;;
+  esac
+  [ "$eol" = real ] || chmod +x "$TMPROOT/eolstub/jq"
+  got="$( [ "$eol" = real ] || PATH="$TMPROOT/eolstub:$PATH"; unset _RITUAL_JQ_EOL; _ritual_jq_eol; printf '%s|' "$_RITUAL_JQ_EOL" | od -An -c | tr -d ' ' )"
+  exp="$(printf '%s|' "$want" | od -An -c | tr -d ' ')"
+  [ "$got" = "$exp" ] && ok "jq_eol_probe_$eol" || bad "jq_eol_probe_$eol: got $got, want $exp"
+done
+
+# emit probes lazily, once per shell; a preset global means no probe at all
+: > "$TMPROOT/eol.trace"
+( export RITUAL_TRACE="$TMPROOT/eol.trace"; unset _RITUAL_JQ_EOL; emit a b c >/dev/null; emit a b c >/dev/null; emit a b d p >/dev/null )
+[ "$(grep -c '^jq_eol_probe$' "$TMPROOT/eol.trace")" = 1 ] && ok "emit_probes_jq_eol_lazily_once" || bad "emit probes: $(tr '\n' ' ' < "$TMPROOT/eol.trace")"
+: > "$TMPROOT/eol.trace"
+( export RITUAL_TRACE="$TMPROOT/eol.trace"; _RITUAL_JQ_EOL=$'\n'; emit a b c >/dev/null; emit a b c >/dev/null )
+[ ! -s "$TMPROOT/eol.trace" ] && ok "emit_does_not_probe_when_jq_eol_is_set" || bad "emit probed with the global set: $(tr '\n' ' ' < "$TMPROOT/eol.trace")"
+# auto probes once up front, so the step subshells inherit it instead of probing each
+: > "$TMPROOT/eol.trace"; rep="$(mkrepo)"
+RITUAL_TRACE="$TMPROOT/eol.trace" bash "$RITUAL" auto "$rep" >/dev/null 2>&1
+[ "$(grep -c '^jq_eol_probe$' "$TMPROOT/eol.trace")" = 1 ] && ok "auto_probes_jq_eol_once_for_all_steps" || bad "auto probes: $(grep -c '^jq_eol_probe$' "$TMPROOT/eol.trace") (want 1)"
+
+# an exported _RITUAL_JQ_EOL or _RITUAL_LG_* never reaches a standalone step (0.16.0 had neither)
+rep="$(mkrepo)"; bash "$RITUAL" fix traps "$rep" >/dev/null 2>&1   # leaves .gitignore, .gitattributes uncommitted
+for sub in "fix traps" "check traps"; do
+  clean="$(bash "$RITUAL" $sub "$rep" 2>&1)"
+  dirty="$(_RITUAL_JQ_EOL=XX _RITUAL_LG_REPO="$rep" _RITUAL_LG_TOP="$TMPROOT/nowhere" _RITUAL_LG_FILE="$TMPROOT/nowhere/l.json" _RITUAL_LG_WT=/x bash "$RITUAL" $sub "$rep" 2>&1)"
+  [ -n "$clean" ] && [ "$clean" = "$dirty" ] && ok "inherited_ritual_globals_are_ignored_${sub// /_}" || bad "inherited globals changed '$sub': [$clean] vs [$dirty]"
+done
+# (the `fix` run above reaches the ledger through emit_already, so a wrong _RITUAL_LG_TOP would show as unknown)
+case "$(bash "$RITUAL" fix traps "$rep" 2>&1)" in *'not yet committed'*) ok "inherited_globals_test_reaches_the_ledger" ;; *) bad "fix traps never reached the ledger: $(bash "$RITUAL" fix traps "$rep" 2>&1)" ;; esac
+
+# ritual_trace writes one line per event, to the file named by RITUAL_TRACE
+: > "$TMPROOT/rt.trace"; RITUAL_TRACE="$TMPROOT/rt.trace" ritual_trace one; RITUAL_TRACE="$TMPROOT/rt.trace" ritual_trace 'two words'
+[ "$(od -An -c "$TMPROOT/rt.trace" | tr -d ' \n')" = 'one\ntwowords\n' ] && ok "ritual_trace_appends_name_and_newline" || bad "ritual_trace: $(od -c "$TMPROOT/rt.trace" | head -3)"
+[ "$(grep -cF "printf '%s\\n' \"\$1\" >> \"\$RITUAL_TRACE\"" "$SKILL_DIR/lib/common.sh")" = 1 ] && ok "ritual_trace_format_is_one_line" || bad "ritual_trace's printf format is not '%s\n' on one line"
+
 echo "== md_fence =="
 # fence_mask <line...> -> one char per line: F = fence or inside one, . = could be a heading
 fence_mask() { local l m=""; MD_FENCE=""; for l in "$@"; do if md_fence "$l"; then m+=F; else m+=.; fi; done; printf '%s' "$m"; }
@@ -105,5 +230,44 @@ command -v fakegh >/dev/null 2>&1 && bad "stub_path leaked (subshell test)" || o
 [ "$(path_without definitely-not-a-tool-xyz)" = "$PATH" ] && ok "path_without an absent tool leaves PATH unchanged" || bad "path_without absent"
 [ "$(PATH="/usr/bin::/bin:*:" path_without definitely-not-a-tool-xyz)" = "/usr/bin::/bin:*:" ] \
   && ok "path_without keeps empty segments and glob chars byte-identical" || bad "path_without mangled PATH"
+
+echo "== append_lines =="
+# al_case <name> <initial printf-format | MISSING> <line>...: same bytes as one append_line per line.
+al_case() {
+  local name="$1" init="$2" a b l
+  shift 2
+  a="$TMPROOT/al-$name.a"; b="$TMPROOT/al-$name.b"; rm -f "$a" "$b"
+  if [ "$init" != MISSING ]; then printf "$init" > "$a"; printf "$init" > "$b"; fi
+  for l in "$@"; do append_line "$a" "$l"; done
+  append_lines "$b" "$@"
+  if { [ -e "$a" ] && [ -e "$b" ] && cmp -s "$a" "$b"; } || { [ ! -e "$a" ] && [ ! -e "$b" ]; }; then
+    ok "append_lines_matches_append_line_$name"
+  else
+    bad "append_lines_matches_append_line_$name: want $(od -c "$a" 2>&1 | head -3) got $(od -c "$b" 2>&1 | head -3)"
+  fi
+}
+al_case lf 'x\ny\n' a b c
+al_case crlf 'x\r\ny\r\n' a b c
+al_case no_trailing_newline 'x\ny' a b
+al_case crlf_no_trailing_newline 'x\r\ny' a b
+al_case cr_no_newline 'x\r' a b
+al_case crlf_first_line_lf_last 'x\r\ny\nz\n' a b
+al_case lf_first_line_crlf_last 'x\ny\r\n' a b
+al_case empty_file '' a b
+al_case missing_file MISSING a b
+al_case blank_lines_in_list 'x\r\n' '' a '' '' b ''
+al_case single_line 'x\n' a
+al_case first_appended_line_ends_in_cr_on_empty_file '' $'x\r' b c
+al_case first_appended_line_ends_in_cr_on_unterminated_single_line 'q' $'x\r' b c
+al_case no_lines_unterminated 'x\ny'
+al_case no_lines_missing_file MISSING
+al_case no_lines_empty_file ''
+printf 'x\r' > "$TMPROOT/al-lit"; append_lines "$TMPROOT/al-lit" a b
+printf 'x\r\na\nb\r\n' > "$TMPROOT/al-lit.exp"
+cmp -s "$TMPROOT/al-lit" "$TMPROOT/al-lit.exp" && ok "append_lines_cr_no_newline_literal_bytes" || bad "cr_no_newline literal: $(od -c "$TMPROOT/al-lit" | head -2)"
+printf 'x\ny' > "$TMPROOT/al-lit"; append_lines "$TMPROOT/al-lit"
+[ "$(od -An -c "$TMPROOT/al-lit" | tr -d ' \n')" = 'x\ny' ] && ok "append_lines_no_lines_leaves_an_unterminated_file_alone" || bad "no lines changed the file: $(od -c "$TMPROOT/al-lit" | head -2)"
+rm -f "$TMPROOT/al-none"; append_lines "$TMPROOT/al-none"
+[ ! -e "$TMPROOT/al-none" ] && ok "append_lines_no_lines_does_not_create_the_file" || bad "append_lines created a file for no lines"
 
 finish

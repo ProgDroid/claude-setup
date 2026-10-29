@@ -10,37 +10,10 @@
 AUTO_IDS='["stack","traps","stack-checks","oracle","parking-lot","beads-metrics"]'
 CHECK_IDS='beads beads-metrics ci handoff parking-lot public-sweep secret-scan stack-checks traps untracked-docs'
 TOOL_IDS='beads beads-metrics public-sweep secret-scan'   # the steps that need bd, gh or gitleaks
-INC="$TESTS_DIR/fixtures/rust-include.md"
 KEY_LINE='all = { level = "warn", priority = -1 }'        # a line of the include's clippy table
 
-# --- stubs. Each logs its argv, so a test can prove which tools a run touched.
-STUBS="$TMPROOT/e2e stubs"; CARGO_STUB="$TMPROOT/cargo stub"; EMPTY_LA="$TMPROOT/empty localappdata"
-LOGS="$TMPROOT/stub logs"
-mkdir -p "$STUBS" "$CARGO_STUB" "$EMPTY_LA" "$LOGS"
-cat > "$STUBS/bd" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "${E2E_LOGS:?}/bd"
-[ "$1 ${2:-} ${3:-}" = "config get metrics.disabled" ] && printf '%s\n' "${STUB_METRICS-true}"
-exit 0
-STUB
-cat > "$STUBS/gh" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "${E2E_LOGS:?}/gh"
-echo PRIVATE
-STUB
-# flags any staged AWS-style key, as the real gitleaks rule does
-cat > "$STUBS/gitleaks" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "${E2E_LOGS:?}/gitleaks"
-if git diff --cached | grep -qE 'AKIA[A-Z2-7]{16}'; then echo "WRN leaks found: 1" >&2; exit 1; fi
-echo "INF no leaks found" >&2; exit 0
-STUB
-cat > "$CARGO_STUB/cargo" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "${E2E_LOGS:?}/cargo"
-exit 0
-STUB
-chmod +x "$STUBS"/* "$CARGO_STUB/cargo"
+# --- stubs (make_tool_stubs, tests/lib.sh). Each logs its argv, so a test can prove which tools a run touched.
+make_tool_stubs "$TMPROOT"
 # shadows: first on this suite's PATH, so an unstubbed call logs here instead of running the real tool
 SHADOW="$TMPROOT/shadow tools"; SHADOW_LOG="$TMPROOT/shadow calls.log"; mkdir -p "$SHADOW"
 for t in bd gh gitleaks cargo; do
@@ -55,11 +28,11 @@ gitleaks shadow-control >/dev/null 2>&1
 
 NOTOOLS="$(PATH="$(path_without bd)"; PATH="$(path_without gh)"; PATH="$(path_without gitleaks)"; printf '%s' "$PATH")"
 # S = every tool stubbed; N = no bd, gh or gitleaks by any route (cargo stays stubbed in both)
-S() { ( stub_path "$CARGO_STUB"; stub_path "$STUBS"; export E2E_LOGS="$LOGS" RITUAL_RUST_INCLUDE="$INC"; bash "$RITUAL" "$@" ); }
+S() { tool_run bash "$RITUAL" "$@"; }
 N() { ( PATH="$CARGO_STUB:$NOTOOLS"; LOCALAPPDATA="$(cygpath -w "$EMPTY_LA")"
         export PATH LOCALAPPDATA E2E_LOGS="$LOGS" RITUAL_RUST_INCLUDE="$INC"; bash "$RITUAL" "$@" ); }
 # SC <cmd...>: any other command in the stub environment (a git commit runs the installed hooks)
-SC() { ( stub_path "$CARGO_STUB"; stub_path "$STUBS"; export E2E_LOGS="$LOGS" RITUAL_RUST_INCLUDE="$INC"; "$@" ); }
+SC() { tool_run "$@"; }
 
 logclear() { rm -f "$LOGS"/*; }
 logof() { if [ -f "$LOGS/$1" ]; then tr -d '\r' < "$LOGS/$1"; fi; }
@@ -196,6 +169,28 @@ echo "== detection runs once per auto run =="
   || bad "stack scans: stack_json=$(tcount stack_json) oracle_json=$(tcount oracle_json)"
 # after auto, the oracle step sees the lint command stack-checks just added (oracle runs after it)
 [[ "$(res "$out" oracle detail)" == *"cargo clippy"* ]] && ok "oracle_step_sees_what_stack_checks_wrote" || bad "oracle lint: $(res "$out" oracle detail)"
+
+echo "== ledger context resolves once per auto run =="
+# first run on a fresh fixture: no ledger file, so no path_norm of the work tree top
+lr="$(fresh_fixture ledgerrun)"
+: > "$TRACE"; RITUAL_TRACE="$TRACE" S auto "$lr" >/dev/null
+[ "$(tcount ledger_context)|$(tcount ledger_wt)" = '1|0' ] && ok "auto_first_run_resolves_no_wt" \
+  || bad "first run: ledger_context=$(tcount ledger_context) ledger_wt=$(tcount ledger_wt)"
+# give the ledger entries: preflight, commit-plan, then record-write with the commit declined
+S preflight "$lr" > "$TMPROOT/lr pf.json"
+j "$(S auto "$lr")" .wrote | jq -c . > "$TMPROOT/lr wrote.json"
+S commit-plan "$lr" "$TMPROOT/lr pf.json" "$TMPROOT/lr wrote.json" >/dev/null
+printf '%s' '{"steps":{"commit":{"result":"declined"}}}' > "$TMPROOT/lr results.json"
+S record-write "$lr" "$TMPROOT/lr results.json" >/dev/null
+lf="$(git -C "$lr" rev-parse --path-format=absolute --git-common-dir | tr -d '\r')/ritual-ledger.json"
+[ "$(jq '.entries | length' "$lf" | tr -d '\r')" -gt 0 ] || bad "ledger premise: no entries in $lf"
+: > "$TRACE"; RITUAL_TRACE="$TRACE" S auto "$lr" >/dev/null
+[ "$(tcount ledger_context)|$(tcount ledger_wt)|$(tcount ledger_read)" = '1|1|3' ] \
+  && ok "auto_rerun_resolves_ledger_context_once" \
+  || bad "rerun: ledger_context=$(tcount ledger_context) ledger_wt=$(tcount ledger_wt) ledger_read=$(tcount ledger_read) (want 1|1|3)"
+: > "$TRACE"; RITUAL_TRACE="$TRACE" S fix traps "$lr" >/dev/null
+[ "$(tcount ledger_context)" = 1 ] && ok "standalone_fix_resolves_its_own_context" \
+  || bad "fix traps: ledger_context=$(tcount ledger_context)"
 
 echo "== stack and oracle wrapping =="
 [ "$(res "$out" stack status)" = present ] && [[ "$(res "$out" stack detail)" == *"rust (.)"* ]] \
@@ -377,9 +372,11 @@ ofp="$( cd "$bb" && S fix parking-lot "sub dir" )"
 
 echo "== a step that exits 0 without a result =="
 # a jq wrapper that turns beads-metrics' own `present` result into $JQW_REPLY (unset: non-JSON);
-# every other call is real
+# every other call is real, except that it answers emit's line-ending probe (`jq -nc 1`) with nothing,
+# so emit takes the jq path that the wrapper can see rather than building the plain result itself
 JQW="$TMPROOT/jq wrap"; mkdir -p "$JQW"
 { printf '#!/usr/bin/env bash\nREAL_JQ=%q\n' "$(command -v jq)"; cat <<'WRAP'
+if [ "${1:-}" = -nc ] && [ "${2:-}" = 1 ]; then exit 0; fi
 if [ "${1:-}" = -nRc ] && [ "${4:-}" = beads-metrics ] && [ "${7:-}" = present ]; then printf '%s\n' "${JQW_REPLY-not json}"; exit 0; fi
 exec "$REAL_JQ" "$@"
 WRAP

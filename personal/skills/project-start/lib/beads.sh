@@ -208,14 +208,14 @@ _beads_changed() {
 # lines use the target's own line ending. Returns 1 when nothing was missing.
 _beads_append_missing() {
   local t="$1" src="$2" l last
-  local -a com=() miss=()
+  local -a com=() miss=() out=()
   while IFS= read -r l || [ -n "$l" ]; do
     l="${l%$'\r'}"
     case "$l" in '') ;; '#'*) com+=("$l") ;; *) _beads_has_line "$t" "$l" || miss+=("$l") ;; esac
   done < "$src"
   [ "${#miss[@]}" -gt 0 ] || return 1
-  if [ -s "$t" ]; then last="$(tail -n 1 "$t" | tr -d '\r')"; [ -n "$last" ] && append_line "$t" ""; fi
-  for l in "${com[@]}" "${miss[@]}"; do append_line "$t" "$l"; done
+  if [ -s "$t" ]; then last="$(tail -n 1 "$t" | tr -d '\r')"; [ -n "$last" ] && out+=(""); fi
+  append_lines "$t" "${out[@]}" "${com[@]}" "${miss[@]}"
   return 0
 }
 
@@ -424,10 +424,13 @@ fix_beads() {
   fi
   if ! grep -q "^$_BEADS_OVERRIDE_HEADING" "$top/CLAUDE.md" 2>/dev/null; then
     local l last
+    local -a ovr=()
     if [ -s "$top/CLAUDE.md" ]; then
-      last="$(tail -n 1 "$top/CLAUDE.md" | tr -d '\r')"; [ -n "$last" ] && append_line "$top/CLAUDE.md" ""
+      last="$(tail -n 1 "$top/CLAUDE.md" | tr -d '\r')"; [ -n "$last" ] && ovr+=("")
     fi
-    while IFS= read -r l || [ -n "$l" ]; do append_line "$top/CLAUDE.md" "${l%$'\r'}"; done < "$_BEADS_OVERRIDE"
+    # (the strip is its own statement: inside ovr+=("${l%$'\r'}") bash 5.2 leaves the CR on)
+    while IFS= read -r l || [ -n "$l" ]; do l="${l%$'\r'}"; ovr+=("$l"); done < "$_BEADS_OVERRIDE"
+    append_lines "$top/CLAUDE.md" "${ovr[@]}"
   fi
   if [ "$had_agents" = 0 ]; then
     [ -e "$top/AGENTS.md" ] && { rm -f "$top/AGENTS.md"; notes+=("removed bd's AGENTS.md"); }

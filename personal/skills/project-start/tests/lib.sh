@@ -69,3 +69,48 @@ sealed_bin() {
   done
   printf '%s\n' "$dir"
 }
+
+# make_tool_stubs <dir>: the stub bd, gh, gitleaks and cargo every end-to-end run uses, each logging
+# its argv to $LOGS/<tool>. Creates "<dir>/e2e stubs", "<dir>/cargo stub", "<dir>/empty localappdata"
+# and "<dir>/stub logs" (spaces on purpose) and sets STUBS, CARGO_STUB, EMPTY_LA, LOGS and INC (the
+# rust include, which RITUAL_RUST_INCLUDE points at so the clippy-table append runs on any host).
+# tool_run <cmd...> runs a command with them first on PATH and that environment exported.
+make_tool_stubs() {
+  STUBS="$1/e2e stubs"; CARGO_STUB="$1/cargo stub"; EMPTY_LA="$1/empty localappdata"
+  LOGS="$1/stub logs"; INC="$TESTS_DIR/fixtures/rust-include.md"
+  mkdir -p "$STUBS" "$CARGO_STUB" "$EMPTY_LA" "$LOGS"
+  cat > "$STUBS/bd" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${E2E_LOGS:?}/bd"
+[ "$1 ${2:-} ${3:-}" = "config get metrics.disabled" ] && printf '%s\n' "${STUB_METRICS-true}"
+exit 0
+STUB
+  cat > "$STUBS/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${E2E_LOGS:?}/gh"
+echo PRIVATE
+STUB
+  # flags any staged AWS-style key, as the real gitleaks rule does
+  cat > "$STUBS/gitleaks" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${E2E_LOGS:?}/gitleaks"
+if git diff --cached | grep -qE 'AKIA[A-Z2-7]{16}'; then echo "WRN leaks found: 1" >&2; exit 1; fi
+echo "INF no leaks found" >&2; exit 0
+STUB
+  cat > "$CARGO_STUB/cargo" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${E2E_LOGS:?}/cargo"
+exit 0
+STUB
+  chmod +x "$STUBS"/* "$CARGO_STUB/cargo"
+}
+tool_run() { ( stub_path "$CARGO_STUB"; stub_path "$STUBS"; export E2E_LOGS="$LOGS" RITUAL_RUST_INCLUDE="$INC"; "$@" ); }
+
+# have_locale <name>: succeeds when `locale -a` lists <name>. The spellings UTF-8 and utf8 count as
+# one (glibc lists en_GB.utf8 for en_GB.UTF-8), and so do upper and lower case. A pin that runs
+# under a locale calls this first, so an absent locale is counted as absent and never as a pass.
+have_locale() {
+  local want
+  want="$(printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -d '-')"
+  locale -a 2>/dev/null | tr 'A-Z' 'a-z' | tr -d '-' | grep -qx "$want"
+}

@@ -40,6 +40,13 @@ out="$(GIT_CONFIG_GLOBAL="$TMPROOT/global-gitconfig" R fix traps "$r")"
 grep -qxF '.env' "$r/.gitignore" && grep -qxF '.semgrep/' "$r/.gitignore" \
   && ok "traps_fix_writes_despite_global_ignore" || bad "fix w/ global: $out"
 
+# --- a fresh fix writes each file's lines in the checker's order, and reports the files in the order first touched
+r="$(mkrepo)"
+out="$(R fix traps "$r")"
+printf '*.sh text eol=lf\n' > "$TMPROOT/trap-attr.exp"; printf '.semgrep/\n.env\n' > "$TMPROOT/trap-ign.exp"
+[ "$(jq -c .wrote <<<"$out")" = '[".gitattributes",".gitignore"]' ] && cmp -s "$r/.gitattributes" "$TMPROOT/trap-attr.exp" && cmp -s "$r/.gitignore" "$TMPROOT/trap-ign.exp" \
+  && ok "traps_fix_fresh_writes_lines_in_order_and_wrote_in_first_touched_order" || bad "fresh fix order: $out; $(od -c "$r/.gitignore" | head -n 3)"
+
 # --- partial: only .env ignored
 r="$(mkrepo)"; printf '*.sh text eol=lf\n' > "$r/.gitattributes"; printf '.env\n' > "$r/.gitignore"
 out="$(R check traps "$r")"

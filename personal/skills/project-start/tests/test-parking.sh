@@ -85,6 +85,18 @@ head -c "$sz" "$r/CLAUDE.md" | cmp -s - "$TMPROOT/before.nowr" && grep -qxF '## 
   && [ "$(count_rule "$r/CLAUDE.md")" = 1 ] && tail -n 7 "$r/CLAUDE.md" | cmp -s - "$HOUSE_RULE" \
   && ok "no_working_rules_section" || bad "no-WR: $(cat "$r/CLAUDE.md")"
 
+# --- no section, and the file's last line is blank / unterminated / CRLF: one blank line, not two; own ending
+nowr() { # nowr <name> <printf-format content> <expected printf-format prefix> <eol sed: "" or "s/$/\r/">
+  local rr; rr="$(mkrepo)"; printf "$2" > "$rr/CLAUDE.md"
+  R fix parking-lot "$rr" >/dev/null
+  { printf "$3"; sed "$4" "$HOUSE_RULE"; } > "$TMPROOT/exp.nowr"
+  cmp -s "$rr/CLAUDE.md" "$TMPROOT/exp.nowr" && ok "$1" || bad "$1: $(od -c "$rr/CLAUDE.md" | head -n 6)"
+}
+nowr no_working_rules_last_line_blank '# Proj\n\n' '# Proj\n\n## Working rules\n\n' 's/$//'
+nowr no_working_rules_unterminated_last_line '# Proj' '# Proj\n\n## Working rules\n\n' 's/$//'
+nowr no_working_rules_crlf '# Proj\r\n\r\nnotes\r\n' '# Proj\r\n\r\nnotes\r\n\r\n## Working rules\r\n\r\n' 's/$/\r/'
+nowr no_working_rules_crlf_last_line_blank '# Proj\r\n\r\n' '# Proj\r\n\r\n## Working rules\r\n\r\n' 's/$/\r/'
+
 # --- a different rule is left alone
 r="$(mkrepo)"
 printf '# Proj\n\n## Working rules\n\n- Be kind.\n- New ideas go to `docs/parking-lot.md`, not the current milestone.\n' > "$r/CLAUDE.md"

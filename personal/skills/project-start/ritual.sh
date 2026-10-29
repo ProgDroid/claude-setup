@@ -83,6 +83,8 @@ auto() {
   trap 'rm -f "$_AUTO_ERR"' EXIT
   trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP   # the EXIT trap still runs
 
+  _ritual_jq_eol   # once, so the step subshells inherit it (emit would otherwise probe in each)
+  _auto_ledger_context "$repo"
   _auto_run stack_json "$repo" -; stack_raw="$_AUTO_OUT"; stack_rc="$_AUTO_RC"
   if [ "$stack_rc" -eq 0 ]; then _RITUAL_STACK_MEMO="$stack_raw"; _RITUAL_MEMO_REPO="$repo"
   else res[stack]="$(_auto_result stack)"; fi
@@ -101,6 +103,20 @@ auto() {
     | jq -sc '{results: ., wrote: (reduce (.[].wrote[]) as $x ([]; if index([$x]) then . else . + [$x] end))}' \
     || die "auto: jq could not assemble the results"
 }
+# _auto_ledger_context <repo>: resolve the ledger's work tree top and file once for the whole run
+# (_ledger_verdicts uses them for this repo only). Left unset when git cannot answer, so each step
+# fails as it does alone. No auto step writes the ledger, so the wt resolved here (only when the
+# file already holds something) cannot go stale; the ledger's content is still read on every call.
+_auto_ledger_context() {
+  local repo="$1" out top g
+  unset _RITUAL_LG_REPO _RITUAL_LG_TOP _RITUAL_LG_FILE _RITUAL_LG_WT
+  out="$(git -C "$repo" rev-parse --path-format=absolute --show-toplevel --git-common-dir 2>/dev/null)" || return 0
+  out="${out//$'\r'/}"; top="${out%%$'\n'*}"; g="${out#*$'\n'}"
+  [ -n "$top" ] && [ -n "$g" ] && [ "$g" != "$out" ] || return 0
+  ritual_trace ledger_context
+  _RITUAL_LG_REPO="$repo"; _RITUAL_LG_TOP="$top"; _RITUAL_LG_FILE="$g/ritual-ledger.json"; _RITUAL_LG_WT=""
+  if [ -s "$_RITUAL_LG_FILE" ]; then _RITUAL_LG_WT="$(path_norm "$top")"; ritual_trace ledger_wt; fi
+}
 _auto_status() { printf '%s' "$1" | jq -r .status | tr -d '\r'; }
 
 # repo_root <path> -> the work tree's top when <path> lies below it, else <path> unchanged (also
@@ -114,7 +130,7 @@ repo_root() {
     printf '%s' "${top%$'\r'}"
   else printf '%s' "$1"; fi
 }
-unset _RITUAL_STACK_MEMO _RITUAL_MEMO_REPO
+unset _RITUAL_STACK_MEMO _RITUAL_MEMO_REPO _RITUAL_JQ_EOL _RITUAL_LG_REPO _RITUAL_LG_TOP _RITUAL_LG_FILE _RITUAL_LG_WT
 
 # usage: one line per dispatch arm below. A <repo> may be any path inside the work tree.
 usage() {

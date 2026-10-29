@@ -57,13 +57,12 @@ _park_insert_rule() {
     if [[ "$line" =~ ^##[[:space:]]+Working[[:space:]]+rules[[:space:]]*$ ]]; then h=$((i + 1)); break; fi
   done
   if [ "$h" -eq 0 ]; then   # no section: append one at EOF
+    local -a out=()
     if [ -s "$f" ]; then
       last="${lines[${#lines[@]}-1]%$'\r'}"
-      [ -n "$last" ] && append_line "$f" ""
+      [ -n "$last" ] && out+=("")
     fi
-    append_line "$f" "## Working rules"
-    append_line "$f" ""
-    for line in "${rule[@]}"; do append_line "$f" "$line"; done
+    append_lines "$f" "${out[@]}" "## Working rules" "" "${rule[@]}"
     return 0
   fi
   end=${#lines[@]}          # index of the next "## " heading, else EOF

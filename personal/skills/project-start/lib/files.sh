@@ -37,14 +37,18 @@ check_traps() {
 
 fix_traps() {
   local repo="$1" miss line w newmod n detail
-  local wrote=()
+  local wrote=() attrs=() ignores=()
   miss="$(_traps_missing "$repo")"
   [ -n "$miss" ] || { emit_already traps "$repo" "nothing to add" .gitattributes .gitignore; return 0; }
+  # Collect per file (each file keeps its own line order), then one write per file: nothing reads
+  # either file between the lines, and `wrote` stays in the order the files were first touched.
   while IFS= read -r line; do
-    if [ "$line" = attr ]; then append_line "$repo/.gitattributes" "$_TRAP_ATTR"; w=.gitattributes
-    else append_line "$repo/.gitignore" "$line"; w=.gitignore; fi
+    if [ "$line" = attr ]; then attrs+=("$_TRAP_ATTR"); w=.gitattributes
+    else ignores+=("$line"); w=.gitignore; fi
     case " ${wrote[*]:-} " in *" $w "*) ;; *) wrote+=("$w") ;; esac
   done <<<"$miss"
+  [ "${#attrs[@]}" -eq 0 ] || append_lines "$repo/.gitattributes" "${attrs[@]}"
+  [ "${#ignores[@]}" -eq 0 ] || append_lines "$repo/.gitignore" "${ignores[@]}"
   miss="$(_traps_missing "$repo")"   # verify by effect again
   if [ -n "$miss" ]; then
     emit traps failed "still not in effect after append: $(printf '%s' "$miss" | paste -sd' ' -)" "${wrote[@]}"
@@ -159,8 +163,8 @@ check_stack_checks() {
 }
 
 fix_stack_checks() {
-  local repo="$1" lang dir base f bak res table line rel lock lockbak meta_ok
-  local wrote=() have=() asks="" fails="" unk=""
+  local repo="$1" lang dir base f bak res table rel lock lockbak meta_ok
+  local wrote=() have=() tlines=() asks="" fails="" unk=""
   table="$(_clippy_table)"
   while IFS=$'\t' read -r lang dir; do
     case "$lang" in rust|python|flutter) ;; *) continue ;; esac
@@ -176,8 +180,8 @@ fix_stack_checks() {
     cp -p "$f" "$bak"
     lock="$base/Cargo.lock"; lockbak=""   # cargo metadata may create or rewrite Cargo.lock
     if [ -f "$lock" ]; then lockbak="$(mktemp)"; cp -p "$lock" "$lockbak"; fi
-    append_line "$f" ""
-    while IFS= read -r line; do append_line "$f" "$line"; done <<<"$table"
+    mapfile -t tlines <<<"$table"   # a here-string always ends in a newline: an empty table is one empty line, as the read loop saw it
+    append_lines "$f" "" "${tlines[@]}"
     if ! command -v cargo >/dev/null 2>&1; then
       cp "$bak" "$f"; rm -f "$bak" "$lockbak"; unk="${unk:+$unk; }$rel: cargo not found, edit reverted"; continue
     fi

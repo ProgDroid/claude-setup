@@ -546,4 +546,19 @@ out="$(R fix handoff "$r/sub dir")"
 [ -f "$r/NEXT.md" ] && [ -f "$r/.claude/handoff.json" ] && [ -f "$r/CLAUDE.md" ] && [ ! -e "$r/sub dir/NEXT.md" ] \
   && ok "fix_from_subdirectory_writes_at_root" || bad "subdir: $out"
 
+# --- _handoff_append_section reads the routine file with a plain `read` (an unterminated last line is
+# dropped) and appends in one write; same bytes as one append_line per line
+as() { # as <routine printf-format> <target printf-format | MISSING> -> the target's bytes as od text
+  local rt="$TMPROOT/as-routine" t="$TMPROOT/as-target"; rm -f "$t"
+  printf "$1" > "$rt"; [ "$2" = MISSING ] || printf "$2" > "$t"
+  ( RITUAL_SKILL_DIR="$SKILL_DIR"; . "$SKILL_DIR/lib/common.sh"; . "$SKILL_DIR/lib/handoff.sh"; _HANDOFF_ROUTINE_FILE="$rt"; _handoff_append_section "$t" )
+  if [ -e "$t" ]; then od -An -c "$t" | tr -d ' \n'; else printf MISSING; fi
+}
+[ "$(as '## R\n- a\n- last' 'T\n')" = 'T\n\n##R\n-a\n' ] && ok "append_section_drops_an_unterminated_last_routine_line" || bad "unterminated routine: $(as '## R\n- a\n- last' 'T\n')"
+[ "$(as '## R\r\n- a\r\n' 'T\r\n')" = 'T\r\n\r\n##R\r\n-a\r\n' ] && ok "append_section_strips_routine_cr_and_uses_the_targets_crlf" || bad "crlf target: $(as '## R\r\n- a\r\n' 'T\r\n')"
+[ "$(as '## R\n- a\n' 'T')" = 'T\n\n##R\n-a\n' ] && ok "append_section_terminates_an_unterminated_target_then_a_blank_line" || bad "unterminated target: $(as '## R\n- a\n' 'T')"
+[ "$(as '' MISSING)" = MISSING ] && ok "append_section_with_an_empty_routine_creates_nothing" || bad "empty routine created: $(as '' MISSING)"
+[ "$(as '## R\n' MISSING)" = '##R\n' ] && ok "append_section_creates_a_missing_file_with_no_separator" || bad "missing target: $(as '## R\n' MISSING)"
+[ "$(as '## R\n' 'T\n\n')" = 'T\n\n##R\n' ] && ok "append_section_adds_no_second_blank_line_after_a_blank_last_line" || bad "blank last line: $(as '## R\n' 'T\n\n')"
+
 finish

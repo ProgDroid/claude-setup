@@ -109,4 +109,15 @@ cmp -s "$r/.gitattributes" "$TMPROOT/exp.ga" && ok "fix_appends_gitattributes_in
 r="$(mkrepo)"
 [ "$(st "$(NB fix beads "$r")")" = unknown ] && ok "fix_unknown_without_bd" || bad "fix no bd"
 
+# the override section is read from the house file with `|| [ -n "$l" ]` (an unterminated last line is
+# kept) and each line loses one CR; it lands in the file's own line ending. A copy of the skill with a
+# CRLF, unterminated override stands in for the house file (the real one ends in a newline).
+cp -r "$SKILL_DIR" "$TMPROOT/sk-ovr"
+printf '## Task tracking vs. execution structure\r\nline two\r\nlast no newline' > "$TMPROOT/sk-ovr/house/claude-md-override.md"
+r="$(mkrepo "Ovr Unterminated")"; printf '# Mine\r\n\r\nKeep this.\r\n' > "$r/CLAUDE.md"; commit_all "$r" claude; logclear
+out="$( ( stub_path "$STUBDIR"; export STUB_BD_LOG="$LOG" STUB_CRLF=1; bash "$TMPROOT/sk-ovr/ritual.sh" fix beads "$r" ) )"
+printf '## Task tracking vs. execution structure\r\nline two\r\nlast no newline\r\n' > "$TMPROOT/ovr.exp"
+tail -c "$(wc -c < "$TMPROOT/ovr.exp")" "$r/CLAUDE.md" | cmp -s - "$TMPROOT/ovr.exp" && [ "$(st "$out")" = fixed ] \
+  && ok "fix_override_keeps_an_unterminated_last_line_and_strips_one_cr_per_line" || bad "override tail: $out; $(tail -c 80 "$r/CLAUDE.md" | od -c | tail -n 5)"
+
 finish

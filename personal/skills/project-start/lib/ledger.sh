@@ -51,6 +51,14 @@ _ledger_load() {
 # changes or moves the file.
 ledger_read() {
   local f; f="$(ledger_file "$1")" || return 1
+  _ledger_read_file "$f"
+}
+
+# _ledger_read_file <file>: ledger_read's body, for a caller that already holds the ledger's path.
+# Reads the content on every call (the trace name ledger_read counts these).
+_ledger_read_file() {
+  local f="$1"
+  ritual_trace ledger_read
   if [ ! -e "$f" ] && [ ! -L "$f" ]; then printf '%s\n' '{"entries":[]}'; return 0; fi
   [ -f "$f" ] || return 1
   _ledger_load "$f" || return 1
@@ -309,16 +317,24 @@ ledger_readback() { _ledger_verdicts "$1" entries; }
 # _ledger_verdicts <repo> paths <path>... | <repo> entries: the two functions above
 _ledger_verdicts() {
   local repo="$1" mode="$2"; shift 2
-  local top wt cur unread=0 fpfail=0 rec p w f s d v out line i
+  local top wt="" lgfile="" cur unread=0 fpfail=0 rec p w f s d v out line i
   local -a args=() ok=() hp=() rp=() rx=()
   local -A est=() efp=() pst=() cfp=() asked=() sk=()
-  top="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" && top="${top%$'\r'}" && [ -n "$top" ] || return 1
-  wt="$(path_norm "$top")"
-  cur="$(ledger_read "$top")" || { cur='{"entries":[]}'; unread=1; }
+  # `auto` resolves the context once (_RITUAL_LG_*); it is used only for the repo it was resolved for.
+  # The ledger's content is read on every call, never memoised. wt is resolved lazily, below.
+  if [ -n "${_RITUAL_LG_REPO:-}" ] && [ "$_RITUAL_LG_REPO" = "$repo" ]; then
+    top="$_RITUAL_LG_TOP"; lgfile="$_RITUAL_LG_FILE"; wt="${_RITUAL_LG_WT:-}"
+    cur="$(_ledger_read_file "$lgfile")" || { cur='{"entries":[]}'; unread=1; }
+  else
+    top="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" && top="${top%$'\r'}" && [ -n "$top" ] || return 1
+    ritual_trace ledger_context
+    cur="$(ledger_read "$top")" || { cur='{"entries":[]}'; unread=1; }
+  fi
   [ "$mode" = entries ] && [ "$unread" = 1 ] && return 2
   while IFS= read -r -d '' rec; do
     p="${rec%%$'\x1f'*}"; rec="${rec#*$'\x1f'}"; w="${rec%%$'\x1f'*}"; rec="${rec#*$'\x1f'}"
     f="${rec%%$'\x1f'*}"; s="${rec#*$'\x1f'}"
+    [ -n "$wt" ] || { wt="$(path_norm "$top")"; ritual_trace ledger_wt; }
     [ "$w" = "$wt" ] || continue
     _ledger_badpath "$p" && continue
     est["$p"]="$s"; efp["$p"]="$f"
@@ -371,7 +387,7 @@ _ledger_verdicts() {
     [ "$mode" = entries ] && [ "${v#offer}" = "$v" ] && continue
     printf '%s\t%s\n' "$p" "$v"
   done
-  [ "$unread" = 0 ] || echo "ritual: ledger: could not read $(ledger_file "$top"); every changed path is offered, as before 0.16" >&2
+  [ "$unread" = 0 ] || echo "ritual: ledger: could not read ${lgfile:-$(ledger_file "$top")}; every changed path is offered, as before 0.16" >&2
   [ "$fpfail" = 0 ] || echo "ritual: ledger: could not fingerprint the paths it holds in $top; they are offered" >&2
   return 0
 }

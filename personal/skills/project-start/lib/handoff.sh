@@ -50,8 +50,11 @@ _handoff_scan() {
 # with the file's own line ending. Creates the file when missing.
 _handoff_append_section() {
   local f="$1" line
-  if [ -s "$f" ] && [ -n "$(tail -n 1 "$f" | tr -d '\r')" ]; then append_line "$f" ""; fi
-  while IFS= read -r line; do append_line "$f" "$line"; done < <(tr -d '\r' < "$_HANDOFF_ROUTINE_FILE")
+  local -a out=()
+  if [ -s "$f" ] && [ -n "$(tail -n 1 "$f" | tr -d '\r')" ]; then out+=(""); fi
+  # a plain `read` (no `|| [ -n "$line" ]`): an unterminated last line of the routine file is dropped, as it always was
+  while IFS= read -r line; do out+=("$line"); done < <(tr -d '\r' < "$_HANDOFF_ROUTINE_FILE")
+  append_lines "$f" "${out[@]}"
 }
 
 # _handoff_replace_section <claude-md> <N>: replace the section whose heading is line N (up to the

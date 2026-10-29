@@ -595,4 +595,32 @@ v="$(L ledger_verdicts "$r" .beads/issues.jsonl README.md 2>"$TMPROOT/esk" | tr 
 [ "$v" = "$(tv .beads/issues.jsonl silent)"$'\n'"$(tv README.md offer)" ] && one_line "$TMPROOT/esk" \
   && ok "skip_tracked_under_unreadable_ledger" || bad "skip_tracked_under_unreadable_ledger: [$v]; err [$(cat "$TMPROOT/esk")]"
 
+# the auto-run memo (_RITUAL_LG_*) is used for its own repo only, and the content is read every call
+echo "== ledger context memo =="
+TR="$TMPROOT/memo trace.log"
+ra="$(mkrepo)"; rb="$(mkrepo)"
+echo ci > "$ra/ci.yml"; plan "$ra" ci.yml >/dev/null; settle_with "$ra" declined
+echo ci > "$rb/ci.yml"
+va0="$(V "$ra" ci.yml)"
+topb="$(git -C "$rb" rev-parse --show-toplevel | tr -d '\r')"
+fb="$(lfile "$rb")"
+: > "$TR"
+va="$( . "$SKILL_DIR/lib/common.sh"; . "$SKILL_DIR/lib/ledger.sh"
+       _RITUAL_LG_REPO="$rb"; _RITUAL_LG_TOP="$topb"; _RITUAL_LG_FILE="$fb"; _RITUAL_LG_WT="$(path_norm "$topb")"
+       RITUAL_TRACE="$TR" ledger_verdicts "$ra" ci.yml )"
+[ "$(grep -cx ledger_context "$TR")" = 1 ] && [ "$(tr -d '\r' <<<"$va")" = "$va0" ] && [ -n "$va0" ] \
+  && ok "memo_for_another_repo_is_ignored" || bad "memo_for_another_repo_is_ignored: ctx=$(grep -cx ledger_context "$TR") [$va] vs [$va0]"
+
+# with the memo set for this repo, a rewrite of the ledger between two calls shows in the second
+topa="$(git -C "$ra" rev-parse --show-toplevel | tr -d '\r')"; fa="$(lfile "$ra")"
+vm1="$( . "$SKILL_DIR/lib/common.sh"; . "$SKILL_DIR/lib/ledger.sh"
+        _RITUAL_LG_REPO="$ra"; _RITUAL_LG_TOP="$topa"; _RITUAL_LG_FILE="$fa"; _RITUAL_LG_WT="$(path_norm "$topa")"
+        # both calls run in this shell (output to files), so a global the call sets would persist
+        ledger_verdicts "$ra" ci.yml > "$TMPROOT/memo a.out"
+        printf '{"entries":[]}\n' > "$fa"
+        ledger_verdicts "$ra" ci.yml > "$TMPROOT/memo b.out"
+        printf '%s|%s' "$(tr -d '\r' < "$TMPROOT/memo a.out")" "$(tr -d '\r' < "$TMPROOT/memo b.out")" )"
+[ "$vm1" = "$va0|$(tv ci.yml offer)" ] && [ "$va0" = "$(tv ci.yml silent)" ] \
+  && ok "ledger_read_every_call_sees_a_change" || bad "ledger_read_every_call_sees_a_change: [$vm1] want [$va0|$(tv ci.yml offer)]"
+
 finish
