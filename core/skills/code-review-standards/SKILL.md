@@ -42,10 +42,21 @@ Decide, before changing code:
 4. **Verification depth**: full review of the fixes, tests and linters, tests only, or none
 5. **Commit strategy**: review first, a single commit, or one commit per category
 
-Quick default: Critical and High severity, all categories, verified by tests and linters.
+Default: fix Critical, High and Important findings, plus every Minor that is a real defect or
+cheap, on the open branch, verified by tests and linters. Don't default to deferring them. Ask
+only about large fixes or scope calls.
+
+**One fix round, not a chain.** The re-review checks only that the fixes landed and broke nothing.
+Minors it raises about the fixes themselves are recorded, not fixed, unless they are real defects.
+Otherwise review-of-the-review recurses into minors of minors.
+
+**Deferred Minors are filed, never dropped.** File each one in Beads (`bd create`) when the project
+uses it, otherwise in the project's parking lot or backlog. **End the remediation report with a
+visible warning** listing every deferred Minor and where it was filed.
+
 Verify the fixes for swallowed errors and inadequate exception handling, over-engineered fixes, and
 test coverage and quality. Finish with a remediation report: fixes made, what was verified, and
-what was left.
+what was deferred.
 
 ---
 

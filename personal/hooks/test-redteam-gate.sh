@@ -214,5 +214,16 @@ has "RED-TEAM GATE (plan)" "$w" \
   && ok "a Windows backslash path still matches the plan gate" \
   || bad "backslash path did not match"
 
+echo "== round balance =="
+
+# Added 2026-11-04 from two projects' memories: later
+# red-team rounds drifted into objections about downstream consumers while still costing a
+# full round. The user wants the nagging kept while it improves the code, so the rule is a
+# stop condition on substance, not a cap on rounds.
+for f in "$SPEC" "$PLAN"; do
+  b="$(ctx "$f" "$NO")"
+  has "ROUND BALANCE" "$b" && has "two consecutive rounds" "$b"     && ok "$(basename "$f") carries the round-balance stop rule"     || bad "$(basename "$f") lacks the round-balance stop rule"
+done
+
 echo "-- $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

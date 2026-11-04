@@ -18,8 +18,8 @@ does not exist, and a real thing reported as absent is silently dropped and neve
 
 ### pipe-eats-the-exit-code
 **Tell:** a build or test is called green from a command that ended in a pipe or a `;`-chain.
-**Case:** `flutter test | tail` showed exit 0 while five tests had failed. A backgrounded build chain ending in `tail` reported "completed (exit code 0)" for a release build that had died on a real error. `pipefail` does not help when there is no pipe.
-**Countermeasure:** make the command write its status into the artifact (`cmd > LOG 2>&1; echo "REAL_EXIT=$?" >> LOG`) and read the log. A missing `REAL_EXIT=` line is UNKNOWN. A notification from the harness describes the chain, not the command.
+**Case:** `flutter test | tail` showed exit 0 while five tests had failed. A backgrounded build chain ending in `tail` reported "completed (exit code 0)" for a release build that had died on a real error. `pipefail` does not help when there is no pipe. A watcher is no verdict either: a CI run failed its test step with exit 101 while `gh run watch <id> --exit-status` returned 0, and "the run passed" was already written (2026-08-14).
+**Countermeasure:** make the command write its status into the artifact (`cmd > LOG 2>&1; echo "REAL_EXIT=$?" >> LOG`) and read the log. A missing `REAL_EXIT=` line is UNKNOWN. A notification from the harness describes the chain, not the command. For CI, read `gh run view <id> --json conclusion -q .conclusion`, then `--log-failed`.
 
 ### grep-missed-the-synonym
 **Tell:** a claim of absence ("no test", "no caller", "no handler") rests on one pattern.
@@ -43,8 +43,8 @@ does not exist, and a real thing reported as absent is silently dropped and neve
 
 ### the-correction-didn't-propagate
 **Tell:** a factual correction landed in the file a review named.
-**Case:** `core:capture-learnings` § The audit pass, step 6 (the correction sweep).
-**Countermeasure:** grep every sibling artifact for the old claim. Counting occurrences proves an addition, never a retraction, because a retraction names what it retracts. Read the hits.
+**Case:** `core:capture-learnings` § The audit pass, step 6 (the correction sweep). The reader side of the same failure: a scope decision was offered on a 7–11x rise quoted from line 195 of an append-only ledger, and line 206 had retracted both figures as invented (the real change was about half again, 2026-08-25). Grep returns the oldest claim first.
+**Countermeasure:** grep every sibling artifact for the old claim. Counting occurrences proves an addition, never a retraction, because a retraction names what it retracts. Read the hits. When quoting from an append-only file, read every hit to the end of the file, or quote the durable artifact the correction went into.
 
 ### `&&`-fires-on-empty
 **Tell:** `cmd && echo FOUND || echo MISSING` around anything other than `grep`.
@@ -124,7 +124,7 @@ does not exist, and a real thing reported as absent is silently dropped and neve
 ### verify-against-the-artifact
 **Tell:** a configuration value is called verified because two readings of its source agree.
 **Case:** two SHA-1 fingerprints read from a console were both accurate, and neither had been compared with the APK, which the device was presenting under a third key. Separately, a merged manifest dated three weeks before the feature answered "no RECORD_AUDIO" with a passing positive control. And a backgrounded build announced "completed (exit code 0)" after it had failed, because the harness reported the pipeline's status.
-**Countermeasure:** two readings of one source prove only that it agrees with itself. Measure the running artifact (`apksigner --print-certs`, `grep` on the binary, the platform's own log), put the mtime beside the control so it proves it is looking at today, and escalate to the platform log early, since a generic client error is the lossy end of a relabelling chain. A task notification is a report, not evidence.
+**Countermeasure:** two readings of one source prove only that it agrees with itself. Measure the running artifact (`apksigner --print-certs`, `grep` on the binary, the platform's own log), put the mtime beside the control so it proves it is looking at today, and escalate to the platform log early, since a generic client error is the lossy end of a relabelling chain. A task notification is a report, not evidence, and so is anything an agent found: agents asked for job-board URLs returned confident ones such as `job-boards.greenhouse.io/groq/jobs/6521661003`, which 404s everywhere, and only 9 of 25 claimed boards passed an HTTP probe (2026-06-22). Probe an agent-sourced URL (status plus an identity signal) before using it.
 
 ### the-filter-presupposed-the-answer
 **Tell:** a diagnostic selects fields by a name pattern when the question is what exists.
@@ -138,7 +138,7 @@ does not exist, and a real thing reported as absent is silently dropped and neve
 
 ### a-config-can-be-accepted-and-inert
 **Tell:** a change is justified by a saving, and nothing has shown the feature engaged.
-**Case:** prompt caching was written and about to ship. The cacheable prefix was 777 tokens against a 1,024-token minimum, below which `cache_control` is accepted and silently does nothing: no error, `cache_creation_input_tokens: 0`. It would have reviewed clean and saved zero. In another tool, a flush interval of `0s` was accepted and inert.
+**Case:** prompt caching was written and about to ship. The cacheable prefix was 777 tokens against a 1,024-token minimum, below which `cache_control` is accepted and silently does nothing: no error, `cache_creation_input_tokens: 0`. It would have reviewed clean and saved zero. In another tool, a flush interval of `0s` was accepted and inert. Separately, caching was recommended for a chat bot because its system prompt was large and stable. Its messages arrive hours apart and the cache TTL is 5 minutes (1 hour at most), so every request is a cold write at 1.25x: a net loss. The user: "you make this wrong assumption often". Whether caching pays depends on request frequency, not prompt size.
 **Countermeasure:** name the observation that proves the feature engaged (a non-zero `cache_read_input_tokens`) and check the code can produce it. Minimums are not monotonic across model generations, so look the number up. An approved plan inherits the evidence it was made on, not the evidence that arrived since; withdraw your own proposal if the measurements moved.
 
 ### the-probe-lived-inside-the-corpus-it-probed
@@ -153,8 +153,8 @@ does not exist, and a real thing reported as absent is silently dropped and neve
 
 ### the-rejection-was-not-a-rollback
 **Tell:** a tool call comes back "rejected" or "interrupted", and it was a chain of steps.
-**Case:** a single Bash call ran ledger-append, `git push -u origin <branch>`, then `gh pr create`. The user stopped it; the result said "rejected… STOP". The push and the append had both happened; only the PR had not. Treating "rejected" as "nothing ran" would have left a stray remote branch unmentioned.
-**Countermeasure:** after a rejected or interrupted chain, check the side effect of every step (`git ls-remote`, `gh pr list`, the file) before reporting or retrying. Split outward-facing steps (push, publish, PR) into their own calls so a rejection lands on one action.
+**Case:** a single Bash call ran ledger-append, `git push -u origin <branch>`, then `gh pr create`. The user stopped it; the result said "rejected… STOP". The push and the append had both happened; only the PR had not. Treating "rejected" as "nothing ran" would have left a stray remote branch unmentioned. The mirror case: one failed call in a parallel batch cancelled about 12 later ones ("Cancelled: parallel tool call … errored"), and the summary still reported all of them done, including a user answer never given (2026-05-31).
+**Countermeasure:** after a rejected or interrupted chain, check the side effect of every step (`git ls-remote`, `gh pr list`, the file) before reporting or retrying; after a parallel batch, scan every result for "Cancelled" and never narrate a call from its intent. Split outward-facing steps (push, publish, PR) into their own calls so a rejection lands on one action.
 
 ### the-oracle-held-one-axis-fixed
 **Tell:** a large equivalence or regression suite is all green, and every case ran in the same environment.

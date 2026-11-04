@@ -32,9 +32,11 @@ Walk this top-to-bottom for each candidate. Stop at the first match.
    → **New or updated skill** (use the `skill-creator` skill). Project-specific → project-local skill (the repo's `.claude/skills/`). Cross-project → the **`core` plugin** (shared, every machine) or the **`personal` plugin** (home-only) in the `claude-setup` repo, via the **promotion flow** below. A home-only skill goes under `personal/skills/`, a shared one under `core/skills/`.
 
    `~/.claude/skills/` is no longer a valid destination for anything that should be available beyond this machine. It does not reach cloud sessions — user-scope config is not part of the repo clone — and a skill that lives both there and in the plugin will drift with no way to tell which copy loaded.
-7. **Is it an automated behavior tied to a specific event** (PreToolUse, Stop, SessionStart, PreCompact, etc.) that should fire without the user asking?
+7. **Is it a recurring delegated job whose reusable part is a BOUNDARY**: a tool restriction, a pinned model or effort, or a permission limit?
+   → **Agent definition** (`agents/*.md`). Examples that earn one: an extractor of untrusted text that holds a single tool, so prompt injection has nothing to call; a read-only auditor that cannot edit; a cheap model pinned for a high-volume mechanical job. Knowledge and procedure ("a Rust agent", "a Python agent") are a skill, which any agent can load. A persona prompt adds little to a capable model, and its instructions drift away from the skill they duplicate.
+8. **Is it an automated behavior tied to a specific event** (PreToolUse, Stop, SessionStart, PreCompact, etc.) that should fire without the user asking?
    → **Hook** (use the `update-config` skill to wire into `settings.json`). Strongly justify before adding — hooks fire on every matching event and burn tokens; a skill the user invokes manually is usually the better fit.
-8. **None of the above** → do not save it.
+9. **None of the above** → do not save it.
 
 ## Route by audience, not just by type
 
@@ -47,7 +49,7 @@ different question and the one that determines whether the learning survives.
 | A shared always-on rule (should hold in every session on every machine) | `core/rules/shared.md`, via the promotion flow | The rules budget applies (`scripts/check-rules-budget.sh`). On overflow, move the least load-bearing tell to the `probe-discipline` skill; do not grow the file |
 | A probe lesson (a way a check lied) | The `probe-discipline` skill, via the promotion flow, plus a stub entry in the home queue `learnings/probe-failures.md`: title, `recurred: never`, `routed: …`, a pointer to the skill | The skill carries the substance; the queue entry is what the `recurred:` dates and escalation hang from |
 | Facts true only of this codebase | the repo's own `CLAUDE.md` or `.claude/` | Travels with the repo, so cloud sessions get it from the clone |
-| Private observations, or anything you would not want a collaborator reading | `~/.claude/projects/<slug>/memory/` | Stays local by design, and correctly does not travel |
+| Private observations, or anything you would not want a collaborator reading | Outside every memory dir: a gitignored local file, or not written at all | `~/.claude/projects/<slug>/memory/` is **not** private. Where a repo has opted into memory sync (`<repo>/.claude/memory/` exists, the usual case now, for cloud sessions), every memory is committed into the repo, and in a public repo that publishes it |
 
 Two consequences worth stating explicitly:
 
@@ -141,7 +143,7 @@ Saying "audited, nothing new worth saving" in one sentence is a successful outco
 - **Creating a new memory when you could update one.** Always grep `MEMORY.md` first. A 30-second check beats two memories saying overlapping things.
 - **Adding to CLAUDE.md what belongs in memory.** CLAUDE.md is loaded on every turn — every line costs context for every future task in this repo. Memories load only when relevant. Default to memory; promote to CLAUDE.md only when truly always-applicable AND short.
 - **Building a hook for what should be a skill.** Hooks fire on events the user cannot suppress; skills fire when the user wants. If the user can do without the automation 80% of the time, it is a skill, not a hook.
-- **Treating skills/hooks/CLAUDE.md as afterthoughts.** The user usually expects this skill to consider all four surfaces, not just memory. State explicitly when each was considered and why memory was (or was not) the right home.
+- **Treating skills/agents/hooks/CLAUDE.md as afterthoughts.** The user usually expects this skill to consider every surface, not just memory. State explicitly when each was considered and why memory was (or was not) the right home.
 
 ## Reporting format
 
@@ -150,7 +152,7 @@ End the audit with a structured summary:
 ```
 **Saved (new memories):** [list, or "none"]
 **Updated (existing memories):** [list, or "none"]
-**Other surfaces touched:** [CLAUDE.md / skill / hook changes, or "none considered"]
+**Other surfaces touched:** [CLAUDE.md / skill / agent / hook changes, or "none considered"]
 **Considered and dropped:** [one-line reason for each, or "nothing else surfaced"]
 ```
 

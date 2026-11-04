@@ -89,6 +89,12 @@ fi
 # verified facts in one sentence can jointly imply a third that neither establishes,
 # and per-claim review cannot see it -- the original passed three review rounds.
 msg="${msg} FIXED CHECK, separate from the three objections: find every sentence that sets two verified facts side by side -- a count next to an absence, a total next to a remainder -- and name the third claim a reader will infer from the pair. If neither fact establishes it, flag it as an unsupported implicature; a flagged one may displace the weakest of the three returned objections. Every residual (N total, M present, K missing) must be decomposed until its parts sum."
+# Round balance, appended to BOTH gates. Added 2026-11-04 from two projects' memories
+# (two projects): later rounds drifted into a downstream consumer's
+# concerns while still costing a full round. The user values the nagging while it
+# improves the code, so this is a stop condition on substance, not a cap on rounds,
+# and it does not ask for a token-cost estimate (the user knows the costs).
+msg="${msg} ROUND BALANCE: further red-team rounds earn their keep while their fixes improve what is being built, and some nagging is an acceptable price. Recommend stopping when two consecutive rounds produce no substantive fix -- objections only about hypothetical downstream consumers, re-arguments of decisions the user already settled, or fixes that are cosmetic."
 msg="${msg} REPORTING CONTRACT: the subagent must WRITE its complete review to docs/superpowers/reviews/ -- same date and topic as the artifact under review, with a -redteam.md suffix -- and RETURN only its three objections as one line each plus that path, nothing more. A long report does not survive the trip back: it arrives truncated, and recovering the tail costs another round trip."
 
 # Rewrite of an artifact that already has a review. Added 2026-10-28 (cli-timer): a spec

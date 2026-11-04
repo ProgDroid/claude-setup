@@ -83,6 +83,11 @@ detect that its own premise is false.
   BEFORE calling `push_in`, an order the game never uses; a reviewer's 20-line probe found it
   (2026-10-20). **A test must reproduce the production call order**, or it tests a different
   program.
+- **A shared-type change and the consumers it breaks are one task.** A plan changed a query type
+  from enums to `Option<String>` in Task 5, which deliberately broke the controller, and Tasks 6-8
+  rewrote its consumers. Per-task gates compile the whole crate, so no task could pass alone. Run
+  them as one dispatch with one workspace gate; a caller missed deep in a worker service surfaced
+  only there (2026-06-04).
 
 ## 2. What goes in every dispatch
 
@@ -115,6 +120,20 @@ already written down still caused a park when it lived in a memory instead of th
   Review Focus, where the exact values and rows live, are not in it, though the brief refers to
   them. Extract both once into `globals.md` in the workspace and name that file in every implementer
   and reviewer dispatch (2026-10-20: a 24-line brief pointed at constants it did not carry).
+- **The gate is CI's exact commands, over the whole tree.** Copy them from the workflow files into
+  Global Constraints: lint, type-check (`vue-tsc`, `tsc`) and build as well as tests. A unit run
+  does not type-check. Four projects learned it separately; in one, eleven tasks ran only the test
+  suite and the branch reached a 36-commit whole-branch review with CI lint red.
+- **Pick the narrowest agent type that can do the job.** Read-only fan-out goes to Explore or a
+  script, not general-purpose, which can spawn its own children: six general-purpose searchers
+  looped 88–125 tool calls each and hit the monthly spend limit (June 2026). Fork only when the
+  task needs the whole conversation. A fork inherits the plan and may run all of it: one given a
+  scoped task built and committed an entire feature, 56 minutes and 401k tokens.
+- **Reviewers on a shared checkout get a GIT DISCIPLINE block at the top of the prompt**: never
+  `git checkout`, `switch`, `restore`, `reset` or `stash`; inspect only with `git show <sha>:<path>`
+  and `git diff`. A reviewer's `checkout <sha>` then `checkout main` parked the tree on the first
+  commit and looked like data loss, twice; a soft "use git diff" line did not stop the second time,
+  and the block stopped it across 5+ reviewers. The risky window is a clean tree between commits.
 
 ## 3. Mutation evidence: demand a count, pre-registered
 
@@ -141,6 +160,11 @@ repeatedly audited the controller too.
   holds the task's uncommitted work: one implementer's checkout revert wiped two of its own fixes.
   It noticed and redid them, and the scoped re-review then had to prove the commit held them and no
   leftover mutant (2026-10-20). Put this in the dispatch whenever a fix round includes a mutation.
+- **A revert from a backup copy leaves the build stale.** Moving back a copy taken before the
+  mutation restores an mtime older than the mutated build, so cargo (which fingerprints by mtime)
+  silently reused the mutated binary: a `cargo build` with REAL_EXIT=0 had run on a mutated crate,
+  and the tell was a "never used" warning only the mutation could cause (2026-10-11). `touch` the
+  restored file, or revert with `git show HEAD:<path> > <path>`.
 
 ## 4. Verify reports, including the reviewers'
 
@@ -229,6 +253,12 @@ by none; two independently written predicates that drifted; a value re-resolved 
 six tasks edited. Dispatch the final review on the most capable model, point it at cross-task
 coherence explicitly, and give every reviewer **named risks, each with one focused check** — nearly
 every Important finding in one run came from a named risk.
+
+- **When a fix round is split across implementers, give every finding one named owner** ("I4 is
+  Fix B's item 9"). Findings were split into a code fix and a docs fix; the code brief called I4
+  "being corrected separately" and the docs brief never mentioned it, so it was the one finding of
+  20 left unfixed (2026-08-14). The same applies to a plan step that promises a correction: check
+  that the step's text actually contains it.
 
 - **Name "every preview of an outcome against the action that produces it" as a final-review risk.**
   A debug indicator drew where a grab's swap would leave the target, computed from the player's

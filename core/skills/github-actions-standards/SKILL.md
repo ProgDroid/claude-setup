@@ -36,7 +36,8 @@ gh workflow disable [name]          # Disable a workflow
 gh run list                         # List recent runs
 gh run view [id]                    # View run details
 gh run view [id] --log              # View run logs
-gh run watch [id]                   # Watch run in progress
+gh run watch [id]                   # Watch run in progress (display only: its exit code is not a verdict)
+gh run view [id] --json conclusion -q .conclusion   # The verdict: success / failure / cancelled
 gh run rerun [id]                   # Re-run a workflow
 
 # Secret management
