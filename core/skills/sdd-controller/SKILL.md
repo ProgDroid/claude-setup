@@ -243,6 +243,11 @@ finished run leaves no process.
   evidence was gone. When the human is playing or testing while implementers run, point agent runs
   at their own log/cache path (Godot: `--log-file <tmp>`), and capture any crash evidence the
   moment it is reported. (A Godot project, 2026-10-10.)
+- **A worktree subagent starts from `origin/<default>`, not your local HEAD.** `Agent` with
+  `isolation: "worktree"` branched from the last PUSHED commit; local main was 4 commits ahead, so
+  the branch lacked them, hit 1 rebase conflict, and code added meanwhile failed 2 of the new lint
+  rules. Before merging, rebase the branch onto local `main` and re-run lint and tests there; if the
+  repo is often unpushed, tell the implementer which commit to start from. (An image-generation pipeline project, 2026-11-04.)
 - **After any task touching global nav, routing or always-mounted UI, run the FULL suite.** A
   wizard's global guard regressed ~16 e2e specs that per-task runs could not see.
 
