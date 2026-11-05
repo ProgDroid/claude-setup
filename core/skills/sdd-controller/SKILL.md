@@ -76,6 +76,19 @@ detect that its own premise is false.
 - **Run `scripts/sdd-workspace` with the PROJECT as the working directory, never the skill's.** It
   resolves the repo from cwd, so a call made from the skill directory created the workspace inside
   the repo that holds the skill instead of the project (2026-10-19). Check the printed path is under the project.
+  **The same holds for `task-brief` and `review-package` in a worktree**, and the Bash tool resets
+  cwd to the session's start folder after every call. So the session's main checkout is the
+  default, not the worktree. Put `cd <worktree> &&` in the same command as every script call. A
+  `task-brief` run without it wrote the brief, and a second workspace, into the main checkout
+  (2026-11-04).
+- **A doc correction that restates code's branches in prose regresses.** Fixing one false sentence
+  about a function's edge cases took four rounds. Each rewrite restated the branches and added a new
+  false absolute ("unclamped", "no code bounds it", "only one branch"), and each scoped re-review
+  found it. What ended it was a new approach, not a new wording. State the normal case precisely,
+  with its scope; point at the function and its named tests for the rest; and allow no "only",
+  "never", "nothing" or "unbounded" unless a cited line enforces it. The first false sentence was
+  the controller's own plan estimate ("roughly 1.0 to 1.33"), copied into the doc as a guarantee.
+  Mark estimates as such where they are born (2026-11-05).
 - **A plan that says HOW to measure something under engine timing is a premise; probe it first.**
   A plan offered "real time = scaled `delta` / `Engine.time_scale`" for a camera push-in. In Godot
   4.7.2 the `_process` of the frame in which the scale drops still receives the OLD scale's delta,
