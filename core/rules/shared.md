@@ -49,3 +49,5 @@ Distinguish PRESENT / ABSENT / UNKNOWN, and never collapse the last two. Before 
 - **unexpectedly-full**: a guessed filter can return 200 with plausible data because it was ignored. Check the entity, the window and the count; decode the body (`curl --compressed`) before grepping it.
 - **the-rejection-was-not-a-rollback**: a rejected or interrupted chained call may have run its first steps. Check each step's side effect before reporting; give a push or publish its own call.
 - **the-oracle-held-one-axis-fixed**: a green equivalence suite measured one point on every axis its cases hold constant (locale, byte class, OS). Vary each at least once.
+- **the-race-answered-once**: a probe of timing-dependent behaviour gets several runs per arm; one run is UNKNOWN.
+- **the-meter-was-pinned-at-its-ceiling**: a reading at a meter's limit means "at least the limit". Tell: several readings on one round number. Control beyond the range.

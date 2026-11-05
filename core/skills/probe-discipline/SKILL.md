@@ -160,3 +160,13 @@ does not exist, and a real thing reported as absent is silently dropped and neve
 **Tell:** a large equivalence or regression suite is all green, and every case ran in the same environment.
 **Case:** a differential of a rewrite against the old code ran 1,040 cases (20 commands, 13 fixture repos, 4 states) on two OSes: 0 differ. The final review found two regressions it could not see. Every case ran with the locale unset, the one setting where Git Bash's `=~` and GNU grep classify `é` alike, and no fixture held an invalid UTF-8 byte, the one input where bash `read` joins two lines.
 **Countermeasure:** a case count measures one point on every axis the cases do not vary. List what the old behaviour depended on that the fixtures hold constant (locale, byte classes, NUL, CR, tool build, OS) and vary each at least once, with a guard that fails when the varied setting is unavailable.
+
+### the-race-answered-once
+**Tell:** one run of a timing-dependent behaviour (an audio or GC thread, a watchdog, a shutdown) decides a design question.
+**Case:** a game engine printed leak errors at quit whenever a sound was playing. One probe run with a sound playing at quit printed nothing, and the design briefly rested on "playing at quit is safe". Five repeats leaked every time; the clean run was a fluke of the audio thread's timing. Nine runs after a stop plus a 60-150 ms wait were all clean (2026-11-05).
+**Countermeasure:** a probe whose outcome depends on another thread's timing gets several runs per arm (five is cheap) before it decides anything. A single run is UNKNOWN, and so is a mixed result until the arms separate cleanly.
+
+### the-meter-was-pinned-at-its-ceiling
+**Tell:** several readings land exactly on one round number (0.0 dB, 100%, 255, a timeout), and that number is the meter's limit.
+**Case:** ffmpeg's `volumedetect` reported the peak of five float audio mixes as exactly +0.0 dB. It converts to 16-bit first, so it cannot read above 0; `astats` on the same files read up to +11.3 dB, and the mixes would have been written out clipped. The first control missed too: ffmpeg's `sine` source defaults to -18 dBFS, so the "+6 dB" control sine was -12 dB and both meters agreed (2026-11-05).
+**Countermeasure:** a reading at a meter's limit says "at least the limit", never the value. Before trusting a meter on a regime, run a control known to sit beyond its range, and check the control's own level with a second meter.
