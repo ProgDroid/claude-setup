@@ -427,6 +427,19 @@ vitest --pool=threads
 go test -parallel 4 ./...
 ```
 
+## Mutation Checks
+
+Break the code on purpose and confirm the test fails; a test that stays green against the bug it
+guards proves nothing. Two rules hold even for a quick check by hand (counts, pre-registration and
+reading disagreements: `core:sdd-controller` section 3):
+
+- **Assert the mutation applied, and make the test run depend on it** (`mutate && test`). A failed
+  mutation followed by a test run on its own line runs against the unmutated file and prints a
+  pass that measures nothing.
+- **Commit, or take a fresh copy, immediately before each mutation, and restore from that.** Never
+  revert with `git checkout <file>`: it also reverts any uncommitted work in the file, and a copy
+  taken before later edits restores the old version just the same.
+
 ## Flaky Test Prevention
 
 ### Common Causes & Solutions
