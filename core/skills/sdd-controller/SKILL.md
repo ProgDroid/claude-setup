@@ -129,6 +129,10 @@ already written down still caused a park when it lived in a memory instead of th
   commit. A deliberate mutation once sat in the working tree of a security guard.
 - **Keep the tracking-issue close out of the implementer's scope.** It belongs after the final
   review.
+- **In a repo with a `NEXT.md` handoff, every implementer and fixer dispatch says: never edit
+  `NEXT.md`.** The handoff is written in the main checkout after the merge. The handoff hook only
+  warns, and a fix-wave agent edited `NEXT.md` in the worktree anyway, so the controller had to
+  revert it in a separate commit (2026-11-10).
 - **`scripts/task-brief` copies only the task's own section.** The plan's Global Constraints and
   Review Focus, where the exact values and rows live, are not in it, though the brief refers to
   them. Extract both once into `globals.md` in the workspace and name that file in every implementer
