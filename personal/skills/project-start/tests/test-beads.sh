@@ -8,6 +8,11 @@
 [ "$(grep -c 'must name the observation' "$HOUSE/beads/PRIME.md")" = 0 ] && [ "$(grep -c 'names the observation' "$HOUSE/beads/PRIME.md")" = 0 ] \
   && ok "house_prime_lacks_killed_close_rule" || bad "PRIME.md still carries the retired close rule"
 [ "$(grep -c bleeding "$HOUSE/beads/PRIME.md")" -ge 1 ] && ok "house_prime_has_bleeding_label (control)" || bad "PRIME.md lacks bleeding"
+# switchboard's board reads these labels and dates (switchboard stage 5 part 1 spec, section 8).
+grep -q '\*\*`quick`\*\*' "$HOUSE/beads/PRIME.md" && grep -q '\*\*`handoff`\*\*' "$HOUSE/beads/PRIME.md" \
+  && grep -q '\*\*`hands-on`\*\*' "$HOUSE/beads/PRIME.md" && grep -q 'No time estimates' "$HOUSE/beads/PRIME.md" \
+  && grep -q -- '--due=' "$HOUSE/beads/PRIME.md" && grep -q -- '--defer=' "$HOUSE/beads/PRIME.md" \
+  && ok "house_prime_has_involvement_labels_and_dates" || bad "PRIME.md lacks the quick/handoff/hands-on labels or the due/defer rule"
 [ "$(head -n 1 "$HOUSE/claude-md-override.md")" = '## Task tracking vs. execution structure' ] \
   && ok "house_override_heading_is_what_check_block_looks_for" || bad "override heading: $(head -n 1 "$HOUSE/claude-md-override.md")"
 grep -qx 'interactions.jsonl' "$HOUSE/beads/gitignore" && grep -qx 'backup/' "$HOUSE/beads/gitignore" \

@@ -38,6 +38,19 @@ Before saying "done" or "complete":
   guess.
 - Theme labels group the backlog (for example `test-gaps`, `security`, `ux`, `refactor`,
   `docs`). Keep the set small and reuse it.
+- **How much of the user a bead needs: exactly one of these on every bead you file.**
+  - **`quick`**: doable in a break; small, clear, needs nothing from the user beyond a yes.
+  - **`handoff`**: a short conversation up front (a decision, a brainstorm, a plan to
+    approve), then it runs without the user for hours.
+  - **`hands-on`**: needs the user throughout (playtesting, judging output, machine
+    changes, anything only they can check).
+
+  Judge it from the work, never from how long the code would take. **No time estimates**
+  (`--estimate`): the user found them misleading (2026-11-09).
+- **Dates, set by whoever files the bead:** `--due=<date>` when the work has a deadline;
+  `--defer=<date>` at create, or `bd defer <id> --until=<date>`, when it waits on time
+  ("re-read after 5 boots" is deferred a week). switchboard's board lists passed defers
+  and near deadlines, so a wait recorded only in prose is invisible to it.
 
 ## Commands
 
@@ -45,7 +58,7 @@ Before saying "done" or "complete":
 `bd show <id>` · `bd search <query>` · `bd stats`
 
 **Create and update**
-`bd create --title="…" --description="why this exists and what to do" --type=task|bug|feature|chore|epic --priority=2`
+`bd create --title="…" --description="why this exists and what to do" --type=task|bug|feature|chore|epic --priority=2 -l quick|handoff|hands-on`
 - Priority is `0-4` (0 = critical, 2 = medium, 4 = backlog). Never "high"/"low".
 - `--parent=<id>` for a child of an epic. `-l/--labels` comma-separated.
 - `--acceptance=` / `--design=` / `--notes=` for the structured fields.
