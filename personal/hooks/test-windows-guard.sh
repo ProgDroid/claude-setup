@@ -225,6 +225,7 @@ warn_kind() {
     *"Large heredocs"*)                echo HEREDOC ;;
     *"system ANSI codepage"*)          echo ENCODING ;;
     *"xargs splits on whitespace"*)    echo XARGS ;;
+    *"halves every doubled backslash"*) echo BACKSLASH ;;
     *)                                 echo NONE ;;
   esac
 }
@@ -490,6 +491,28 @@ big_heredoc() { { printf 'cat > f.txt <<%sEOF%s\n' "'" "'"; for _ in $(seq "$1")
 [ "$(warn_kind "$(big_heredoc 58)")" = NONE ] \
   && ok "a 60-line heredoc does not warn (boundary)" \
   || bad "rule c fires at exactly 60 lines"
+
+echo "== rule f: a doubled backslash in a Bash command =="
+
+# The Bash tool halves every doubled backslash before bash sees the command, single quotes
+# and quoted heredocs included (measured 2026-09-11; struck again 2026-11-11 with the rule
+# loaded). Built from $BS so this file holds no literal doubled backslash of its own.
+[ "$(warn_kind "printf '%s' 'a$BS${BS}b'")" = BACKSLASH ] \
+  && ok "a doubled backslash in single quotes warns" \
+  || bad "rule f missed a doubled backslash"
+
+HDBS=$(printf 'py - <<%sPYEOF%s\ns = s.replace(%s%s%s%s, "/")\nPYEOF' "'" "'" "'" "$BS" "$BS" "'")
+[ "$(warn_kind "$HDBS")" = BACKSLASH ] \
+  && ok "a doubled backslash inside a quoted heredoc body warns (the body is halved too)" \
+  || bad "rule f missed a doubled backslash in a heredoc body"
+
+[ "$(warn_kind "ls 'C:${BS}Users${BS}x'")" = NONE ] \
+  && ok "single backslashes do not warn" \
+  || bad "rule f fires on single backslashes"
+
+[ "$(verdict_tool PowerShell "Write-Output 'a$BS${BS}b'")" = SILENT ] \
+  && ok "rule f is Bash-only (the halving was measured on the Bash tool)" \
+  || bad "rule f fired under the PowerShell tool"
 
 echo "== rule d: Set-Content without -Encoding =="
 

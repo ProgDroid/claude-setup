@@ -545,6 +545,21 @@ if [[ -z "$warn" ]] \
     warn="xargs splits on whitespace, and the home path here contains a space: a file list piped into plain xargs turns one path into two arguments and silently drops matches. Use xargs -d '\\n' (or find -print0 / git ls-files -z with xargs -0), or -I{} to take one line at a time."
 fi
 
+# f. a doubled backslash anywhere in a Bash command. The Bash tool halves it before bash
+#    runs the command, single quotes and quoted heredoc bodies included (measured 2026-09-11
+#    with a printf control; under real bash both keep two). Added 2026-11-11 after it struck
+#    for about the seventh time, twice in one session with the CLAUDE.md line loaded: a Rust
+#    char literal arrived as an unterminated one, and a line-final doubled backslash in a
+#    py heredoc became Python's own line continuation, silently joining two lines.
+#    The tool input still carries both backslashes (the session transcript records them),
+#    so this hook sees them. Reads the RAW command: a heredoc body is halved too. Bash only.
+#    Every match is a real halving, so no false-positive carve-outs. UNKNOWN under OpenCode:
+#    its bash tool is bridged as "Bash", so this fires there too, and whether OpenCode's tool
+#    halves backslashes has not been measured.
+if [[ -z "$warn" ]] && [[ "$tool" == "Bash" ]] && [[ "$cmd" == *'\\'* ]]; then
+    warn="The Bash tool halves every doubled backslash before bash sees the command, inside single quotes and quoted heredocs too: two arrive as one, and a doubled backslash at a line end becomes a line continuation that silently joins two lines. Write the file with the Write or Edit tool, or build the character in code (chr(92) in Python), and check what landed."
+fi
+
 if [[ -n "$warn" ]]; then
     if [[ $have_jq -eq 1 ]]; then
         if json_str "$warn"; then
