@@ -1,7 +1,7 @@
 ---
 name: project-start
 ritual_version: 1
-description: Use when the user says "project start", "set up this project", "onboard this repo" or "run the ritual", or when the project dashboard's brief line says "Project-start ritual not done/behind here" - runs the project-start ritual (Beads, line-ending and ignore traps, lint policy, test oracle, secret scan, CLAUDE.md, parking lot, CI, baseline, NEXT.md handoff) and writes the ritual record
+description: Use when the user says "project start", "project init", "init ritual", "set up this project", "onboard this repo" or "run the ritual", or when the project dashboard's brief line says "Project-start ritual not done/behind here" - runs the project-start ritual (Beads, line-ending and ignore traps, lint policy, test oracle, secret scan, CLAUDE.md, parking lot, CI, baseline, NEXT.md handoff) and writes the ritual record
 ---
 
 # The project-start ritual
