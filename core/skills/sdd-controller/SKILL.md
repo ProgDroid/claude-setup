@@ -114,7 +114,12 @@ already written down still caused a park when it lived in a memory instead of th
 - **"Would this test pass against a broken implementation?"** — verbatim, in implementer AND
   reviewer dispatches.
 - **Run long commands in the FOREGROUND, with a long timeout.** Implementers that background a
-  gate and wait on a Monitor never wake.
+  gate and wait on a Monitor never wake. **Measure the full suite first:** if it outlasts the
+  tool's foreground ceiling (the Claude Code Bash tool: 600 s), this instruction cannot be obeyed.
+  Then implementers get a targeted gate instead: their task's test files, the neighbours the brief
+  names, and lint over the whole tree. The controller runs the full suite itself, in the
+  background, with a terminal `REAL_EXIT=$?` line it reads back. (2026-11-22: an 11-minute suite;
+  every task ran its targeted gate, and the controller's full runs closed the chain.)
 - **Commit from Bash with `git commit -F <file>`**; on Windows see git-standards (the BOM rule). On
   machines with a command guard, `$(...)` in `-m` is denied.
 - **Say that committing is the implementer's job; only a push needs the user.** One fix agent

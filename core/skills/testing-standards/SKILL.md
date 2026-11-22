@@ -440,6 +440,25 @@ reading disagreements: `core:sdd-controller` section 3):
   revert with `git checkout <file>`: it also reverts any uncommitted work in the file, and a copy
   taken before later edits restores the old version just the same.
 
+## Proving Behaviour Is Unchanged
+
+When a change must leave some output byte-identical (a flag that defaults off, a refactor, a new
+optional parameter), **compare against text captured from the old code, never against the new code
+run twice.** `f(*args) == f(*args, new_param=default)` executes the edited function on both sides,
+so it passes while the old output is rewritten underneath it.
+
+- **Capture before editing.** Run the unedited function from HEAD, freeze anything it reads from
+  the environment (the clock, the locale, random seeds), and commit the result as a literal in the
+  test.
+- **Pre-register a one-character mutation** of the old output and confirm the test fails.
+- **A reviewer re-derives the literal independently.** Load the base commit's file as a separate
+  module (`git show <base>:<file>` into a scratch path, imported under another name), call it with
+  the test's inputs, and compare byte for byte. A literal the implementer typed from expectation
+  rather than captured from the old code proves nothing.
+
+(Measured 2026-11-22: a red team caught two such self-comparisons in one plan. Rewritten as golden
+literals, both were independently verified byte-identical to the base commit's output.)
+
 ## Flaky Test Prevention
 
 ### Common Causes & Solutions
