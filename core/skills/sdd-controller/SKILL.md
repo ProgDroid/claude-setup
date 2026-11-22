@@ -129,6 +129,11 @@ already written down still caused a park when it lived in a memory instead of th
   commit. A deliberate mutation once sat in the working tree of a security guard.
 - **Keep the tracking-issue close out of the implementer's scope.** It belongs after the final
   review.
+- **A bead id alone on a commit-body line marks that bead finished** where the repo's beads
+  convention reads it that way (the house PRIME does). Per-task commits of a bead that spans the
+  whole plan reference it inline (`Refs <id>`); only the commit that closes it puts the id alone on
+  a line. A dispatch that put the id on its own line made 15 commits in one stage mark the stage
+  bead done while it stayed open (2026-11-22).
 - **In a repo with a `NEXT.md` handoff, every implementer and fixer dispatch says: never edit
   `NEXT.md`.** The handoff is written in the main checkout after the merge. The handoff hook only
   warns, and a fix-wave agent edited `NEXT.md` in the worktree anyway, so the controller had to
