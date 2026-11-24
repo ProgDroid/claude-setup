@@ -273,8 +273,15 @@ finished run leaves no process.
 - **A worktree subagent starts from `origin/<default>`, not your local HEAD.** `Agent` with
   `isolation: "worktree"` branched from the last PUSHED commit; local main was 4 commits ahead, so
   the branch lacked them, hit 1 rebase conflict, and code added meanwhile failed 2 of the new lint
-  rules. Before merging, rebase the branch onto local `main` and re-run lint and tests there; if the
+  rules. Before merging, bring the branch up to local `main` (rebase, or merge when its commit ids
+  are cited: next bullet) and re-run lint and tests there; if the
   repo is often unpushed, tell the implementer which commit to start from. (An image-generation pipeline project, 2026-11-04.)
+- **When the branch's record cites its commit ids, integrate with a merge commit, never a rebase or
+  squash.** A close-out listed 28 branch commits by id (rulings, mutation evidence, review fixes); a
+  rebase or squash onto `main` would have rewritten every one, leaving the durable record pointing at
+  commits that no longer exist. Merge with `--no-ff`, then run the full gate on the merge commit,
+  which is a new tree. Rebase only a branch whose ids nothing outside git records. (A web app
+  project, 2026-11-24.)
 - **After any task touching global nav, routing or always-mounted UI, run the FULL suite.** A
   wizard's global guard regressed ~16 e2e specs that per-task runs could not see.
 
