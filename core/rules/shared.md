@@ -51,3 +51,4 @@ Distinguish PRESENT / ABSENT / UNKNOWN, and never collapse the last two. Before 
 - **the-oracle-held-one-axis-fixed**: a green equivalence suite measured one point on every axis its cases hold constant (locale, byte class, OS). Vary each at least once.
 - **the-race-answered-once**: a probe of timing-dependent behaviour gets several runs per arm; one run is UNKNOWN.
 - **the-meter-was-pinned-at-its-ceiling**: a reading at a meter's limit means "at least the limit". Tell: several readings on one round number. Control beyond the range.
+- **the-winner-spent-more**: before ranking rules or strategies, hold the budget (spend, exposure, sample) equal. Tell: the winner differs in how much it does, not only how.

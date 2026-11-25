@@ -170,3 +170,8 @@ does not exist, and a real thing reported as absent is silently dropped and neve
 **Tell:** several readings land exactly on one round number (0.0 dB, 100%, 255, a timeout), and that number is the meter's limit.
 **Case:** ffmpeg's `volumedetect` reported the peak of five float audio mixes as exactly +0.0 dB. It converts to 16-bit first, so it cannot read above 0; `astats` on the same files read up to +11.3 dB, and the mixes would have been written out clipped. The first control missed too: ffmpeg's `sine` source defaults to -18 dBFS, so the "+6 dB" control sine was -12 dB and both meters agreed (2026-11-05).
 **Countermeasure:** a reading at a meter's limit says "at least the limit", never the value. Before trusting a meter on a regime, run a control known to sit beyond its range, and check the control's own level with a second meter.
+
+### the-winner-spent-more
+**Tell:** the winning variant differs from the others in how much it does (cash deployed, exposure, sample, compute), not only in how.
+**Case:** a backtest ranked an S&P dip ladder above cash rebalancing (10.87% vs 10.72% a year), but that ladder spent all its cash at −20/−30% while the rebalance spent only the excess, so it won by holding less cash. With the ladder's steps sized like the real plan, rebalancing matched or beat it with a smaller worst fall (2026-11-25).
+**Countermeasure:** before ranking rules or strategies, hold the budget equal: the same spend, exposure, sample or compute for every variant. Then rank. A win that disappears at matched size was the budget, not the rule.
