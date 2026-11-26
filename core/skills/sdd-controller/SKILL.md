@@ -195,6 +195,12 @@ repeatedly audited the controller too.
 
 ## 4. Verify reports, including the reviewers'
 
+- **Build every review range from `git log`, never from a report's commit list.** A fix-wave
+  implementer listed its three commits out of order, and the controller took the "last" one as the
+  range head, so the scoped re-review first saw two of the three and missed the fix that mattered.
+  Run `git log --oneline <base>..HEAD` before packaging. The same session, an implementer reported
+  deleting a stray file it had left in the main checkout; `git status` there showed it was still
+  present. Check the main checkout after every task (2026-11-26).
 - **Run the suite yourself once, at the end.** Reviewers are told not to re-run it, so every number
   in the chain comes from the implementer it measures. One controller gate closes the chain.
 - **An implementer's gate counts as yours only when three facts line up.** Every changed file's
